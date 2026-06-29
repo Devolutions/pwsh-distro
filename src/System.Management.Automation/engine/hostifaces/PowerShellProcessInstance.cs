@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Management.Automation.Remoting;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace System.Management.Automation.Runspaces
@@ -34,12 +35,66 @@ namespace System.Management.Automation.Runspaces
         static PowerShellProcessInstance()
         {
 #if UNIX
-            PwshExePath = Path.Combine(Utils.DefaultPowerShellAppBase, "pwsh");
+            PwshExePath = ResolvePwshExePath("pwsh");
 #else
-            PwshExePath = Path.Combine(Utils.DefaultPowerShellAppBase, "pwsh.exe");
+            PwshExePath = ResolvePwshExePath("pwsh.exe");
             var winPowerShellDir = Utils.GetApplicationBaseFromRegistry(Utils.DefaultPowerShellShellID);
             WinPwshExePath = string.IsNullOrEmpty(winPowerShellDir) ? null : Path.Combine(winPowerShellDir, "powershell.exe");
 #endif
+        }
+
+        private static string ResolvePwshExePath(string executableName)
+        {
+            string defaultPwshExePath = Path.Combine(Utils.DefaultPowerShellAppBase, executableName);
+            if (File.Exists(defaultPwshExePath))
+            {
+                return defaultPwshExePath;
+            }
+
+            string bundledPwshExePath = GetBundledPwshExePath(executableName);
+            return File.Exists(bundledPwshExePath) ? bundledPwshExePath : defaultPwshExePath;
+        }
+
+        private static string GetBundledPwshExePath(string executableName)
+        {
+            string osPart;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                osPart = "win";
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                osPart = "linux";
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                osPart = "osx";
+            }
+            else
+            {
+                return string.Empty;
+            }
+
+            string architecturePart;
+            switch (RuntimeInformation.ProcessArchitecture)
+            {
+                case Architecture.X64:
+                    architecturePart = "x64";
+                    break;
+                case Architecture.Arm64:
+                    architecturePart = "arm64";
+                    break;
+                case Architecture.X86:
+                    architecturePart = "x86";
+                    break;
+                case Architecture.Arm:
+                    architecturePart = "arm";
+                    break;
+                default:
+                    return string.Empty;
+            }
+
+            return Path.Combine(Utils.DefaultPowerShellAppBase, "runtimes", $"{osPart}-{architecturePart}", "native", executableName);
         }
 
         /// <summary>
