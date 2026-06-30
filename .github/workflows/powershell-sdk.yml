@@ -3,9 +3,33 @@ on:
   workflow_dispatch:
     inputs:
       sdk_package_revision:
-        description: Downstream SDK package revision for the current upstream PowerShell version
-        default: "0"
+        description: Downstream SDK package revision override (blank = use SDK_PACKAGE_REVISION, auto = infer next release revision)
+        default: ""
+        required: false
+      github-env:
+        description: GitHub environment selection
         required: true
+        type: choice
+        options:
+          - auto
+          - test
+          - prod
+        default: auto
+      skip-publish:
+        description: Skip NuGet and GitHub Release publishing
+        required: true
+        type: boolean
+        default: false
+      dry-run:
+        description: Dry run (simulate publishing)
+        required: true
+        type: boolean
+        default: true
+      sign-dry-run:
+        description: Sign package during dry-run when signing secrets are available
+        required: true
+        type: boolean
+        default: false
 env:
   POWERSHELL_VERSION: "7.6.3"
   POWERSHELL_RELEASE_TAG: "v7.6.3"
@@ -18,9 +42,180 @@ env:
   MULTI_PWSH_APPHOST_PACKAGE_ID: "Devolutions.MultiPwsh.Cli"
   MULTI_PWSH_APPHOST_PACKAGE_VERSION: "0.14.0"
   MULTI_PWSH_APPHOST_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
+  PSIGN_RELEASE_TAG: "v0.5.1"
+  PSIGN_TOOL_LINUX_X64_SHA256: "de293360c1aed93709b80980e1ad47998b2b73f76fae40cf48f08213f862a463"
 jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-24.04
+    outputs:
+      package-env: ${{ steps.info.outputs.package-env }}
+      sdk-package-revision: ${{ steps.info.outputs.sdk-package-revision }}
+      sdk-package-version: ${{ steps.info.outputs.sdk-package-version }}
+      sdk-package-artifact: ${{ steps.info.outputs.sdk-package-artifact }}
+      release-sdk-package-artifact: ${{ steps.info.outputs.release-sdk-package-artifact }}
+      release-tag: ${{ steps.info.outputs.release-tag }}
+      release-title: ${{ steps.info.outputs.release-title }}
+      powershell-source-commit: ${{ steps.info.outputs.powershell-source-commit }}
+      skip-publish: ${{ steps.info.outputs.skip-publish }}
+      dry-run: ${{ steps.info.outputs.dry-run }}
+
+    steps:
+      - name: Clone project
+        uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Package information
+        id: info
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $ExpectedVersion = $Env:POWERSHELL_RELEASE_TAG -replace '^v', ''
+          if ($Env:POWERSHELL_VERSION -ne $ExpectedVersion) {
+            throw "POWERSHELL_VERSION '$Env:POWERSHELL_VERSION' does not match POWERSHELL_RELEASE_TAG '$Env:POWERSHELL_RELEASE_TAG'."
+          }
+
+          $SourceTreeEntry = & git ls-tree HEAD pwsh-src
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($SourceTreeEntry)) {
+            throw "Unable to read the pwsh-src submodule pointer from HEAD."
+          }
+          if ($SourceTreeEntry -notmatch '^\d+\s+commit\s+([0-9a-f]{40})\s+pwsh-src$') {
+            throw "Unexpected pwsh-src tree entry: $SourceTreeEntry"
+          }
+          $PowerShellSourceCommit = $Matches[1]
+
+          try { $SkipPublish = [System.Boolean]::Parse('${{ inputs.skip-publish }}') }
+          catch { $SkipPublish = $false }
+          try { $DryRun = [System.Boolean]::Parse('${{ inputs.dry-run }}') }
+          catch { $DryRun = $true }
+
+          $IsMasterBranch = ('${{ github.ref_name }}' -eq 'master')
+          $IsScheduledJob = ('${{ github.event_name }}' -eq 'schedule')
+          $RequestedDryRun = $DryRun
+
+          $RequestedEnvironment = '${{ inputs.github-env }}'.Trim().ToLowerInvariant()
+          if ([string]::IsNullOrWhiteSpace($RequestedEnvironment)) {
+            $RequestedEnvironment = 'auto'
+          }
+
+          switch ($RequestedEnvironment) {
+            'auto' {
+              $PackageEnv = if ($IsMasterBranch -and -not $IsScheduledJob) {
+                'publish-prod'
+              } else {
+                'publish-test'
+              }
+            }
+            'test' {
+              $PackageEnv = 'publish-test'
+            }
+            'prod' {
+              $PackageEnv = 'publish-prod'
+            }
+            default {
+              throw "Unsupported github-env value: $RequestedEnvironment (expected auto, test, or prod)"
+            }
+          }
+
+          if ($RequestedEnvironment -eq 'test' -and ($IsMasterBranch -or (-not $SkipPublish -and -not $RequestedDryRun))) {
+            $PackageEnv = 'publish-prod'
+            echo '::notice::github-env=test was promoted to publish-prod'
+          }
+
+          if (-not $IsMasterBranch -and $PackageEnv -ne 'publish-prod') {
+            $DryRun = $true
+          }
+
+          if ($IsScheduledJob) {
+            $DryRun = $true
+          }
+
+          if (-not $SkipPublish -and $PackageEnv -ne 'publish-prod') {
+            $DryRun = $true
+          }
+
+          git fetch --tags --force | Out-Null
+
+          $RevisionInput = '${{ inputs.sdk_package_revision }}'.Trim()
+          $RevisionSource = 'input'
+          if ([string]::IsNullOrWhiteSpace($RevisionInput)) {
+            $RevisionInput = $Env:SDK_PACKAGE_REVISION
+            $RevisionSource = 'env'
+          }
+
+          if ($RevisionInput.Trim().ToLowerInvariant() -eq 'auto') {
+            $RevisionSource = 'auto'
+            $TagPrefix = "v$Env:POWERSHELL_VERSION"
+            $MatchingTags = @(git tag -l "$TagPrefix*" | Sort-Object)
+
+            $Revisions = @()
+            foreach ($Tag in $MatchingTags) {
+              if ($Tag -eq $TagPrefix) {
+                $Revisions += 0
+                continue
+              }
+
+              if ($Tag -match "^v$([regex]::Escape($Env:POWERSHELL_VERSION))\.(\d+)$") {
+                $Revisions += [int]$Matches[1]
+              }
+            }
+
+            if ($Revisions.Count -eq 0) {
+              $SdkPackageRevision = 0
+            } else {
+              $SdkPackageRevision = ($Revisions | Measure-Object -Maximum).Maximum + 1
+            }
+
+            $TagsDisplay = if ($MatchingTags.Count -gt 0) { $MatchingTags -join ', ' } else { '(none)' }
+            echo "::notice::MatchingTags: $TagsDisplay"
+            echo "::notice::NextRevision: $SdkPackageRevision"
+          } else {
+            if ($RevisionInput -notmatch '^\d+$') {
+              throw "SDK package revision '$RevisionInput' must be numeric or 'auto'."
+            }
+
+            $SdkPackageRevision = [int]$RevisionInput
+          }
+
+          $SdkPackageVersion = "$Env:POWERSHELL_VERSION.$SdkPackageRevision"
+          if ($SdkPackageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+            throw "Invalid SDK package version '$SdkPackageVersion', expected X.Y.Z.R."
+          }
+
+          $ReleaseTag = "v$SdkPackageVersion"
+          $ReleaseTitle = "$Env:SDK_PACKAGE_ID v$SdkPackageVersion"
+          $SdkPackageArtifact = "PowerShell-SDK-$SdkPackageVersion"
+          $ReleaseSdkPackageArtifact = "PowerShell-SDK-Release-$SdkPackageVersion"
+          $ReleaseTagExists = [bool](git tag -l $ReleaseTag)
+          if ($ReleaseTagExists -and -not $DryRun -and -not $SkipPublish) {
+            throw "Release tag '$ReleaseTag' already exists. Choose a new SDK package revision."
+          }
+
+          echo "package-env=$PackageEnv" >> $Env:GITHUB_OUTPUT
+          echo "sdk-package-revision=$SdkPackageRevision" >> $Env:GITHUB_OUTPUT
+          echo "sdk-package-version=$SdkPackageVersion" >> $Env:GITHUB_OUTPUT
+          echo "sdk-package-artifact=$SdkPackageArtifact" >> $Env:GITHUB_OUTPUT
+          echo "release-sdk-package-artifact=$ReleaseSdkPackageArtifact" >> $Env:GITHUB_OUTPUT
+          echo "release-tag=$ReleaseTag" >> $Env:GITHUB_OUTPUT
+          echo "release-title=$ReleaseTitle" >> $Env:GITHUB_OUTPUT
+          echo "powershell-source-commit=$PowerShellSourceCommit" >> $Env:GITHUB_OUTPUT
+          echo "skip-publish=$($SkipPublish.ToString().ToLower())" >> $Env:GITHUB_OUTPUT
+          echo "dry-run=$($DryRun.ToString().ToLower())" >> $Env:GITHUB_OUTPUT
+
+          echo "::notice::PowerShellVersion: $Env:POWERSHELL_VERSION"
+          echo "::notice::PowerShellSourceCommit: $PowerShellSourceCommit"
+          echo "::notice::SDKRevisionSource: $RevisionSource"
+          echo "::notice::SDKPackageVersion: $SdkPackageVersion"
+          echo "::notice::ReleaseTag: $ReleaseTag"
+          echo "::notice::Environment: $PackageEnv"
+          echo "::notice::SkipPublish: $SkipPublish"
+          echo "::notice::DryRun: $DryRun"
+
   apphost:
     name: PowerShell SDK apphost [${{matrix.rid}}]
+    needs: preflight
     runs-on: ${{matrix.runner}}
     strategy:
       fail-fast: false
@@ -95,11 +290,11 @@ jobs:
           if ($Env:POWERSHELL_VERSION -ne $ExpectedVersion) {
             throw "POWERSHELL_VERSION '$Env:POWERSHELL_VERSION' does not match POWERSHELL_RELEASE_TAG '$Env:POWERSHELL_RELEASE_TAG'."
           }
-          $SdkPackageRevision = '${{ inputs.sdk_package_revision }}'
-          if ($SdkPackageRevision -notmatch '^\d+$') {
-            throw "SDK package revision '$SdkPackageRevision' must be numeric."
+          $SdkPackageVersion = '${{ needs.preflight.outputs.sdk-package-version }}'
+          if ($SdkPackageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+            throw "Invalid SDK package version '$SdkPackageVersion', expected X.Y.Z.R."
           }
-          Write-Host "SDK package version: $Env:POWERSHELL_VERSION.$SdkPackageRevision"
+          Write-Host "SDK package version: $SdkPackageVersion"
 
           $SourceCommit = (Invoke-GitPowerShell rev-parse HEAD).Trim()
           Write-Host "PowerShell source: $Env:POWERSHELL_SOURCE_REPOSITORY@$Env:POWERSHELL_SOURCE_REF ($SourceCommit)"
@@ -536,9 +731,9 @@ jobs:
           path: pwsh-src/package-runtime/${{matrix.rid}}/*
 
   build:
-    name: PowerShell SDK [7.6.3]
+    name: PowerShell SDK [${{ needs.preflight.outputs.sdk-package-version }}]
     runs-on: ubuntu-24.04
-    needs: apphost
+    needs: [preflight, apphost]
   
     steps:
       - name: Enable Windows long path support
@@ -795,11 +990,10 @@ jobs:
             }
           }
 
-          $SdkPackageRevision = '${{ inputs.sdk_package_revision }}'
-          if ($SdkPackageRevision -notmatch '^\d+$') {
-            throw "SDK package revision '$SdkPackageRevision' must be numeric."
+          $SdkPackageVersion = '${{ needs.preflight.outputs.sdk-package-version }}'
+          if ($SdkPackageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+            throw "Invalid SDK package version '$SdkPackageVersion', expected X.Y.Z.R."
           }
-          $SdkPackageVersion = "$Env:POWERSHELL_VERSION.$SdkPackageRevision"
           Write-Host "SDK package version: $SdkPackageVersion"
 
           $PackageOutputPath = Join-Path $PWD "package"
@@ -971,13 +1165,230 @@ jobs:
       - name: Upload PowerShell package
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: PowerShell-SDK-${{env.POWERSHELL_VERSION}}.${{inputs.sdk_package_revision}}
+          name: ${{ needs.preflight.outputs.sdk-package-artifact }}
           path: "pwsh-src/package/*.nupkg"
+          if-no-files-found: error
+
+  sign:
+    name: Sign PowerShell SDK package
+    runs-on: ubuntu-24.04
+    needs: [preflight, build]
+    environment: ${{ needs.preflight.outputs.package-env }}
+    outputs:
+      code-signed: ${{ steps.signing-mode.outputs.should_sign }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Download PowerShell SDK package
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: ${{ needs.preflight.outputs.sdk-package-artifact }}
+          path: unsigned-package
+
+      - name: Resolve code signing mode
+        id: signing-mode
+        shell: pwsh
+        env:
+          CODE_SIGNING_KEYVAULT_URL: ${{ secrets.CODE_SIGNING_KEYVAULT_URL }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          CODE_SIGNING_CLIENT_ID: ${{ secrets.CODE_SIGNING_CLIENT_ID }}
+          CODE_SIGNING_CLIENT_SECRET: ${{ secrets.CODE_SIGNING_CLIENT_SECRET }}
+          CODE_SIGNING_CERTIFICATE_NAME: ${{ secrets.CODE_SIGNING_CERTIFICATE_NAME }}
+          CODE_SIGNING_TIMESTAMP_SERVER: ${{ vars.CODE_SIGNING_TIMESTAMP_SERVER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $DryRun = [System.Boolean]::Parse('${{ needs.preflight.outputs.dry-run }}')
+          $SkipPublish = [System.Boolean]::Parse('${{ needs.preflight.outputs.skip-publish }}')
+          try { $SignDryRun = [System.Boolean]::Parse('${{ inputs.sign-dry-run }}') }
+          catch { $SignDryRun = $false }
+
+          $RequiredValues = @(
+            $Env:CODE_SIGNING_KEYVAULT_URL,
+            $Env:AZURE_TENANT_ID,
+            $Env:CODE_SIGNING_CLIENT_ID,
+            $Env:CODE_SIGNING_CLIENT_SECRET,
+            $Env:CODE_SIGNING_CERTIFICATE_NAME,
+            $Env:CODE_SIGNING_TIMESTAMP_SERVER
+          )
+
+          $HasSigningSecrets = $true
+          foreach ($Value in $RequiredValues) {
+            if ([string]::IsNullOrWhiteSpace($Value)) {
+              $HasSigningSecrets = $false
+              break
+            }
+          }
+
+          $RealPublish = -not $DryRun -and -not $SkipPublish
+          $ShouldSign = $HasSigningSecrets -and ($RealPublish -or $SignDryRun)
+
+          if ($RealPublish -and -not $HasSigningSecrets) {
+            throw "Azure Key Vault code signing secrets are required for non-dry-run SDK publishing."
+          }
+
+          echo "should_sign=$($ShouldSign.ToString().ToLower())" >> $Env:GITHUB_OUTPUT
+          echo "::notice::SDKCodeSigningSecretsAvailable: $HasSigningSecrets"
+          echo "::notice::SDKCodeSigningSignDryRun: $SignDryRun"
+          echo "::notice::SDKPackageWillBeCodeSigned: $ShouldSign"
+
+      - name: Install psign tool
+        if: steps.signing-mode.outputs.should_sign == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $ToolRoot = Join-Path $Env:RUNNER_TEMP "psign-tool"
+          Remove-Item -LiteralPath $ToolRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $ToolRoot | Out-Null
+
+          $ArchivePath = Join-Path $ToolRoot "psign-tool-linux-x64.zip"
+          $DownloadUrl = "https://github.com/Devolutions/psign/releases/download/$Env:PSIGN_RELEASE_TAG/psign-tool-linux-x64.zip"
+          Invoke-WebRequest -Uri $DownloadUrl -OutFile $ArchivePath
+
+          $ActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ArchivePath).Hash.ToLowerInvariant()
+          if ($ActualHash -ne $Env:PSIGN_TOOL_LINUX_X64_SHA256) {
+            throw "Unexpected psign-tool-linux-x64.zip SHA256 '$ActualHash', expected '$Env:PSIGN_TOOL_LINUX_X64_SHA256'."
+          }
+
+          Expand-Archive -Path $ArchivePath -DestinationPath $ToolRoot -Force
+          $ToolPath = Join-Path $ToolRoot "psign-tool"
+          if (-not (Test-Path -LiteralPath $ToolPath -PathType Leaf)) {
+            throw "psign-tool was not found after extracting $ArchivePath"
+          }
+
+          chmod +x $ToolPath
+          $ToolRoot >> $Env:GITHUB_PATH
+          & $ToolPath --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "psign-tool --version failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Code sign PowerShell SDK package
+        shell: pwsh
+        env:
+          CODE_SIGNING_KEYVAULT_URL: ${{ secrets.CODE_SIGNING_KEYVAULT_URL }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          CODE_SIGNING_CLIENT_ID: ${{ secrets.CODE_SIGNING_CLIENT_ID }}
+          CODE_SIGNING_CLIENT_SECRET: ${{ secrets.CODE_SIGNING_CLIENT_SECRET }}
+          CODE_SIGNING_CERTIFICATE_NAME: ${{ secrets.CODE_SIGNING_CERTIFICATE_NAME }}
+          CODE_SIGNING_TIMESTAMP_SERVER: ${{ vars.CODE_SIGNING_TIMESTAMP_SERVER }}
+          SHOULD_SIGN: ${{ steps.signing-mode.outputs.should_sign }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $NugetPackages = @(Get-ChildItem -Path ./unsigned-package -Filter *.nupkg -File | Sort-Object Name)
+          if ($NugetPackages.Count -ne 1) {
+            throw "Expected exactly one SDK .nupkg in ./unsigned-package, found $($NugetPackages.Count)."
+          }
+
+          $SignedPackageDirectory = Join-Path $PWD "signed-package"
+          Remove-Item -LiteralPath $SignedPackageDirectory -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $SignedPackageDirectory | Out-Null
+
+          $NugetPackage = $NugetPackages[0]
+          $SignedPackagePath = Join-Path $SignedPackageDirectory $NugetPackage.Name
+
+          if (-not [System.Boolean]::Parse($Env:SHOULD_SIGN)) {
+            Copy-Item -LiteralPath $NugetPackage.FullName -Destination $SignedPackagePath -Force
+            Write-Host "Code signing is disabled for this run; forwarding unsigned package for validation."
+            return
+          }
+
+          $ExpandedPackageRoot = Join-Path $PWD "expanded-package"
+          Remove-Item -LiteralPath $ExpandedPackageRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $ExpandedPackageRoot | Out-Null
+          Expand-Archive -LiteralPath $NugetPackage.FullName -DestinationPath $ExpandedPackageRoot -Force
+
+          $CandidateRoots = @(
+            'ref',
+            'runtimes/win',
+            'runtimes/win-x64/native',
+            'runtimes/win-arm64/native',
+            'tools/apphost/win-x64',
+            'tools/apphost/win-arm64'
+          ) | ForEach-Object { Join-Path $ExpandedPackageRoot $_ }
+
+          $CandidateTargets = @(
+            foreach ($CandidateRoot in $CandidateRoots) {
+              if (Test-Path -LiteralPath $CandidateRoot -PathType Container) {
+                Get-ChildItem -LiteralPath $CandidateRoot -Recurse -File |
+                  Where-Object { $_.Extension -in @('.dll', '.exe') }
+              }
+            }
+          ) | Sort-Object FullName -Unique
+
+          $SigningTargets = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+          foreach ($CandidateTarget in $CandidateTargets) {
+            $RelativeTarget = [System.IO.Path]::GetRelativePath($ExpandedPackageRoot, $CandidateTarget.FullName)
+            $VerifyOutput = & psign-tool portable verify-pe $CandidateTarget.FullName 2>&1
+            $VerifyExitCode = $LASTEXITCODE
+            if ($VerifyExitCode -eq 0) {
+              Write-Host "Skipping already-signed Windows binary payload: $RelativeTarget"
+              continue
+            }
+            if (($VerifyOutput -join "`n") -match 'PE has no certificate table') {
+              $SigningTargets.Add($CandidateTarget)
+              continue
+            }
+
+            $VerifyOutput | ForEach-Object { Write-Host $_ }
+            throw "Unable to determine signing state for Windows binary payload '$RelativeTarget'."
+          }
+
+          if ($SigningTargets.Count -eq 0) {
+            throw "No Windows binary signing targets were found in $($NugetPackage.Name)."
+          }
+
+          Write-Host "Signing $($SigningTargets.Count) Windows binary payload(s) inside $($NugetPackage.Name)."
+          $SigningArgs = @(
+            '--mode', 'portable',
+            'sign',
+            '--azure-key-vault-url', $Env:CODE_SIGNING_KEYVAULT_URL,
+            '--azure-key-vault-certificate', $Env:CODE_SIGNING_CERTIFICATE_NAME,
+            '--azure-key-vault-client-id', $Env:CODE_SIGNING_CLIENT_ID,
+            '--azure-key-vault-client-secret', $Env:CODE_SIGNING_CLIENT_SECRET,
+            '--azure-key-vault-tenant-id', $Env:AZURE_TENANT_ID,
+            '--timestamp-url', $Env:CODE_SIGNING_TIMESTAMP_SERVER,
+            '--timestamp-digest', 'sha256',
+            '--digest', 'sha256',
+            '--exit-codes', 'azure'
+          )
+
+          foreach ($SigningTarget in $SigningTargets) {
+            $RelativeTarget = [System.IO.Path]::GetRelativePath($ExpandedPackageRoot, $SigningTarget.FullName)
+            Write-Host "Signing $RelativeTarget"
+            & psign-tool @SigningArgs $SigningTarget.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "psign-tool code signing failed for $RelativeTarget with exit code $LASTEXITCODE"
+            }
+          }
+
+          Remove-Item -LiteralPath (Join-Path $ExpandedPackageRoot '.signature.p7s') -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $SignedPackagePath -Force -ErrorAction SilentlyContinue
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            $ExpandedPackageRoot,
+            $SignedPackagePath,
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $false)
+
+          if (-not (Test-Path -LiteralPath $SignedPackagePath -PathType Leaf)) {
+            throw "Failed to create release package: $SignedPackagePath"
+          }
+
+      - name: Upload release PowerShell SDK package
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ${{ needs.preflight.outputs.release-sdk-package-artifact }}
+          path: signed-package/*.nupkg
+          if-no-files-found: error
 
   validate:
     name: Validate PowerShell SDK [${{matrix.rid}}]
     runs-on: ${{matrix.runner}}
-    needs: build
+    needs: [preflight, sign]
     strategy:
       fail-fast: false
       matrix:
@@ -1012,7 +1423,7 @@ jobs:
       - name: Download PowerShell SDK package
         uses: actions/download-artifact@v8.0.1
         with:
-          name: PowerShell-SDK-${{env.POWERSHELL_VERSION}}.${{inputs.sdk_package_revision}}
+          name: ${{ needs.preflight.outputs.release-sdk-package-artifact }}
           path: sdk-package
 
       - name: Validate PowerShell SDK package
@@ -1027,11 +1438,10 @@ jobs:
           if (-not $TargetFramework) {
             throw "Unable to determine PowerShell TargetFramework from PowerShell.Common.props"
           }
-          $SdkPackageRevision = '${{ inputs.sdk_package_revision }}'
-          if ($SdkPackageRevision -notmatch '^\d+$') {
-            throw "SDK package revision '$SdkPackageRevision' must be numeric."
+          $SdkPackageVersion = '${{ needs.preflight.outputs.sdk-package-version }}'
+          if ($SdkPackageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+            throw "Invalid SDK package version '$SdkPackageVersion', expected X.Y.Z.R."
           }
-          $SdkPackageVersion = "$Env:POWERSHELL_VERSION.$SdkPackageRevision"
 
           ./eng/Validate-PowerShellSdkPackage.ps1 `
             -PackageDirectory ./sdk-package `
@@ -1041,3 +1451,121 @@ jobs:
             -RuntimeIdentifier ${{matrix.rid}} `
             -PackageId $Env:SDK_PACKAGE_ID `
             -PackageVendorName $Env:SDK_VENDOR_NAME
+
+  publish:
+    name: Publish PowerShell SDK
+    runs-on: ubuntu-24.04
+    needs: [preflight, sign, validate]
+    if: ${{ fromJSON(needs.preflight.outputs.skip-publish) == false }}
+    environment: ${{ needs.preflight.outputs.package-env }}
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+      - name: Download PowerShell SDK package
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: ${{ needs.preflight.outputs.release-sdk-package-artifact }}
+          path: package
+
+      - name: NuGet login (OIDC)
+        if: ${{ fromJSON(needs.preflight.outputs.dry-run) == false }}
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_BOT_USERNAME }}
+
+      - name: Publish to nuget.org
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $DryRun = [System.Boolean]::Parse('${{ needs.preflight.outputs.dry-run }}')
+          $NuGetApiKey = '${{ steps.nuget-login.outputs.NUGET_API_KEY }}'
+          $NugetPackages = @(Get-ChildItem -Path ./package -Filter *.nupkg -File | Sort-Object Name)
+          if ($NugetPackages.Count -ne 1) {
+            throw "Expected exactly one SDK .nupkg in ./package, found $($NugetPackages.Count)."
+          }
+
+          foreach ($NugetPackage in $NugetPackages) {
+            $PackagePath = Resolve-Path -LiteralPath $NugetPackage.FullName -Relative
+            Write-Host "Publishing $PackagePath to nuget.org"
+
+            if ($DryRun) {
+              Write-Host "Dry Run: skipping nuget.org publishing!"
+              continue
+            }
+
+            if ([string]::IsNullOrWhiteSpace($NuGetApiKey)) {
+              throw "NuGet/login did not provide a NuGet API key."
+            }
+
+            $PushArgs = @(
+              'nuget', 'push', $PackagePath,
+              '--api-key', $NuGetApiKey,
+              '--source', 'https://api.nuget.org/v3/index.json',
+              '--skip-duplicate', '--no-symbols'
+            )
+            & dotnet @PushArgs
+            if ($LASTEXITCODE -ne 0) {
+              throw "dotnet nuget push failed for $PackagePath with exit code $LASTEXITCODE"
+            }
+          }
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: package
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $DryRun = [System.Boolean]::Parse('${{ needs.preflight.outputs.dry-run }}')
+          $PackageVersion = '${{ needs.preflight.outputs.sdk-package-version }}'
+          $ReleaseTag = '${{ needs.preflight.outputs.release-tag }}'
+          $ReleaseTitle = '${{ needs.preflight.outputs.release-title }}'
+          $Repository = $Env:GITHUB_REPOSITORY
+          $SourceCommit = '${{ needs.preflight.outputs.powershell-source-commit }}'
+          $CodeSigned = '${{ needs.sign.outputs.code-signed }}'
+
+          $NugetPackages = @(Get-ChildItem -Filter *.nupkg -File | Sort-Object Name)
+          if ($NugetPackages.Count -ne 1) {
+            throw "Expected exactly one SDK .nupkg in the release package directory, found $($NugetPackages.Count)."
+          }
+
+          $HashPath = 'checksums'
+          $ChecksumLines = foreach ($NugetPackage in $NugetPackages) {
+            $Hash = Get-FileHash -Algorithm SHA256 -LiteralPath $NugetPackage.FullName
+            "$($Hash.Hash)  $($NugetPackage.Name)"
+          }
+          Set-Content -Path $HashPath -Value $ChecksumLines -Encoding ASCII
+
+          echo "::group::checksums"
+          Get-Content $HashPath
+          echo "::endgroup::"
+
+          $NotesPath = 'release-notes.md'
+          $ReleaseNotes = @(
+            "# $ReleaseTitle",
+            "",
+            "| Field | Value |",
+            "| --- | --- |",
+            "| Package ID | $Env:SDK_PACKAGE_ID |",
+            "| Package version | $PackageVersion |",
+            "| PowerShell upstream release | $Env:POWERSHELL_RELEASE_TAG |",
+            "| PowerShell downstream source ref | $Env:POWERSHELL_SOURCE_REF |",
+            "| PowerShell source commit | $SourceCommit |",
+            "| Code signed | $CodeSigned |"
+          )
+          Set-Content -Path $NotesPath -Value $ReleaseNotes -Encoding utf8
+
+          if ($DryRun) {
+            Write-Host "Dry Run: skipping GitHub release!"
+          } else {
+            $ReleaseAssets = @($NugetPackages | ForEach-Object { $_.Name }) + $HashPath
+            & gh release create $ReleaseTag --repo $Repository --target $Env:GITHUB_SHA --title $ReleaseTitle --notes-file $NotesPath @ReleaseAssets
+            if ($LASTEXITCODE -ne 0) {
+              throw "gh release create failed for $ReleaseTag with exit code $LASTEXITCODE"
+            }
+          }
