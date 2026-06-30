@@ -1310,7 +1310,7 @@ jobs:
             'tools/apphost/win-arm64'
           ) | ForEach-Object { Join-Path $ExpandedPackageRoot $_ }
 
-          $SigningTargets = @(
+          $CandidateTargets = @(
             foreach ($CandidateRoot in $CandidateRoots) {
               if (Test-Path -LiteralPath $CandidateRoot -PathType Container) {
                 Get-ChildItem -LiteralPath $CandidateRoot -Recurse -File |
@@ -1318,6 +1318,24 @@ jobs:
               }
             }
           ) | Sort-Object FullName -Unique
+
+          $SigningTargets = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+          foreach ($CandidateTarget in $CandidateTargets) {
+            $RelativeTarget = [System.IO.Path]::GetRelativePath($ExpandedPackageRoot, $CandidateTarget.FullName)
+            $VerifyOutput = & psign-tool portable verify-pe $CandidateTarget.FullName 2>&1
+            $VerifyExitCode = $LASTEXITCODE
+            if ($VerifyExitCode -eq 0) {
+              Write-Host "Skipping already-signed Windows binary payload: $RelativeTarget"
+              continue
+            }
+            if (($VerifyOutput -join "`n") -match 'PE has no certificate table') {
+              $SigningTargets.Add($CandidateTarget)
+              continue
+            }
+
+            $VerifyOutput | ForEach-Object { Write-Host $_ }
+            throw "Unable to determine signing state for Windows binary payload '$RelativeTarget'."
+          }
 
           if ($SigningTargets.Count -eq 0) {
             throw "No Windows binary signing targets were found in $($NugetPackage.Name)."
@@ -1335,7 +1353,6 @@ jobs:
             '--timestamp-url', $Env:CODE_SIGNING_TIMESTAMP_SERVER,
             '--timestamp-digest', 'sha256',
             '--digest', 'sha256',
-            '--skip-signed',
             '--exit-codes', 'azure'
           )
 
