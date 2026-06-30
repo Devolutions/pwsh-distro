@@ -53,7 +53,7 @@ jobs:
       sdk-package-revision: ${{ steps.info.outputs.sdk-package-revision }}
       sdk-package-version: ${{ steps.info.outputs.sdk-package-version }}
       sdk-package-artifact: ${{ steps.info.outputs.sdk-package-artifact }}
-      signed-sdk-package-artifact: ${{ steps.info.outputs.signed-sdk-package-artifact }}
+      release-sdk-package-artifact: ${{ steps.info.outputs.release-sdk-package-artifact }}
       release-tag: ${{ steps.info.outputs.release-tag }}
       release-title: ${{ steps.info.outputs.release-title }}
       powershell-source-commit: ${{ steps.info.outputs.powershell-source-commit }}
@@ -187,7 +187,7 @@ jobs:
           $ReleaseTag = "v$SdkPackageVersion"
           $ReleaseTitle = "$Env:SDK_PACKAGE_ID v$SdkPackageVersion"
           $SdkPackageArtifact = "PowerShell-SDK-$SdkPackageVersion"
-          $SignedSdkPackageArtifact = "PowerShell-SDK-Signed-$SdkPackageVersion"
+          $ReleaseSdkPackageArtifact = "PowerShell-SDK-Release-$SdkPackageVersion"
           $ReleaseTagExists = [bool](git tag -l $ReleaseTag)
           if ($ReleaseTagExists -and -not $DryRun -and -not $SkipPublish) {
             throw "Release tag '$ReleaseTag' already exists. Choose a new SDK package revision."
@@ -197,7 +197,7 @@ jobs:
           echo "sdk-package-revision=$SdkPackageRevision" >> $Env:GITHUB_OUTPUT
           echo "sdk-package-version=$SdkPackageVersion" >> $Env:GITHUB_OUTPUT
           echo "sdk-package-artifact=$SdkPackageArtifact" >> $Env:GITHUB_OUTPUT
-          echo "signed-sdk-package-artifact=$SignedSdkPackageArtifact" >> $Env:GITHUB_OUTPUT
+          echo "release-sdk-package-artifact=$ReleaseSdkPackageArtifact" >> $Env:GITHUB_OUTPUT
           echo "release-tag=$ReleaseTag" >> $Env:GITHUB_OUTPUT
           echo "release-title=$ReleaseTitle" >> $Env:GITHUB_OUTPUT
           echo "powershell-source-commit=$PowerShellSourceCommit" >> $Env:GITHUB_OUTPUT
@@ -1296,9 +1296,37 @@ jobs:
             return
           }
 
+          $ExpandedPackageRoot = Join-Path $PWD "expanded-package"
+          Remove-Item -LiteralPath $ExpandedPackageRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $ExpandedPackageRoot | Out-Null
+          Expand-Archive -LiteralPath $NugetPackage.FullName -DestinationPath $ExpandedPackageRoot -Force
+
+          $CandidateRoots = @(
+            'ref',
+            'runtimes/win',
+            'runtimes/win-x64/native',
+            'runtimes/win-arm64/native',
+            'tools/apphost/win-x64',
+            'tools/apphost/win-arm64'
+          ) | ForEach-Object { Join-Path $ExpandedPackageRoot $_ }
+
+          $SigningTargets = @(
+            foreach ($CandidateRoot in $CandidateRoots) {
+              if (Test-Path -LiteralPath $CandidateRoot -PathType Container) {
+                Get-ChildItem -LiteralPath $CandidateRoot -Recurse -File |
+                  Where-Object { $_.Extension -in @('.dll', '.exe') }
+              }
+            }
+          ) | Sort-Object FullName -Unique
+
+          if ($SigningTargets.Count -eq 0) {
+            throw "No Windows binary signing targets were found in $($NugetPackage.Name)."
+          }
+
+          Write-Host "Signing $($SigningTargets.Count) Windows binary payload(s) inside $($NugetPackage.Name)."
           $SigningArgs = @(
-            'code',
-            '--base-directory', $PWD.Path,
+            '--mode', 'portable',
+            'sign',
             '--azure-key-vault-url', $Env:CODE_SIGNING_KEYVAULT_URL,
             '--azure-key-vault-certificate', $Env:CODE_SIGNING_CERTIFICATE_NAME,
             '--azure-key-vault-client-id', $Env:CODE_SIGNING_CLIENT_ID,
@@ -1306,25 +1334,37 @@ jobs:
             '--azure-key-vault-tenant-id', $Env:AZURE_TENANT_ID,
             '--timestamp-url', $Env:CODE_SIGNING_TIMESTAMP_SERVER,
             '--timestamp-digest', 'sha256',
-            '--file-digest', 'sha256',
-            '--overwrite',
-            '--output', $SignedPackagePath,
-            $NugetPackage.FullName
+            '--digest', 'sha256',
+            '--skip-signed',
+            '--exit-codes', 'azure'
           )
 
-          & psign-tool @SigningArgs
-          if ($LASTEXITCODE -ne 0) {
-            throw "psign-tool code signing failed for $($NugetPackage.Name) with exit code $LASTEXITCODE"
+          foreach ($SigningTarget in $SigningTargets) {
+            $RelativeTarget = [System.IO.Path]::GetRelativePath($ExpandedPackageRoot, $SigningTarget.FullName)
+            Write-Host "Signing $RelativeTarget"
+            & psign-tool @SigningArgs $SigningTarget.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "psign-tool code signing failed for $RelativeTarget with exit code $LASTEXITCODE"
+            }
           }
+
+          Remove-Item -LiteralPath (Join-Path $ExpandedPackageRoot '.signature.p7s') -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $SignedPackagePath -Force -ErrorAction SilentlyContinue
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            $ExpandedPackageRoot,
+            $SignedPackagePath,
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $false)
 
           if (-not (Test-Path -LiteralPath $SignedPackagePath -PathType Leaf)) {
-            throw "psign-tool did not create signed package: $SignedPackagePath"
+            throw "Failed to create release package: $SignedPackagePath"
           }
 
-      - name: Upload code-signed PowerShell SDK package
+      - name: Upload release PowerShell SDK package
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: ${{ needs.preflight.outputs.signed-sdk-package-artifact }}
+          name: ${{ needs.preflight.outputs.release-sdk-package-artifact }}
           path: signed-package/*.nupkg
           if-no-files-found: error
 
@@ -1366,7 +1406,7 @@ jobs:
       - name: Download PowerShell SDK package
         uses: actions/download-artifact@v8.0.1
         with:
-          name: ${{ needs.preflight.outputs.signed-sdk-package-artifact }}
+          name: ${{ needs.preflight.outputs.release-sdk-package-artifact }}
           path: sdk-package
 
       - name: Validate PowerShell SDK package
@@ -1409,7 +1449,7 @@ jobs:
       - name: Download PowerShell SDK package
         uses: actions/download-artifact@v8.0.1
         with:
-          name: ${{ needs.preflight.outputs.signed-sdk-package-artifact }}
+          name: ${{ needs.preflight.outputs.release-sdk-package-artifact }}
           path: package
 
       - name: NuGet login (OIDC)

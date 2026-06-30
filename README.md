@@ -44,7 +44,7 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 
 | Workflow | Purpose | Output |
 | --- | --- | --- |
-| `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors the source-built PowerShell SDK assemblies into one `Devolutions.PowerShell.SDK` package, signs it for release, validates it in a sample .NET app with opt-in apphost import, and can publish the validated package. | `PowerShell-SDK-Signed-7.6.3.0` artifact containing one `.nupkg`; optional NuGet.org publish plus GitHub release `v7.6.3.0`. |
+| `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors the source-built PowerShell SDK assemblies into one `Devolutions.PowerShell.SDK` package, signs Windows PE payloads inside it for release, validates it in a sample .NET app with opt-in apphost import, and can publish the validated package. | `PowerShell-SDK-Release-7.6.3.0` artifact containing one `.nupkg`; optional NuGet.org publish plus GitHub release `v7.6.3.0`. |
 | `.github/workflows/powershell.yml` | Builds self-contained PowerShell archives for Windows, macOS, and Linux on x64 and arm64. | `PowerShell-7.6.3-<os>-<arch>` `.tar.gz` artifacts. |
 | `.github/workflows/dotnet-runtime.yml` | Builds the .NET runtime tag used by this PowerShell release for Windows, macOS, and Linux on x86_64 and arm64 with prebuilt clang+llvm from `awakecoding/llvm-prebuilt`. | Runtime build output in the workflow logs/workspace. |
 
@@ -52,7 +52,7 @@ All workflows are manual and can be started from the GitHub Actions **Run workfl
 
 ## Publishing the PowerShell SDK package
 
-The SDK workflow publishes only after the package has been built, signed for release, and validated on every RID in the validation matrix. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`.
+The SDK workflow publishes only after the package has been built, had its Windows PE payloads signed for release, and been validated on every RID in the validation matrix. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`.
 
 Manual inputs:
 
@@ -64,7 +64,7 @@ Manual inputs:
 | `dry-run` | Simulates publishing. This defaults to `true`; non-production environments are forced to dry-run when publishing is requested. |
 | `sign-dry-run` | Signs the package during a dry-run when code signing secrets are available. This defaults to `false` so dry-runs can exercise packaging and release flow without requiring signing credentials. |
 
-Before validation and publishing, the SDK workflow runs a signing stage that downloads the built `.nupkg`, installs the pinned `Devolutions/psign` `psign-tool-linux-x64.zip`, verifies its SHA256, and signs the NuGet package plus supported nested Authenticode payloads with Azure Key Vault. A non-dry-run publish requires these environment secrets and variables:
+Before validation and publishing, the SDK workflow runs a signing stage that downloads the built `.nupkg`, installs the pinned `Devolutions/psign` `psign-tool-linux-x64.zip`, verifies its SHA256, extracts the package, signs Windows `.dll` and `.exe` payloads with Azure Key Vault, and repacks the `.nupkg` without adding a NuGet package signature. A non-dry-run publish requires these environment secrets and variables:
 
 | Name | Type |
 | --- | --- |
@@ -75,7 +75,7 @@ Before validation and publishing, the SDK workflow runs a signing stage that dow
 | `CODE_SIGNING_CERTIFICATE_NAME` | Secret |
 | `CODE_SIGNING_TIMESTAMP_SERVER` | Variable |
 
-Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation. A real publish pushes the signed and validated `.nupkg` to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the package asset, and a SHA256 checksum file.
+Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation. A real publish pushes the validated `.nupkg` containing signed Windows payloads to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the package asset, and a SHA256 checksum file.
 
 ## Branching model
 
