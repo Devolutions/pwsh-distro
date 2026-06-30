@@ -25,6 +25,11 @@ on:
         required: true
         type: boolean
         default: true
+      sign-dry-run:
+        description: Sign package during dry-run when signing secrets are available
+        required: true
+        type: boolean
+        default: false
 env:
   POWERSHELL_VERSION: "7.6.3"
   POWERSHELL_RELEASE_TAG: "v7.6.3"
@@ -37,6 +42,8 @@ env:
   MULTI_PWSH_APPHOST_PACKAGE_ID: "Devolutions.MultiPwsh.Cli"
   MULTI_PWSH_APPHOST_PACKAGE_VERSION: "0.14.0"
   MULTI_PWSH_APPHOST_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
+  PSIGN_RELEASE_TAG: "v0.5.1"
+  PSIGN_TOOL_LINUX_X64_SHA256: "de293360c1aed93709b80980e1ad47998b2b73f76fae40cf48f08213f862a463"
 jobs:
   preflight:
     name: Preflight
@@ -46,6 +53,7 @@ jobs:
       sdk-package-revision: ${{ steps.info.outputs.sdk-package-revision }}
       sdk-package-version: ${{ steps.info.outputs.sdk-package-version }}
       sdk-package-artifact: ${{ steps.info.outputs.sdk-package-artifact }}
+      signed-sdk-package-artifact: ${{ steps.info.outputs.signed-sdk-package-artifact }}
       release-tag: ${{ steps.info.outputs.release-tag }}
       release-title: ${{ steps.info.outputs.release-title }}
       powershell-source-commit: ${{ steps.info.outputs.powershell-source-commit }}
@@ -179,6 +187,7 @@ jobs:
           $ReleaseTag = "v$SdkPackageVersion"
           $ReleaseTitle = "$Env:SDK_PACKAGE_ID v$SdkPackageVersion"
           $SdkPackageArtifact = "PowerShell-SDK-$SdkPackageVersion"
+          $SignedSdkPackageArtifact = "PowerShell-SDK-Signed-$SdkPackageVersion"
           $ReleaseTagExists = [bool](git tag -l $ReleaseTag)
           if ($ReleaseTagExists -and -not $DryRun -and -not $SkipPublish) {
             throw "Release tag '$ReleaseTag' already exists. Choose a new SDK package revision."
@@ -188,6 +197,7 @@ jobs:
           echo "sdk-package-revision=$SdkPackageRevision" >> $Env:GITHUB_OUTPUT
           echo "sdk-package-version=$SdkPackageVersion" >> $Env:GITHUB_OUTPUT
           echo "sdk-package-artifact=$SdkPackageArtifact" >> $Env:GITHUB_OUTPUT
+          echo "signed-sdk-package-artifact=$SignedSdkPackageArtifact" >> $Env:GITHUB_OUTPUT
           echo "release-tag=$ReleaseTag" >> $Env:GITHUB_OUTPUT
           echo "release-title=$ReleaseTitle" >> $Env:GITHUB_OUTPUT
           echo "powershell-source-commit=$PowerShellSourceCommit" >> $Env:GITHUB_OUTPUT
@@ -1157,11 +1167,171 @@ jobs:
         with:
           name: ${{ needs.preflight.outputs.sdk-package-artifact }}
           path: "pwsh-src/package/*.nupkg"
+          if-no-files-found: error
+
+  sign:
+    name: Sign PowerShell SDK package
+    runs-on: ubuntu-24.04
+    needs: [preflight, build]
+    environment: ${{ needs.preflight.outputs.package-env }}
+    outputs:
+      code-signed: ${{ steps.signing-mode.outputs.should_sign }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Download PowerShell SDK package
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: ${{ needs.preflight.outputs.sdk-package-artifact }}
+          path: unsigned-package
+
+      - name: Resolve code signing mode
+        id: signing-mode
+        shell: pwsh
+        env:
+          CODE_SIGNING_KEYVAULT_URL: ${{ secrets.CODE_SIGNING_KEYVAULT_URL }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          CODE_SIGNING_CLIENT_ID: ${{ secrets.CODE_SIGNING_CLIENT_ID }}
+          CODE_SIGNING_CLIENT_SECRET: ${{ secrets.CODE_SIGNING_CLIENT_SECRET }}
+          CODE_SIGNING_CERTIFICATE_NAME: ${{ secrets.CODE_SIGNING_CERTIFICATE_NAME }}
+          CODE_SIGNING_TIMESTAMP_SERVER: ${{ vars.CODE_SIGNING_TIMESTAMP_SERVER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $DryRun = [System.Boolean]::Parse('${{ needs.preflight.outputs.dry-run }}')
+          $SkipPublish = [System.Boolean]::Parse('${{ needs.preflight.outputs.skip-publish }}')
+          try { $SignDryRun = [System.Boolean]::Parse('${{ inputs.sign-dry-run }}') }
+          catch { $SignDryRun = $false }
+
+          $RequiredValues = @(
+            $Env:CODE_SIGNING_KEYVAULT_URL,
+            $Env:AZURE_TENANT_ID,
+            $Env:CODE_SIGNING_CLIENT_ID,
+            $Env:CODE_SIGNING_CLIENT_SECRET,
+            $Env:CODE_SIGNING_CERTIFICATE_NAME,
+            $Env:CODE_SIGNING_TIMESTAMP_SERVER
+          )
+
+          $HasSigningSecrets = $true
+          foreach ($Value in $RequiredValues) {
+            if ([string]::IsNullOrWhiteSpace($Value)) {
+              $HasSigningSecrets = $false
+              break
+            }
+          }
+
+          $RealPublish = -not $DryRun -and -not $SkipPublish
+          $ShouldSign = $HasSigningSecrets -and ($RealPublish -or $SignDryRun)
+
+          if ($RealPublish -and -not $HasSigningSecrets) {
+            throw "Azure Key Vault code signing secrets are required for non-dry-run SDK publishing."
+          }
+
+          echo "should_sign=$($ShouldSign.ToString().ToLower())" >> $Env:GITHUB_OUTPUT
+          echo "::notice::SDKCodeSigningSecretsAvailable: $HasSigningSecrets"
+          echo "::notice::SDKCodeSigningSignDryRun: $SignDryRun"
+          echo "::notice::SDKPackageWillBeCodeSigned: $ShouldSign"
+
+      - name: Install psign tool
+        if: steps.signing-mode.outputs.should_sign == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $ToolRoot = Join-Path $Env:RUNNER_TEMP "psign-tool"
+          Remove-Item -LiteralPath $ToolRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $ToolRoot | Out-Null
+
+          $ArchivePath = Join-Path $ToolRoot "psign-tool-linux-x64.zip"
+          $DownloadUrl = "https://github.com/Devolutions/psign/releases/download/$Env:PSIGN_RELEASE_TAG/psign-tool-linux-x64.zip"
+          Invoke-WebRequest -Uri $DownloadUrl -OutFile $ArchivePath
+
+          $ActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ArchivePath).Hash.ToLowerInvariant()
+          if ($ActualHash -ne $Env:PSIGN_TOOL_LINUX_X64_SHA256) {
+            throw "Unexpected psign-tool-linux-x64.zip SHA256 '$ActualHash', expected '$Env:PSIGN_TOOL_LINUX_X64_SHA256'."
+          }
+
+          Expand-Archive -Path $ArchivePath -DestinationPath $ToolRoot -Force
+          $ToolPath = Join-Path $ToolRoot "psign-tool"
+          if (-not (Test-Path -LiteralPath $ToolPath -PathType Leaf)) {
+            throw "psign-tool was not found after extracting $ArchivePath"
+          }
+
+          chmod +x $ToolPath
+          $ToolRoot >> $Env:GITHUB_PATH
+          & $ToolPath --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "psign-tool --version failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Code sign PowerShell SDK package
+        shell: pwsh
+        env:
+          CODE_SIGNING_KEYVAULT_URL: ${{ secrets.CODE_SIGNING_KEYVAULT_URL }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          CODE_SIGNING_CLIENT_ID: ${{ secrets.CODE_SIGNING_CLIENT_ID }}
+          CODE_SIGNING_CLIENT_SECRET: ${{ secrets.CODE_SIGNING_CLIENT_SECRET }}
+          CODE_SIGNING_CERTIFICATE_NAME: ${{ secrets.CODE_SIGNING_CERTIFICATE_NAME }}
+          CODE_SIGNING_TIMESTAMP_SERVER: ${{ vars.CODE_SIGNING_TIMESTAMP_SERVER }}
+          SHOULD_SIGN: ${{ steps.signing-mode.outputs.should_sign }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $NugetPackages = @(Get-ChildItem -Path ./unsigned-package -Filter *.nupkg -File | Sort-Object Name)
+          if ($NugetPackages.Count -ne 1) {
+            throw "Expected exactly one SDK .nupkg in ./unsigned-package, found $($NugetPackages.Count)."
+          }
+
+          $SignedPackageDirectory = Join-Path $PWD "signed-package"
+          Remove-Item -LiteralPath $SignedPackageDirectory -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $SignedPackageDirectory | Out-Null
+
+          $NugetPackage = $NugetPackages[0]
+          $SignedPackagePath = Join-Path $SignedPackageDirectory $NugetPackage.Name
+
+          if (-not [System.Boolean]::Parse($Env:SHOULD_SIGN)) {
+            Copy-Item -LiteralPath $NugetPackage.FullName -Destination $SignedPackagePath -Force
+            Write-Host "Code signing is disabled for this run; forwarding unsigned package for validation."
+            return
+          }
+
+          $SigningArgs = @(
+            'code',
+            '--base-directory', $PWD.Path,
+            '--azure-key-vault-url', $Env:CODE_SIGNING_KEYVAULT_URL,
+            '--azure-key-vault-certificate', $Env:CODE_SIGNING_CERTIFICATE_NAME,
+            '--azure-key-vault-client-id', $Env:CODE_SIGNING_CLIENT_ID,
+            '--azure-key-vault-client-secret', $Env:CODE_SIGNING_CLIENT_SECRET,
+            '--azure-key-vault-tenant-id', $Env:AZURE_TENANT_ID,
+            '--timestamp-url', $Env:CODE_SIGNING_TIMESTAMP_SERVER,
+            '--timestamp-digest', 'sha256',
+            '--file-digest', 'sha256',
+            '--overwrite',
+            '--output', $SignedPackagePath,
+            $NugetPackage.FullName
+          )
+
+          & psign-tool @SigningArgs
+          if ($LASTEXITCODE -ne 0) {
+            throw "psign-tool code signing failed for $($NugetPackage.Name) with exit code $LASTEXITCODE"
+          }
+
+          if (-not (Test-Path -LiteralPath $SignedPackagePath -PathType Leaf)) {
+            throw "psign-tool did not create signed package: $SignedPackagePath"
+          }
+
+      - name: Upload code-signed PowerShell SDK package
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ${{ needs.preflight.outputs.signed-sdk-package-artifact }}
+          path: signed-package/*.nupkg
+          if-no-files-found: error
 
   validate:
     name: Validate PowerShell SDK [${{matrix.rid}}]
     runs-on: ${{matrix.runner}}
-    needs: [preflight, build]
+    needs: [preflight, sign]
     strategy:
       fail-fast: false
       matrix:
@@ -1196,7 +1366,7 @@ jobs:
       - name: Download PowerShell SDK package
         uses: actions/download-artifact@v8.0.1
         with:
-          name: ${{ needs.preflight.outputs.sdk-package-artifact }}
+          name: ${{ needs.preflight.outputs.signed-sdk-package-artifact }}
           path: sdk-package
 
       - name: Validate PowerShell SDK package
@@ -1228,7 +1398,7 @@ jobs:
   publish:
     name: Publish PowerShell SDK
     runs-on: ubuntu-24.04
-    needs: [preflight, build, validate]
+    needs: [preflight, sign, validate]
     if: ${{ fromJSON(needs.preflight.outputs.skip-publish) == false }}
     environment: ${{ needs.preflight.outputs.package-env }}
     permissions:
@@ -1239,7 +1409,7 @@ jobs:
       - name: Download PowerShell SDK package
         uses: actions/download-artifact@v8.0.1
         with:
-          name: ${{ needs.preflight.outputs.sdk-package-artifact }}
+          name: ${{ needs.preflight.outputs.signed-sdk-package-artifact }}
           path: package
 
       - name: NuGet login (OIDC)
@@ -1300,6 +1470,7 @@ jobs:
           $ReleaseTitle = '${{ needs.preflight.outputs.release-title }}'
           $Repository = $Env:GITHUB_REPOSITORY
           $SourceCommit = '${{ needs.preflight.outputs.powershell-source-commit }}'
+          $CodeSigned = '${{ needs.sign.outputs.code-signed }}'
 
           $NugetPackages = @(Get-ChildItem -Filter *.nupkg -File | Sort-Object Name)
           if ($NugetPackages.Count -ne 1) {
@@ -1327,7 +1498,8 @@ jobs:
             "| Package version | $PackageVersion |",
             "| PowerShell upstream release | $Env:POWERSHELL_RELEASE_TAG |",
             "| PowerShell downstream source ref | $Env:POWERSHELL_SOURCE_REF |",
-            "| PowerShell source commit | $SourceCommit |"
+            "| PowerShell source commit | $SourceCommit |",
+            "| Code signed | $CodeSigned |"
           )
           Set-Content -Path $NotesPath -Value $ReleaseNotes -Encoding utf8
 
