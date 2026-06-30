@@ -1,0 +1,5 @@
+# Alias File
+# Exported by : alex
+# Date/Time : Thursday, 12 November 2015 21:55:08
+# Computer : archvm
+"pesterecho","echo","","None"

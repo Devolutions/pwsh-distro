@@ -1,0 +1,41 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": ".NET Core Launch",
+            "type": "coreclr",
+            "request": "launch",
+            "justMyCode": false,
+            "stopAtEntry": true,
+            "program": "${workspaceRoot}/debug/pwsh",
+            "preLaunchTask": "Build",
+            "externalConsole": true,
+            "cwd": "${workspaceRoot}"
+        },
+        {
+            "name": ".NET Core Attach",
+            "type": "coreclr",
+            "request": "attach",
+            "justMyCode": false,
+            "processId": "${command:pickProcess}"
+        },
+        {
+            "type": "PowerShell",
+            "request": "launch",
+            "name": "PowerShell Launch Current File",
+            "script": "${file}",
+            "args": [],
+            "cwd": "${file}"
+        },
+        {
+            "type": "PowerShell",
+            "request": "launch",
+            "name": "PowerShell Launch Current File w/Args Prompt",
+            "script": "${file}",
+            "args": [
+                "${command:SpecifyScriptArgs}"
+            ],
+            "cwd": "${file}"
+        }
+    ]
+}

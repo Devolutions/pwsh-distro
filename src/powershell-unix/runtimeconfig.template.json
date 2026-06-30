@@ -1,0 +1,4 @@
+// This is required to roll forward to supported minor.patch versions of the runtime.
+{
+  "rollForwardOnNoCandidateFx": 1
+}

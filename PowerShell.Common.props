@@ -1,0 +1,234 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project=".\Analyzers.props" />
+
+  <!--
+      The 'version' property is populated with the default value in 'Microsoft.NET.DefaultAssemblyInfo.targets'
+      *before* any targets get a chance to execute.
+      We need to *explicitly* re-assign the 'version' property and other version tags in this target.
+
+      In order for the versions assigned here to take effect, we need to execute this target at an early stage:
+        before 'Restore' target - '_GenerateRestoreProjectSpec'
+        before 'Pack' target    - 'GenerateNuspec'
+        before 'Build' target   - 'BeforeBuild'
+  -->
+  <Target Name="GetPSCoreVersionFromGit"
+    BeforeTargets="_GenerateRestoreProjectSpec;GenerateNuspec;BeforeBuild"
+  >
+
+    <Exec Command='git describe --abbrev=60 --long'
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="PowerShellVersion" />
+    </Exec>
+
+    <PropertyGroup Condition = "'$(ReleaseTag)' != ''">
+      <!--
+         DO NOT UPDATE without reviewing with the Microsoft update plan.
+
+         7.2.0-preview.1
+         __a__.__b____.c
+
+        a = Version part and is group 1 of the regex
+        b = the Semantic version prerelease name.  This is optional.
+        c = The semantic version prerelease iteration.  This is optional and only allowed of the prerelease name is present.
+
+        Our version will become the version part with the prerelease iteration being the revision (the 4th part of the version).
+        For RCs, we will increment the iteration from 100.
+
+        Examples
+        7.2.0 becomes 7.2.0
+        7.2.0-preview.1 becomes 7.2.0.1
+        7.2.0-rc.1 becomes 7.2.0.101
+      -->
+
+      <!-- parse the release tag into the parts we need -->
+      <RegexReleaseTag>^((\d+).(\d+).(\d+))(-(\w+)(.(\d+))?)?$</RegexReleaseTag>
+      <ReleaseTagVersionPart>$([System.Text.RegularExpressions.Regex]::Match($(ReleaseTag), $(RegexReleaseTag)).Groups[1].Value)</ReleaseTagVersionPart>
+      <ReleaseTagSemVersionPart>$([System.Text.RegularExpressions.Regex]::Match($(ReleaseTag), $(RegexReleaseTag)).Groups[8].Value)</ReleaseTagSemVersionPart>
+      <ReleaseTagSemVersionPrereleaseNamePart>$([System.Text.RegularExpressions.Regex]::Match($(ReleaseTag), $(RegexReleaseTag)).Groups[6].Value)</ReleaseTagSemVersionPrereleaseNamePart>
+      <!-- Increment revision 100 for rc releases -->
+      <RCIncrementValue>100</RCIncrementValue>
+      <!-- Increment revision 500 for GA releases -->
+      <GAIncrementValue>500</GAIncrementValue>
+      <ReleaseTagSemVersionPart Condition = "'$(ReleaseTagSemVersionPrereleaseNamePart)' == 'rc'">$([MSBuild]::Add($(ReleaseTagSemVersionPart), $(RCIncrementValue)))</ReleaseTagSemVersionPart>
+      <!-- Create the internal version -->
+      <PSCoreBuildVersion>$(ReleaseTag)</PSCoreBuildVersion>
+      <!-- Create the version if we have a pre-release -->
+      <PSCoreFileVersion Condition = "'$(ReleaseTagSemVersionPart)' != ''">$(ReleaseTagVersionPart).$(ReleaseTagSemVersionPart)</PSCoreFileVersion>
+      <!-- Create the version if we have a release build -->
+      <PSCoreFileVersion Condition = "'$(PSCoreFileVersion)' == ''">$(ReleaseTagVersionPart).$(GAIncrementValue)</PSCoreFileVersion>
+      <!-- Set 'FileVersion' and 'AssemblyVersion' explicitly:
+           - make 'FileVersion' the same as 'PSCoreFileVersion'
+           - make 'AssemblyVersion' be the 'PSCoreFileVersion' with the 'Build' field set to 0, so the assembly version doesn't change for servicing releases -->
+      <FileVersion>$(PSCoreFileVersion)</FileVersion>
+      <AssemblyVersion>$([System.Version]::Parse($(PSCoreFileVersion)).Major).$([System.Version]::Parse($(PSCoreFileVersion)).Minor).0.$([System.Version]::Parse($(PSCoreFileVersion)).Revision)</AssemblyVersion>
+    </PropertyGroup>
+
+    <PropertyGroup>
+      <RegexGitVersion>^v(.+)-(\d+)-g(.+)</RegexGitVersion>
+      <PSCoreFileVersion Condition = "'$(PSCoreFileVersion)' == ''">$([System.Text.RegularExpressions.Regex]::Match($(PowerShellVersion), $(RegexGitVersion)).Groups[1].Value)</PSCoreFileVersion>
+      <PSCoreBuildVersion Condition = "'$(PSCoreBuildVersion)' == ''">$([System.Text.RegularExpressions.Regex]::Match($(PowerShellVersion), $(RegexGitVersion)).Groups[1].Value)</PSCoreBuildVersion>
+      <PSCoreAdditionalCommits>$([System.Text.RegularExpressions.Regex]::Match($(PowerShellVersion), $(RegexGitVersion)).Groups[2].Value)</PSCoreAdditionalCommits>
+      <PSCoreCommitSHA>$([System.Text.RegularExpressions.Regex]::Match($(PowerShellVersion), $(RegexGitVersion)).Groups[3].Value)</PSCoreCommitSHA>
+
+      <!--
+            Caution! 'PSVersion' and 'GitCommitId' from 'PSVersionInfo.cs' depend on the format of this version string.
+      -->
+      <PSCoreFormattedVersion Condition = "'$(ReleaseTag)' != '' or '$(PSCoreAdditionalCommits)' == '0'">$(PSCoreBuildVersion) SHA: $(PSCoreCommitSHA)</PSCoreFormattedVersion>
+      <PSCoreFormattedVersion Condition = "'$(PSCoreFormattedVersion)' == ''">$(PSCoreBuildVersion) Commits: $(PSCoreAdditionalCommits) SHA: $(PSCoreCommitSHA)</PSCoreFormattedVersion>
+
+      <!-- Extract the major, minor and patch version numbers, as well as the preview label.
+           They are currently not used anywhere, so we comment them out for now.
+        <RegexSymVer>^((\d+).(\d+).(\d+))(?:-(.+))?</RegexSymVer>
+        <PSCorePrefixVersion>$([System.Text.RegularExpressions.Regex]::Match($(PSCoreBuildVersion), $(RegexSymVer)).Groups[1].Value)</PSCorePrefixVersion>
+        <PSCoreMajorVersion>$([System.Text.RegularExpressions.Regex]::Match($(PSCoreBuildVersion), $(RegexSymVer)).Groups[2].Value)</PSCoreMajorVersion>
+        <PSCoreMinorVersion>$([System.Text.RegularExpressions.Regex]::Match($(PSCoreBuildVersion), $(RegexSymVer)).Groups[3].Value)</PSCoreMinorVersion>
+        <PSCorePatchVersion>$([System.Text.RegularExpressions.Regex]::Match($(PSCoreBuildVersion), $(RegexSymVer)).Groups[4].Value)</PSCorePatchVersion>
+        <PSCoreLabelVersion>$([System.Text.RegularExpressions.Regex]::Match($(PSCoreBuildVersion), $(RegexSymVer)).Groups[5].Value)</PSCoreLabelVersion>
+      -->
+
+      <!--
+            Here we define explicitly 'Version' to set 'FileVersion' and 'AssemblyVersion' when they are not explicitly set.
+            Here we define explicitly 'InformationalVersion' because by default it is defined as 'Version' by 'GetAssemblyVersion' target in 'Microsoft.NET.GenerateAssemblyInfo.targets'.
+      -->
+      <Version>$(PSCoreFileVersion)</Version>
+      <InformationalVersion>$(PSCoreFormattedVersion)</InformationalVersion>
+      <ProductVersion>$(PSCoreFormattedVersion)</ProductVersion>
+
+      <!--
+        We have to explicitly assign 'PackageVersion' here because we're changing 'Version' in a target.
+        Before any targets have run (during static evaluation), 'Version' will have defaulted to '1.0.0' and PackageVersion will have defaulted to 'Version'.
+        See https://github.com/dotnet/sdk/issues/1557
+      -->
+      <PackageVersion>$(PSCoreBuildVersion)</PackageVersion>
+
+      <ApplicationIcon Condition="$(ProductVersion.Contains('preview'))">..\..\assets\Powershell_av_colors.ico</ApplicationIcon>
+      <ApplicationIcon Condition="$(ProductVersion.Contains('daily'))">..\..\assets\Powershell_avatar.ico</ApplicationIcon>
+      <ApplicationIcon Condition="!$(ProductVersion.Contains('preview')) And !$(ProductVersion.Contains('daily'))">..\..\assets\Powershell_black.ico</ApplicationIcon>
+
+    </PropertyGroup>
+
+    <!-- Remove existing generated files by source generators because new source code will soon be generated when the build starts -->
+    <RemoveDir Directories="gen\SourceGenerated" Condition="Exists('gen\SourceGenerated')" />
+
+    <!-- Output For Debugging
+      <WriteLinesToFile File="targetfile1.txt"
+        Lines="ReleaseTag=$(ReleaseTag);
+               PowerShellVersion = $(PowerShellVersion);
+               PSCoreBuildVersion = $(PSCoreBuildVersion);
+               PSCoreFileVersion = $(PSCoreFileVersion);
+               ReleaseTagVersionPart = $(ReleaseTagVersionPart);
+               ReleaseTagSemVersionPart = $(ReleaseTagSemVersionPart);
+               PSCoreAdditionalCommits = $(PSCoreAdditionalCommits);
+               PSCoreCommitSHA = $(PSCoreCommitSHA);
+               PSCoreMajorVersion = $(PSCoreMajorVersion);
+               PSCoreMinorVersion = $(PSCoreMinorVersion);
+               PSCorePatchVersion = $(PSCorePatchVersion);
+               PSCoreLabelVersion = $(PSCoreLabelVersion);
+               RegexGitVersion = $(RegexGitVersion);
+               PSCoreFormattedVersion = $(PSCoreFormattedVersion);
+               ProductVersion = $(ProductVersion);
+               Version = $(Version);
+               ProjectVersion = '!$(ProjectVersion)!'
+               InformationalVersion = $(InformationalVersion);
+              "
+        Overwrite="true" />
+    -->
+
+  </Target>
+
+  <PropertyGroup>
+    <Product>PowerShell</Product>
+    <Company>Microsoft Corporation</Company>
+    <Copyright>(c) Microsoft Corporation.</Copyright>
+    <AssemblyTitle>PowerShell 7</AssemblyTitle>
+
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>13.0</LangVersion>
+
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <SuppressNETCoreSdkPreviewMessage>true</SuppressNETCoreSdkPreviewMessage>
+    <NeutralLanguage>en-US</NeutralLanguage>
+    <DisableImplicitNamespaceImports>true</DisableImplicitNamespaceImports>
+    <DisableImplicitNamespaceImports_DotNet>true</DisableImplicitNamespaceImports_DotNet>
+
+    <DelaySign>true</DelaySign>
+    <AssemblyOriginatorKeyFile>../signing/visualstudiopublic.snk</AssemblyOriginatorKeyFile>
+    <SignAssembly>true</SignAssembly>
+    <HighEntropyVA>true</HighEntropyVA>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <DefineConstants>$(DefineConstants);CORECLR</DefineConstants>
+    <IsWindows Condition="'$(IsWindows)' == 'true' or ('$(IsWindows)' == '' and '$(OS)' == 'Windows_NT')">true</IsWindows>
+  </PropertyGroup>
+
+  <!-- Define non-windows, all configuration properties -->
+  <PropertyGroup Condition=" '$(IsWindows)' != 'true' ">
+    <DefineConstants>$(DefineConstants);UNIX</DefineConstants>
+  </PropertyGroup>
+
+  <!-- Define all OS, debug configuration properties -->
+  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+    <DebugType>portable</DebugType>
+  </PropertyGroup>
+
+  <!-- Define properties for Framework dependent deployments in Packages
+        https://learn.microsoft.com/en-us/dotnet/core/project-sdk/msbuild-props#apphostdotnetsearch
+        For FxDependent, we want to search for the apphost in the Environment or global location,
+        as this was not causing any issues.
+        For FxDependentDeployment, we want to search ONLY in global location.
+        For SelfContained, we want to search in the app local location.
+  -->
+  <PropertyGroup Condition=" '$(AppDeployment)' == 'FxDependent' ">
+    <!-- Specify both to keep existing behavior because we have not had complaints about this scenario -->
+    <AppHostDotNetSearch>EnvironmentVariable;Global</AppHostDotNetSearch>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <PublishReadyToRunEmitSymbols>false</PublishReadyToRunEmitSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(AppDeployment)' == 'FxDependentDeployment' ">
+    <!-- If we specify Environment too, it searches that first, no matter what order we specify-->
+    <AppHostDotNetSearch>Global</AppHostDotNetSearch>
+  </PropertyGroup>
+
+  <!-- Enable ready-to-run only for Release configuration -->
+  <PropertyGroup Condition=" '$(AppDeployment)' == 'FxDependentDeployment' And '$(Configuration)' == 'Release' ">
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <PublishReadyToRunEmitSymbols>true</PublishReadyToRunEmitSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(AppDeployment)' == 'SelfContained' ">
+    <AppHostDotNetSearch>AppLocal</AppHostDotNetSearch>
+  </PropertyGroup>
+
+  <!-- Enable ready-to-run only for Release configuration -->
+  <PropertyGroup Condition=" '$(AppDeployment)' == 'SelfContained' And '$(Configuration)' == 'Release' ">
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <PublishReadyToRunEmitSymbols>true</PublishReadyToRunEmitSymbols>
+  </PropertyGroup>
+
+  <!-- Define all OS, release configuration properties -->
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <Optimize>true</Optimize>
+    <DebugType>portable</DebugType>
+  </PropertyGroup>
+
+  <!-- Define all OS, release configuration properties -->
+  <PropertyGroup Condition=" '$(Configuration)' == 'StaticAnalysis' ">
+    <Optimize>true</Optimize>
+    <!-- This is required to be full for compliance tools !-->
+    <DebugType>full</DebugType>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Features>strict</Features>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+</Project>
