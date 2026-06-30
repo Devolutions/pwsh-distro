@@ -1,0 +1,7 @@
+pwsh-src-worktree/
+dotnet-runtime/
+output/
+package/
+patchsets/
+*.nupkg
+*.tar.gz

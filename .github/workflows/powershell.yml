@@ -1,0 +1,159 @@
+name: PowerShell
+on: workflow_dispatch
+env:
+  POWERSHELL_VERSION: "7.6.3"
+  POWERSHELL_RELEASE_TAG: "v7.6.3"
+  POWERSHELL_UPSTREAM_TAG: "upstream/v7.6.3"
+  POWERSHELL_SOURCE_REPOSITORY: ${{ github.repository }}
+  POWERSHELL_SOURCE_REF: "downstream/v7.6.3"
+jobs:
+  build:
+    name: PowerShell [${{matrix.arch}}-${{matrix.os}}]
+    runs-on: ${{matrix.runner}}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            arch: x64
+            runner: windows-2025
+            runtime-os: win7
+          - os: windows
+            arch: arm64
+            runner: windows-2025
+            runtime-os: win
+          - os: macos
+            arch: x64
+            runner: macos-15-intel
+            runtime-os: osx
+          - os: macos
+            arch: arm64
+            runner: macos-15
+            runtime-os: osx
+          - os: linux
+            arch: x64
+            runner: ubuntu-24.04
+            runtime-os: linux
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            runtime-os: linux
+  
+    steps:
+      - name: Enable Windows long path support
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
+      - name: Clone project with PowerShell submodule
+        uses: actions/checkout@v7.0.0
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Verify PowerShell source ref
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Invoke-GitPowerShell {
+            param(
+              [Parameter(Mandatory, ValueFromRemainingArguments)]
+              [string[]] $Arguments
+            )
+
+            $Output = & git -C pwsh-src @Arguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "git -C pwsh-src $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
+            }
+
+            return $Output
+          }
+
+          function Test-GitCommitRef {
+            param(
+              [Parameter(Mandatory)]
+              [string] $Ref
+            )
+
+            & git -C pwsh-src rev-parse --verify "$Ref^{commit}" *> $null
+            return $LASTEXITCODE -eq 0
+          }
+
+          $ExpectedVersion = $Env:POWERSHELL_RELEASE_TAG -replace '^v', ''
+          if ($Env:POWERSHELL_VERSION -ne $ExpectedVersion) {
+            throw "POWERSHELL_VERSION '$Env:POWERSHELL_VERSION' does not match POWERSHELL_RELEASE_TAG '$Env:POWERSHELL_RELEASE_TAG'."
+          }
+
+          $SourceCommit = (Invoke-GitPowerShell rev-parse HEAD).Trim()
+          Write-Host "PowerShell source: $Env:POWERSHELL_SOURCE_REPOSITORY@$Env:POWERSHELL_SOURCE_REF ($SourceCommit)"
+
+          $BaseRef = if ($Env:POWERSHELL_SOURCE_REPOSITORY -eq $Env:GITHUB_REPOSITORY) {
+            $Env:POWERSHELL_UPSTREAM_TAG
+          } else {
+            $Env:POWERSHELL_RELEASE_TAG
+          }
+
+          if (-not (Test-GitCommitRef $BaseRef)) {
+            throw "Expected PowerShell base tag '$BaseRef' was not found in the PowerShell checkout."
+          }
+
+          & git -C pwsh-src merge-base --is-ancestor "${BaseRef}^{commit}" HEAD
+          if ($LASTEXITCODE -ne 0) {
+            throw "PowerShell source ref '$Env:POWERSHELL_SOURCE_REF' is not based on '$BaseRef'."
+          }
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5.3.0
+        with:
+          global-json-file: pwsh-src/global.json
+
+      - name: Bootstrap PowerShell
+        shell: pwsh
+        run: |
+          Import-Module "./pwsh-src/build.psm1" -Force
+          Start-PSBootstrap -Scenario DotNet
+
+      - name: Build PowerShell
+        shell: pwsh
+        run: |
+          Import-Module "./pwsh-src/build.psm1" -Force
+          if ('${{matrix.os}}' -eq 'windows') {
+            Switch-PSNugetConfig -Source Public
+            $ModuleNugetConfig = @(
+              '<?xml version="1.0" encoding="utf-8"?>',
+              '<configuration>',
+              '  <packageSources>',
+              '    <clear />',
+              '    <add key="powershell" value="https://pkgs.dev.azure.com/powershell/PowerShell/_packaging/PowerShell/nuget/v3/index.json" />',
+              '  </packageSources>',
+              '  <disabledPackageSources>',
+              '    <clear />',
+              '  </disabledPackageSources>',
+              '</configuration>'
+            )
+            Set-Content -Path "./pwsh-src/src/Modules/nuget.config" -Value $ModuleNugetConfig -Encoding utf8
+          }
+          $Runtime = "${{matrix.runtime-os}}-${{matrix.arch}}"
+          $OutputPath = Join-Path $PWD "PowerShell-$Env:POWERSHELL_VERSION-${{matrix.os}}-${{matrix.arch}}"
+          $ArchiveFile = "$OutputPath.tar.gz"
+          $PSBuildParams = @{
+            Configuration = "Release";
+            Runtime = $Runtime;
+            Output = $OutputPath;
+            ForMinimalSize = $false;
+            Detailed = $true;
+            Clean = $true;
+            ReleaseTag = $Env:POWERSHELL_RELEASE_TAG;
+          }
+          if ('${{matrix.os}}' -ne 'windows') {
+            $PSBuildParams.UseNuGetOrg = $true
+          }
+          Start-PSBuild @PSBuildParams
+          & 'tar' '-czf' "$ArchiveFile" '-C' "$OutputPath" "."
+
+      - name: Upload PowerShell package
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: PowerShell-${{env.POWERSHELL_VERSION}}-${{matrix.os}}-${{matrix.arch}}
+          path: PowerShell-${{env.POWERSHELL_VERSION}}-${{matrix.os}}-${{matrix.arch}}.tar.gz
+

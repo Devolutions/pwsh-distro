@@ -1,0 +1,76 @@
+name: Sync PowerShell upstream
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  POWERSHELL_UPSTREAM_REPOSITORY: https://github.com/PowerShell/PowerShell.git
+  POWERSHELL_UPSTREAM_BRANCH: master
+
+jobs:
+  sync:
+    name: Sync upstream branch and tags
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add PowerShell upstream remote
+        run: |
+          git remote add powershell "$POWERSHELL_UPSTREAM_REPOSITORY"
+
+      - name: Fetch PowerShell upstream branches
+        run: |
+          git fetch powershell --prune --no-tags
+
+      - name: Configure authenticated origin
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${SYNC_TOKEN}" ]; then
+            echo "::error::POWERSHELL_UPSTREAM_SYNC_TOKEN or DEVOLUTIONSBOT_WRITE_TOKEN is required to push upstream PowerShell refs because they can contain workflow files."
+            exit 1
+          fi
+
+          git remote set-url origin "https://x-access-token:${SYNC_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+        env:
+          SYNC_TOKEN: ${{ secrets.POWERSHELL_UPSTREAM_SYNC_TOKEN || secrets.DEVOLUTIONSBOT_WRITE_TOKEN }}
+
+      - name: Update upstream branch
+        run: |
+          git push origin "refs/remotes/powershell/${POWERSHELL_UPSTREAM_BRANCH}:refs/heads/upstream" --force
+
+      - name: Push upstream tags under namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin --tags --force
+          git fetch powershell --prune --no-tags "+refs/tags/*:refs/tags/upstream/*"
+
+          tags_to_push=()
+          while IFS= read -r tag_ref; do
+            commit_sha=$(git rev-list -n 1 "$tag_ref")
+            if git diff-tree --no-commit-id --name-only -r "$commit_sha" -- ".github/workflows" | grep -q .; then
+              echo "Skipping tag ${tag_ref#refs/tags/} because the tagged commit changes workflow files."
+              continue
+            fi
+            tags_to_push+=("$tag_ref:$tag_ref")
+          done < <(git for-each-ref --format='%(refname)' refs/tags/upstream)
+
+          if [ ${#tags_to_push[@]} -eq 0 ]; then
+            echo "No upstream tags eligible for push."
+            exit 0
+          fi
+
+          printf '%s\n' "${tags_to_push[@]}" | xargs -n 50 git push origin

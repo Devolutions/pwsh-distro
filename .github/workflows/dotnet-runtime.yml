@@ -1,0 +1,217 @@
+name: .NET runtime
+on: workflow_dispatch
+env:
+  DOTNET_RUNTIME_VERSION: "10.0.5"
+  DOTNET_RUNTIME_REF: "v10.0.5"
+  CLANG_LLVM_VERSION: "22.1.4"
+  CLANG_LLVM_RELEASE: "v2026.1.1"
+  VSDEVSHELL_VERSION: "2026.1.0"
+  VSDEVSHELL_REF: "9b4518e6c45a2abedbf6a05b77c9912aaef70f1e"
+jobs:
+  build:
+    name: .NET runtime [${{matrix.arch}}-${{matrix.os}}]
+    runs-on: ${{matrix.runner}}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            arch: x86_64
+            runtime-arch: x64
+            vs-arch: x64
+            llvm-arch: x86_64
+            runner: windows-2025
+            llvm-platform: windows
+          - os: windows
+            arch: arm64
+            runtime-arch: arm64
+            vs-arch: arm64
+            llvm-arch: x86_64
+            runner: windows-2025
+            llvm-platform: windows
+          - os: macos
+            arch: x86_64
+            runtime-arch: x64
+            llvm-arch: x86_64
+            runner: macos-15-intel
+            llvm-platform: macos
+          - os: macos
+            arch: arm64
+            runtime-arch: arm64
+            llvm-arch: aarch64
+            runner: macos-15
+            llvm-platform: macos
+          - os: linux
+            arch: x86_64
+            runtime-arch: x64
+            llvm-arch: x86_64
+            runner: ubuntu-24.04
+            llvm-platform: ubuntu-24.04
+          - os: linux
+            arch: arm64
+            runtime-arch: arm64
+            llvm-arch: aarch64
+            runner: ubuntu-24.04-arm
+            llvm-platform: ubuntu-24.04
+  
+    steps:
+      - name: Configure Windows runner
+        if: runner.os == 'Windows'
+        run: |
+          choco install ninja 7zip
+          git config --system core.longpaths true
+          echo "BUILD_CMD=./build.cmd" >> $Env:GITHUB_ENV
+
+      - name: Configure macOS runner
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja
+          echo "MACOSX_DEPLOYMENT_TARGET=12.0" >> $GITHUB_ENV
+          echo "CLR_CC=/usr/bin/clang" >> $GITHUB_ENV
+          echo "CLR_CXX=/usr/bin/clang++" >> $GITHUB_ENV
+          echo "BUILD_CMD=./build.sh" >> $GITHUB_ENV
+
+      - name: Configure Linux runner
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git xz-utils ninja-build build-essential
+          sudo apt-get install -y libkrb5-dev liblttng-ust-dev
+          if [ "${{matrix.runtime-arch}}" = "arm64" ]; then
+            sudo tee /usr/local/bin/clang-dotnet >/dev/null <<'EOF'
+          #!/usr/bin/env bash
+          if [ -x /opt/llvm/bin/clang-22 ]; then
+            exec /opt/llvm/bin/clang-22 --target=aarch64-linux-gnu --gcc-toolchain=/usr --sysroot=/ "$@"
+          fi
+          exec /opt/llvm/bin/clang --target=aarch64-linux-gnu --gcc-toolchain=/usr --sysroot=/ "$@"
+          EOF
+            sudo tee /usr/local/bin/clang++-dotnet >/dev/null <<'EOF'
+          #!/usr/bin/env bash
+          if [ -x /opt/llvm/bin/clang++-22 ]; then
+            exec /opt/llvm/bin/clang++-22 --target=aarch64-linux-gnu --gcc-toolchain=/usr --sysroot=/ "$@"
+          fi
+          if [ -x /opt/llvm/bin/clang++ ]; then
+            exec /opt/llvm/bin/clang++ --target=aarch64-linux-gnu --gcc-toolchain=/usr --sysroot=/ "$@"
+          fi
+          exec /opt/llvm/bin/clang-22 --driver-mode=g++ --target=aarch64-linux-gnu --gcc-toolchain=/usr --sysroot=/ "$@"
+          EOF
+            sudo chmod +x /usr/local/bin/clang-dotnet /usr/local/bin/clang++-dotnet
+            echo "CLR_CC=/usr/local/bin/clang-dotnet" >> $GITHUB_ENV
+            echo "CLR_CXX=/usr/local/bin/clang++-dotnet" >> $GITHUB_ENV
+          fi
+          echo "BUILD_CMD=./build.sh" >> $GITHUB_ENV
+
+      - name: Install clang+llvm
+        shell: pwsh
+        run: |
+          $ClangLlvmVersion = $Env:CLANG_LLVM_VERSION
+          $ClangLlvmPlatform = '${{matrix.llvm-platform}}'
+          $ClangLlvmBaseUrl = "https://github.com/awakecoding/llvm-prebuilt/releases/download/$Env:CLANG_LLVM_RELEASE"
+          $ClangLlvmName="clang+llvm-${ClangLlvmVersion}-${{matrix.llvm-arch}}-${ClangLlvmPlatform}"
+          Invoke-WebRequest "${ClangLlvmBaseUrl}/${ClangLlvmName}.tar.xz" -OutFile "${ClangLlvmName}.tar.xz"
+          if ($IsWindows) {
+            $LLVM_PREFIX="C:/llvm"
+            cmd.exe /c "7z.exe x ${ClangLlvmName}.tar.xz -so | 7z x -si -ttar -o`"C:/temp`""
+            mv "C:/temp/${ClangLlvmName}" $LLVM_PREFIX
+          } else {
+            $LLVM_PREFIX="/opt/llvm"
+            tar -xf "${ClangLlvmName}.tar.xz" -C /tmp
+            sudo mv "/tmp/${ClangLlvmName}" $LLVM_PREFIX
+          }
+          $LLVM_BIN_PATH="$LLVM_PREFIX/bin"
+          $LLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm"
+          echo "LLVM_DIR=$LLVM_DIR" >> $Env:GITHUB_ENV
+          if ('${{matrix.os}}' -ne 'macos') {
+            echo "PATH=$LLVM_BIN_PATH$([IO.Path]::PathSeparator)$Env:PATH" >> $Env:GITHUB_ENV
+          }
+
+      - name: Clone .NET runtime ${{env.DOTNET_RUNTIME_VERSION}}
+        uses: actions/checkout@v7.0.0
+        with:
+          repository: dotnet/runtime
+          ref: ${{env.DOTNET_RUNTIME_REF}}
+          path: dotnet-runtime
+
+      - name: Clone VsDevShell ${{env.VSDEVSHELL_VERSION}}
+        if: runner.os == 'Windows'
+        uses: actions/checkout@v7.0.0
+        with:
+          repository: awakecoding/VsDevShell
+          ref: ${{env.VSDEVSHELL_REF}}
+          path: VsDevShell
+
+      - name: Enable Windows environment
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Import-Module "./VsDevShell/VsDevShell/VsDevShell.psd1" -Force
+          $BaselinePath = $Env:PATH
+          $VsDevEnv = Get-VsDevEnv -Arch '${{matrix.vs-arch}}' -HostArch x64
+
+          function Add-GitHubEnvValue {
+            param(
+              [Parameter(Mandatory)]
+              [string] $Name,
+              [AllowNull()]
+              [string] $Value
+            )
+
+            if ($null -eq $Value) {
+              $Value = ''
+            }
+
+            if ($Value -match "[`r`n]") {
+              $Delimiter = "VSDEVENV_$([Guid]::NewGuid().ToString('N'))"
+              @(
+                "$Name<<$Delimiter",
+                $Value,
+                $Delimiter
+              ) -join [Environment]::NewLine >> $Env:GITHUB_ENV
+            } else {
+              "$Name=$Value" >> $Env:GITHUB_ENV
+            }
+          }
+
+          foreach ($Entry in $VsDevEnv.GetEnumerator()) {
+            $Name = [string] $Entry.Key
+            $Value = if ($null -eq $Entry.Value) { $null } else { [string] $Entry.Value }
+
+            if ($Name.Equals('PATH', [StringComparison]::OrdinalIgnoreCase) -and
+                -not [string]::IsNullOrEmpty($Value) -and
+                -not [string]::IsNullOrEmpty($Env:GITHUB_PATH)) {
+              if (-not [string]::IsNullOrEmpty($BaselinePath) -and
+                  $Value.EndsWith($BaselinePath, [StringComparison]::OrdinalIgnoreCase)) {
+                $Prefix = $Value.Substring(0, $Value.Length - $BaselinePath.Length).TrimEnd(';')
+                $Prefix -split ';' |
+                  Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                  ForEach-Object { $_ >> $Env:GITHUB_PATH }
+                continue
+              }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($Name) -or $Name.Contains('=')) {
+              continue
+            }
+
+            Add-GitHubEnvValue -Name $Name -Value $Value
+          }
+
+      - name: Restore nuget packages
+        working-directory: dotnet-runtime
+        shell: pwsh
+        run: |
+          if ($IsWindows) {
+            & $Env:BUILD_CMD -arch '${{matrix.runtime-arch}}' -restore
+          } else {
+            & $Env:BUILD_CMD -arch '${{matrix.runtime-arch}}' -restore
+          }
+
+      - name: Build .NET runtime
+        working-directory: dotnet-runtime
+        shell: pwsh
+        run: |
+          if ($IsWindows) {
+            & $Env:BUILD_CMD -arch '${{matrix.runtime-arch}}' -c Release -ninja
+          } else {
+            & $Env:BUILD_CMD -arch '${{matrix.runtime-arch}}' -c Release -ninja
+          }

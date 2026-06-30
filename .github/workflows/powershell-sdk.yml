@@ -1,0 +1,1033 @@
+name: PowerShell SDK
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_package_revision:
+        description: Downstream SDK package revision for the current upstream PowerShell version
+        default: "0"
+        required: true
+env:
+  POWERSHELL_VERSION: "7.6.3"
+  POWERSHELL_RELEASE_TAG: "v7.6.3"
+  POWERSHELL_UPSTREAM_TAG: "upstream/v7.6.3"
+  POWERSHELL_SOURCE_REPOSITORY: ${{ github.repository }}
+  POWERSHELL_SOURCE_REF: "downstream/v7.6.3"
+  SDK_VENDOR_NAME: "Devolutions"
+  SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
+  SDK_PACKAGE_REVISION: "0"
+  MULTI_PWSH_APPHOST_PACKAGE_ID: "Devolutions.MultiPwsh.Cli"
+  MULTI_PWSH_APPHOST_PACKAGE_VERSION: "0.14.0"
+  MULTI_PWSH_APPHOST_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
+jobs:
+  apphost:
+    name: PowerShell SDK apphost [${{matrix.rid}}]
+    runs-on: ${{matrix.runner}}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-2025
+            psbuild-runtime: fxdependent-win-desktop
+            executable: pwsh.exe
+          - rid: linux-x64
+            runner: ubuntu-24.04
+            psbuild-runtime: fxdependent-linux-x64
+            executable: pwsh
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+            psbuild-runtime: fxdependent-linux-arm64
+            executable: pwsh
+          - rid: osx-x64
+            runner: macos-15-intel
+            psbuild-runtime: fxdependent
+            executable: pwsh
+          - rid: osx-arm64
+            runner: macos-15
+            psbuild-runtime: fxdependent
+            executable: pwsh
+
+    steps:
+      - name: Enable Windows long path support
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
+      - name: Clone project with PowerShell submodule
+        uses: actions/checkout@v7.0.0
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Verify PowerShell source ref
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Invoke-GitPowerShell {
+            param(
+              [Parameter(Mandatory, ValueFromRemainingArguments)]
+              [string[]] $Arguments
+            )
+
+            $Output = & git -C pwsh-src @Arguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "git -C pwsh-src $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
+            }
+
+            return $Output
+          }
+
+          function Test-GitCommitRef {
+            param(
+              [Parameter(Mandatory)]
+              [string] $Ref
+            )
+
+            & git -C pwsh-src rev-parse --verify "$Ref^{commit}" *> $null
+            return $LASTEXITCODE -eq 0
+          }
+
+          $ExpectedVersion = $Env:POWERSHELL_RELEASE_TAG -replace '^v', ''
+          if ($Env:POWERSHELL_VERSION -ne $ExpectedVersion) {
+            throw "POWERSHELL_VERSION '$Env:POWERSHELL_VERSION' does not match POWERSHELL_RELEASE_TAG '$Env:POWERSHELL_RELEASE_TAG'."
+          }
+          $SdkPackageRevision = '${{ inputs.sdk_package_revision }}'
+          if ($SdkPackageRevision -notmatch '^\d+$') {
+            throw "SDK package revision '$SdkPackageRevision' must be numeric."
+          }
+          Write-Host "SDK package version: $Env:POWERSHELL_VERSION.$SdkPackageRevision"
+
+          $SourceCommit = (Invoke-GitPowerShell rev-parse HEAD).Trim()
+          Write-Host "PowerShell source: $Env:POWERSHELL_SOURCE_REPOSITORY@$Env:POWERSHELL_SOURCE_REF ($SourceCommit)"
+
+          $BaseRef = if ($Env:POWERSHELL_SOURCE_REPOSITORY -eq $Env:GITHUB_REPOSITORY) {
+            $Env:POWERSHELL_UPSTREAM_TAG
+          } else {
+            $Env:POWERSHELL_RELEASE_TAG
+          }
+
+          if (-not (Test-GitCommitRef $BaseRef)) {
+            throw "Expected PowerShell base tag '$BaseRef' was not found in the PowerShell checkout."
+          }
+
+          & git -C pwsh-src merge-base --is-ancestor "${BaseRef}^{commit}" HEAD
+          if ($LASTEXITCODE -ne 0) {
+            throw "PowerShell source ref '$Env:POWERSHELL_SOURCE_REF' is not based on '$BaseRef'."
+          }
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5.3.0
+        with:
+          global-json-file: pwsh-src/global.json
+
+      - name: Build PowerShell apphost
+        shell: pwsh
+        working-directory: pwsh-src
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module .\build.psm1 -Force
+          Start-PSBootstrap -Scenario DotNet
+
+          if ($IsWindows) {
+            Switch-PSNugetConfig -Source Public
+            $ModuleNugetConfig = @(
+              '<?xml version="1.0" encoding="utf-8"?>',
+              '<configuration>',
+              '  <packageSources>',
+              '    <clear />',
+              '    <add key="powershell" value="https://pkgs.dev.azure.com/powershell/PowerShell/_packaging/PowerShell/nuget/v3/index.json" />',
+              '  </packageSources>',
+              '  <disabledPackageSources>',
+              '    <clear />',
+              '  </disabledPackageSources>',
+              '</configuration>'
+            )
+            Set-Content -Path "./src/Modules/nuget.config" -Value $ModuleNugetConfig -Encoding utf8
+          }
+
+          [xml]$CommonProps = Get-Content ./PowerShell.Common.props
+          $TargetFramework = $CommonProps.Project.PropertyGroup |
+            ForEach-Object { $_.TargetFramework } |
+            Where-Object { $_ } |
+            Select-Object -First 1
+          if (-not $TargetFramework) {
+            throw "Unable to determine PowerShell TargetFramework from PowerShell.Common.props"
+          }
+
+          $RequiredAppHostExecutables = [ordered]@{
+            'win-x64' = 'pwsh.exe';
+            'linux-x64' = 'pwsh';
+            'linux-arm64' = 'pwsh';
+            'osx-x64' = 'pwsh';
+            'osx-arm64' = 'pwsh';
+          }
+
+          function ConvertTo-XmlAttributeValue {
+            param(
+              [AllowNull()]
+              [string] $Value
+            )
+
+            if ($null -eq $Value) {
+              return ''
+            }
+
+            return [System.Security.SecurityElement]::Escape($Value)
+          }
+
+          function Resolve-MultiPwshAppHostAssets {
+            param(
+              [Parameter(Mandatory)]
+              [string] $TargetFramework
+            )
+
+            foreach ($VariableName in @(
+                'MULTI_PWSH_APPHOST_PACKAGE_ID',
+                'MULTI_PWSH_APPHOST_PACKAGE_VERSION',
+                'MULTI_PWSH_APPHOST_PACKAGE_SOURCE')) {
+              if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($VariableName))) {
+                throw "Required environment variable '$VariableName' is not set"
+              }
+            }
+
+            $TempRoot = if ($Env:RUNNER_TEMP) { $Env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+            $ResolveRoot = Join-Path $TempRoot "multi-pwsh-apphost-resolve"
+            $ProjectPath = Join-Path $ResolveRoot "MultiPwshAppHostResolver.csproj"
+            $NuGetConfigPath = Join-Path $ResolveRoot "nuget.config"
+            $AssetListPath = Join-Path $ResolveRoot "multi-pwsh-apphost-assets.tsv"
+            $InfoPath = Join-Path $ResolveRoot "multi-pwsh-apphost-info.txt"
+
+            Remove-Item $ResolveRoot -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item $ResolveRoot -ItemType Directory -Force | Out-Null
+
+            $PackageSourceXml = ConvertTo-XmlAttributeValue $Env:MULTI_PWSH_APPHOST_PACKAGE_SOURCE
+            $NuGetConfigLines = @(
+              '<?xml version="1.0" encoding="utf-8"?>',
+              '<configuration>',
+              '  <packageSources>',
+              '    <clear />',
+              "    <add key=`"multiPwsh`" value=`"$PackageSourceXml`" />",
+              '  </packageSources>'
+            )
+            $NuGetConfigLines += '</configuration>'
+            Set-Content -Path $NuGetConfigPath -Value $NuGetConfigLines -Encoding utf8
+
+            $PackageIdXml = ConvertTo-XmlAttributeValue $Env:MULTI_PWSH_APPHOST_PACKAGE_ID
+            $PackageVersionXml = ConvertTo-XmlAttributeValue $Env:MULTI_PWSH_APPHOST_PACKAGE_VERSION
+            $TargetFrameworkXml = ConvertTo-XmlAttributeValue $TargetFramework
+            $ResolverProject = @"
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <TargetFramework>$TargetFrameworkXml</TargetFramework>
+              <MultiPwshRuntimeNativeContentCopyEnabled>false</MultiPwshRuntimeNativeContentCopyEnabled>
+            </PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="$PackageIdXml" Version="$PackageVersionXml" PrivateAssets="all" GeneratePathProperty="true" />
+            </ItemGroup>
+            <Target Name="WriteMultiPwshAppHostAssets" DependsOnTargets="ResolveMultiPwshAppHostAssets">
+              <WriteLinesToFile File="`$(MultiPwshAppHostAssetOutputPath)"
+                                Lines="@(MultiPwshAppHostAsset->'%(RuntimeIdentifier)|%(NativeFileName)|%(AppHostFileName)|%(PackageRelativePath)|%(PackageId)|%(FullPath)')"
+                                Overwrite="true" />
+              <WriteLinesToFile File="`$(MultiPwshAppHostInfoPath)"
+                                Lines="PackageRoot=`$(PkgDevolutions_MultiPwsh_Cli)|ManifestPath=`$(MultiPwshAppHostManifestPath)"
+                                Overwrite="true" />
+            </Target>
+          </Project>
+          "@
+            Set-Content -Path $ProjectPath -Value $ResolverProject -Encoding utf8
+
+            & dotnet restore $ProjectPath --configfile $NuGetConfigPath --verbosity minimal
+            if ($LASTEXITCODE -ne 0) {
+              throw "Restoring $Env:MULTI_PWSH_APPHOST_PACKAGE_ID $Env:MULTI_PWSH_APPHOST_PACKAGE_VERSION failed with exit code $LASTEXITCODE"
+            }
+
+            $MSBuildArguments = @(
+              'msbuild',
+              $ProjectPath,
+              '-nologo',
+              '-v:minimal',
+              '-t:WriteMultiPwshAppHostAssets',
+              "/p:MultiPwshAppHostAssetOutputPath=$AssetListPath",
+              "/p:MultiPwshAppHostInfoPath=$InfoPath"
+            )
+            & dotnet @MSBuildArguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "Resolving $Env:MULTI_PWSH_APPHOST_PACKAGE_ID apphost assets failed with exit code $LASTEXITCODE"
+            }
+            if (-not (Test-Path $AssetListPath -PathType Leaf)) {
+              throw "ResolveMultiPwshAppHostAssets did not write an apphost asset list at $AssetListPath"
+            }
+
+            $PackageInfo = @{}
+            if (Test-Path $InfoPath -PathType Leaf) {
+              foreach ($InfoField in ((Get-Content -LiteralPath $InfoPath -Raw) -split '\|')) {
+                $Pair = $InfoField -split '=', 2
+                if ($Pair.Count -eq 2) {
+                  $PackageInfo[$Pair[0]] = $Pair[1].Trim()
+                }
+              }
+            }
+
+            $ResolvedAssets = @{}
+            foreach ($Line in Get-Content -LiteralPath $AssetListPath) {
+              if ([string]::IsNullOrWhiteSpace($Line)) {
+                continue
+              }
+
+              $Fields = $Line -split '\|', 6
+              if ($Fields.Count -ne 6) {
+                throw "Unexpected multi-pwsh apphost asset record: $Line"
+              }
+
+              $RuntimeIdentifier = $Fields[0]
+              $NativeFileName = $Fields[1]
+              $AppHostFileName = $Fields[2]
+              $PackageRelativePath = $Fields[3]
+              $PackageId = $Fields[4]
+              $SourcePath = $Fields[5]
+
+              if ($PackageId -ne $Env:MULTI_PWSH_APPHOST_PACKAGE_ID) {
+                throw "Resolved apphost asset for package '$PackageId', expected '$Env:MULTI_PWSH_APPHOST_PACKAGE_ID'"
+              }
+              if ($ResolvedAssets.ContainsKey($RuntimeIdentifier)) {
+                throw "ResolveMultiPwshAppHostAssets returned multiple assets for runtime identifier '$RuntimeIdentifier'"
+              }
+              if ([string]::IsNullOrWhiteSpace($SourcePath) -or -not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
+                $PackageRoot = $PackageInfo['PackageRoot']
+                if (-not [string]::IsNullOrWhiteSpace($PackageRoot) -and
+                    -not [string]::IsNullOrWhiteSpace($PackageRelativePath)) {
+                  $SourcePath = Join-Path $PackageRoot ($PackageRelativePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+                }
+              }
+              if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
+                throw "Resolved apphost asset for '$RuntimeIdentifier' does not exist at '$SourcePath'"
+              }
+
+              $ResolvedAssets[$RuntimeIdentifier] = [pscustomobject]@{
+                RuntimeIdentifier = $RuntimeIdentifier;
+                NativeFileName = $NativeFileName;
+                AppHostFileName = $AppHostFileName;
+                PackageRelativePath = $PackageRelativePath;
+                PackageId = $PackageId;
+                SourcePath = $SourcePath;
+              }
+            }
+
+            foreach ($RequiredRid in $RequiredAppHostExecutables.Keys) {
+              if (-not $ResolvedAssets.ContainsKey($RequiredRid)) {
+                throw "The $Env:MULTI_PWSH_APPHOST_PACKAGE_ID package did not expose an apphost asset for required RID '$RequiredRid'"
+              }
+
+              $ExpectedAppHostFileName = $RequiredAppHostExecutables[$RequiredRid]
+              if ($ResolvedAssets[$RequiredRid].AppHostFileName -ne $ExpectedAppHostFileName) {
+                throw "The apphost asset for '$RequiredRid' maps to '$($ResolvedAssets[$RequiredRid].AppHostFileName)', expected '$ExpectedAppHostFileName'"
+              }
+            }
+
+            Write-Host "Resolved $Env:MULTI_PWSH_APPHOST_PACKAGE_ID apphost assets for: $($ResolvedAssets.Keys -join ', ')"
+            return ,$ResolvedAssets
+          }
+
+          function Get-DotNetSdkBasePath {
+            $DotNetInfo = & dotnet --info
+            if ($LASTEXITCODE -ne 0) {
+              throw "dotnet --info failed with exit code $LASTEXITCODE"
+            }
+
+            $BasePathLine = $DotNetInfo | Where-Object { $_ -match '^\s*Base Path:\s*(.+)$' } | Select-Object -First 1
+            if (-not $BasePathLine -or $BasePathLine -notmatch '^\s*Base Path:\s*(.+)$') {
+              throw 'Unable to determine .NET SDK base path from dotnet --info.'
+            }
+
+            return $Matches[1].Trim()
+          }
+
+          function Get-DotNetAppHostTemplate {
+            param(
+              [Parameter(Mandatory)]
+              [string] $Rid
+            )
+
+            $SdkBasePath = Get-DotNetSdkBasePath
+            $DotNetRoot = Split-Path (Split-Path $SdkBasePath -Parent) -Parent
+            $HostPackRoot = Join-Path $DotNetRoot "packs/Microsoft.NETCore.App.Host.$Rid"
+            if (-not (Test-Path $HostPackRoot -PathType Container)) {
+              throw "The .NET SDK host pack for '$Rid' was not found at $HostPackRoot"
+            }
+
+            $TemplateName = if ($Rid -like 'win-*') { 'apphost.exe' } else { 'apphost' }
+            $Template = Get-ChildItem -LiteralPath $HostPackRoot -Recurse -Filter $TemplateName |
+              Sort-Object FullName |
+              Select-Object -Last 1
+            if (-not $Template) {
+              throw "The .NET SDK host pack for '$Rid' does not contain $TemplateName"
+            }
+
+            return $Template.FullName
+          }
+
+          function New-SharedPayloadAppHost {
+            param(
+              [Parameter(Mandatory)]
+              [string] $Rid,
+
+              [Parameter(Mandatory)]
+              [string] $DestinationPath,
+
+              [Parameter(Mandatory)]
+              [string] $ResourceAssemblyPath
+            )
+
+            $SdkBasePath = Get-DotNetSdkBasePath
+            $HostModelPath = Join-Path $SdkBasePath 'Microsoft.NET.HostModel.dll'
+            if (-not (Test-Path $HostModelPath -PathType Leaf)) {
+              throw "Microsoft.NET.HostModel.dll was not found in the .NET SDK: $HostModelPath"
+            }
+
+            if (-not ([System.Management.Automation.PSTypeName]'Microsoft.NET.HostModel.AppHost.HostWriter').Type) {
+              Add-Type -Path $HostModelPath
+            }
+            $TemplatePath = Get-DotNetAppHostTemplate -Rid $Rid
+            New-Item (Split-Path $DestinationPath -Parent) -ItemType Directory -Force | Out-Null
+            [Microsoft.NET.HostModel.AppHost.HostWriter]::CreateAppHost(
+              $TemplatePath,
+              $DestinationPath,
+              '../../../pwsh.dll',
+              $false,
+              $ResourceAssemblyPath,
+              $false,
+              $false,
+              $null)
+          }
+
+          $Rid = "${{matrix.rid}}"
+          $OutputPath = Join-Path $PWD "PowerShell-AppHost-$Rid"
+          $PSBuildParams = @{
+            Configuration = "Release";
+            Runtime = "${{matrix.psbuild-runtime}}";
+            Output = $OutputPath;
+            Clean = $true;
+            ReleaseTag = $Env:POWERSHELL_RELEASE_TAG;
+            NoPSModuleRestore = $true;
+            SkipExperimentalFeatureGeneration = $true;
+          }
+          if (-not $IsWindows) {
+            $PSBuildParams.UseNuGetOrg = $true
+          }
+
+          $MultiPwshAppHostAssets = Resolve-MultiPwshAppHostAssets -TargetFramework $TargetFramework
+          Start-PSBuild @PSBuildParams
+
+          $PackageRuntimeGroup = switch ($Rid) {
+            'win-x64' { 'win'; break }
+            'linux-x64' { 'unix'; break }
+            default { $null }
+          }
+          if ($PackageRuntimeGroup) {
+            dotnet build ./src/Microsoft.PowerShell.SDK/Microsoft.PowerShell.SDK.csproj -c Release /p:ReleaseTag=$Env:POWERSHELL_VERSION
+            if ($LASTEXITCODE -ne 0) {
+              throw "Building Microsoft.PowerShell.SDK failed with exit code $LASTEXITCODE"
+            }
+
+            $SdkBinPath = "./src/Microsoft.PowerShell.SDK/bin/Release/$TargetFramework"
+            $PackageRuntimePath = Join-Path (Join-Path $PWD "package-runtime") $Rid
+            New-Item $PackageRuntimePath -ItemType Directory -Force | Out-Null
+            $PackageRuntimeAssemblies = if ($PackageRuntimeGroup -eq 'win') {
+              @(
+                'Microsoft.PowerShell.SDK',
+                'System.Management.Automation',
+                'Microsoft.PowerShell.Commands.Management',
+                'Microsoft.PowerShell.Commands.Utility',
+                'Microsoft.PowerShell.ConsoleHost',
+                'Microsoft.PowerShell.Security',
+                'Microsoft.PowerShell.Commands.Diagnostics',
+                'Microsoft.Management.Infrastructure.CimCmdlets',
+                'Microsoft.WSMan.Management',
+                'Microsoft.PowerShell.CoreCLR.Eventing',
+                'Microsoft.WSMan.Runtime'
+              )
+            } else {
+              @(
+                'Microsoft.PowerShell.SDK',
+                'System.Management.Automation',
+                'Microsoft.PowerShell.Commands.Management',
+                'Microsoft.PowerShell.Commands.Utility',
+                'Microsoft.PowerShell.ConsoleHost',
+                'Microsoft.PowerShell.Security'
+              )
+            }
+
+            foreach ($AssemblyName in $PackageRuntimeAssemblies) {
+              $SourceDirectory = if ($AssemblyName -eq 'Microsoft.PowerShell.SDK') { $SdkBinPath } else { $OutputPath }
+              $AssemblyPath = Join-Path $SourceDirectory "$AssemblyName.dll"
+              if (-not (Test-Path $AssemblyPath -PathType Leaf)) {
+                throw "PowerShell build did not produce package runtime assembly: $AssemblyPath"
+              }
+              Copy-Item $AssemblyPath $PackageRuntimePath -Force
+
+              $XmlPath = Join-Path $SourceDirectory "$AssemblyName.xml"
+              if (Test-Path $XmlPath -PathType Leaf) {
+                Copy-Item $XmlPath $PackageRuntimePath -Force
+              }
+            }
+          }
+
+          $StagePath = Join-Path (Join-Path $PWD "apphost-package") $Rid
+          New-Item $StagePath -ItemType Directory -Force | Out-Null
+          $AppHostAsset = $MultiPwshAppHostAssets[$Rid]
+          if (-not $AppHostAsset) {
+            throw "No resolved multi-pwsh apphost asset is available for '$Rid'"
+          }
+
+          $ExecutableDestinationPath = Join-Path $StagePath $AppHostAsset.AppHostFileName
+          Copy-Item -LiteralPath $AppHostAsset.SourcePath -Destination $ExecutableDestinationPath -Force
+          if (-not (Test-Path $ExecutableDestinationPath -PathType Leaf)) {
+            throw "Failed to stage multi-pwsh apphost executable for '$Rid' at $ExecutableDestinationPath"
+          }
+
+          foreach ($FileName in @("pwsh.dll", "pwsh.runtimeconfig.json")) {
+            $SourcePath = Join-Path $OutputPath $FileName
+            if (-not (Test-Path $SourcePath -PathType Leaf)) {
+              throw "PowerShell apphost build did not produce required file: $SourcePath"
+            }
+            Copy-Item $SourcePath $StagePath -Force
+          }
+
+          $RuntimeNativeStagePath = Join-Path $StagePath "runtime-native"
+          $RuntimeNativeAppHostPath = Join-Path $RuntimeNativeStagePath $AppHostAsset.AppHostFileName
+          New-SharedPayloadAppHost -Rid $Rid -DestinationPath $RuntimeNativeAppHostPath -ResourceAssemblyPath (Join-Path $OutputPath 'pwsh.dll')
+
+      - name: Validate staged PowerShell apphost
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $StagePath = "pwsh-src/apphost-package/${{matrix.rid}}"
+          foreach ($FileName in @("${{matrix.executable}}", "pwsh.dll", "pwsh.runtimeconfig.json")) {
+            $FilePath = Join-Path $StagePath $FileName
+            if (-not (Test-Path $FilePath -PathType Leaf)) {
+              throw "Missing staged PowerShell SDK apphost file for ${{matrix.rid}}: $FilePath"
+            }
+          }
+          $RuntimeNativeFilePath = Join-Path $StagePath "runtime-native/${{matrix.executable}}"
+          if (-not (Test-Path $RuntimeNativeFilePath -PathType Leaf)) {
+            throw "Missing staged shared-payload runtime-native apphost file for ${{matrix.rid}}: $RuntimeNativeFilePath"
+          }
+
+      - name: Upload PowerShell apphost
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: PowerShell-SDK-AppHost-${{matrix.rid}}
+          path: pwsh-src/apphost-package/${{matrix.rid}}/**
+
+      - name: Upload package runtime libraries
+        if: ${{ matrix.rid == 'win-x64' || matrix.rid == 'linux-x64' }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: PowerShell-SDK-PackageRuntime-${{matrix.rid}}
+          path: pwsh-src/package-runtime/${{matrix.rid}}/*
+
+  build:
+    name: PowerShell SDK [7.6.3]
+    runs-on: ubuntu-24.04
+    needs: apphost
+  
+    steps:
+      - name: Enable Windows long path support
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
+      - name: Clone project with PowerShell submodule
+        uses: actions/checkout@v7.0.0
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Verify PowerShell source ref
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Invoke-GitPowerShell {
+            param(
+              [Parameter(Mandatory, ValueFromRemainingArguments)]
+              [string[]] $Arguments
+            )
+
+            $Output = & git -C pwsh-src @Arguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "git -C pwsh-src $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
+            }
+
+            return $Output
+          }
+
+          function Test-GitCommitRef {
+            param(
+              [Parameter(Mandatory)]
+              [string] $Ref
+            )
+
+            & git -C pwsh-src rev-parse --verify "$Ref^{commit}" *> $null
+            return $LASTEXITCODE -eq 0
+          }
+
+          $ExpectedVersion = $Env:POWERSHELL_RELEASE_TAG -replace '^v', ''
+          if ($Env:POWERSHELL_VERSION -ne $ExpectedVersion) {
+            throw "POWERSHELL_VERSION '$Env:POWERSHELL_VERSION' does not match POWERSHELL_RELEASE_TAG '$Env:POWERSHELL_RELEASE_TAG'."
+          }
+
+          $SourceCommit = (Invoke-GitPowerShell rev-parse HEAD).Trim()
+          Write-Host "PowerShell source: $Env:POWERSHELL_SOURCE_REPOSITORY@$Env:POWERSHELL_SOURCE_REF ($SourceCommit)"
+
+          $BaseRef = if ($Env:POWERSHELL_SOURCE_REPOSITORY -eq $Env:GITHUB_REPOSITORY) {
+            $Env:POWERSHELL_UPSTREAM_TAG
+          } else {
+            $Env:POWERSHELL_RELEASE_TAG
+          }
+
+          if (-not (Test-GitCommitRef $BaseRef)) {
+            throw "Expected PowerShell base tag '$BaseRef' was not found in the PowerShell checkout."
+          }
+
+          & git -C pwsh-src merge-base --is-ancestor "${BaseRef}^{commit}" HEAD
+          if ($LASTEXITCODE -ne 0) {
+            throw "PowerShell source ref '$Env:POWERSHELL_SOURCE_REF' is not based on '$BaseRef'."
+          }
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5.3.0
+        with:
+          global-json-file: pwsh-src/global.json
+
+      - name: Download PowerShell apphosts
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: PowerShell-SDK-AppHost-*
+          path: apphost-download
+          merge-multiple: false
+
+      - name: Download package runtime libraries
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: PowerShell-SDK-PackageRuntime-*
+          path: package-runtime-download
+          merge-multiple: false
+
+      - name: Install Mono
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mono-devel
+
+      - name: Setup NuGet CLI
+        uses: NuGet/setup-nuget@v4.0
+
+      - name: Build PowerShell SDK
+        shell: pwsh
+        working-directory: pwsh-src
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module .\build.psm1 -Force
+          Start-PSBootstrap -Scenario DotNet
+          Start-PSBuild -Clean -PSModuleRestore -Configuration Release -ReleaseTag $Env:POWERSHELL_RELEASE_TAG -UseNuGetOrg
+
+          [xml]$CommonProps = Get-Content ./PowerShell.Common.props
+          $TargetFramework = $CommonProps.Project.PropertyGroup |
+            ForEach-Object { $_.TargetFramework } |
+            Where-Object { $_ } |
+            Select-Object -First 1
+          if (-not $TargetFramework) {
+            throw "Unable to determine PowerShell TargetFramework from PowerShell.Common.props"
+          }
+          "POWERSHELL_TARGET_FRAMEWORK=$TargetFramework" >> $Env:GITHUB_ENV
+
+          $SdkBinPath = "./src/Microsoft.PowerShell.SDK/bin/Release/$TargetFramework"
+          dotnet build ./src/Microsoft.PowerShell.SDK/Microsoft.PowerShell.SDK.csproj -c Release /p:ReleaseTag=$Env:POWERSHELL_VERSION
+          if ($LASTEXITCODE -ne 0) {
+            throw "Building Microsoft.PowerShell.SDK failed with exit code $LASTEXITCODE"
+          }
+
+          function Add-OverlayFile {
+            param(
+              [Parameter(Mandatory)]
+              [hashtable] $OverlayPathMap,
+
+              [Parameter(Mandatory)]
+              [string] $PackageRelativePath,
+
+              [Parameter(Mandatory)]
+              [string] $SourcePath,
+
+              [bool] $Required = $true
+            )
+
+            if (Test-Path $SourcePath -PathType Leaf) {
+              $OverlayPathMap[$PackageRelativePath] = $SourcePath
+              return
+            }
+
+            if ($Required) {
+              throw "Missing source-built package file for $PackageRelativePath`: $SourcePath"
+            }
+          }
+
+          function Get-NuGetGlobalPackagesPath {
+            $Output = & dotnet nuget locals global-packages --list
+            if ($LASTEXITCODE -ne 0) {
+              throw "dotnet nuget locals global-packages --list failed with exit code $LASTEXITCODE"
+            }
+
+            $GlobalPackagesLine = $Output | Where-Object { $_ -match '^\s*global-packages:\s*(.+)$' } | Select-Object -First 1
+            if (-not $GlobalPackagesLine -or $GlobalPackagesLine -notmatch '^\s*global-packages:\s*(.+)$') {
+              throw "Unable to determine NuGet global packages path."
+            }
+
+            return $Matches[1].Trim()
+          }
+
+          function Get-NuGetCacheVersion {
+            param(
+              [Parameter(Mandatory)]
+              [string] $Version
+            )
+
+            if ($Version -match '^(\d+\.\d+\.\d+)\.0$') {
+              return $Matches[1]
+            }
+            if ($Version -match '^\d+\.\d+$') {
+              return "$Version.0"
+            }
+
+            return $Version
+          }
+
+          function Copy-PSGalleryModulesToPackage {
+            param(
+              [Parameter(Mandatory)]
+              [string] $ProjectPath,
+
+              [Parameter(Mandatory)]
+              [string] $DestinationRoot
+            )
+
+            if (-not (Test-Path -LiteralPath $ProjectPath -PathType Leaf)) {
+              throw "PSGallery module project was not found: $ProjectPath"
+            }
+
+            $ProjectDirectory = Split-Path -Parent $ProjectPath
+            $NuGetConfigPath = Join-Path $ProjectDirectory "nuget.config"
+            $RestoreArguments = @("restore", $ProjectPath, "--verbosity", "minimal")
+            if (Test-Path -LiteralPath $NuGetConfigPath -PathType Leaf) {
+              $RestoreArguments += @("--configfile", $NuGetConfigPath)
+            }
+
+            & dotnet @RestoreArguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "dotnet $($RestoreArguments -join ' ') failed with exit code $LASTEXITCODE"
+            }
+
+            [xml] $PSGalleryProject = Get-Content -LiteralPath $ProjectPath -Raw
+            $PackageReferences = @($PSGalleryProject.Project.ItemGroup.PackageReference)
+            if (-not $PackageReferences) {
+              throw "PSGallery module project contains no PackageReference items: $ProjectPath"
+            }
+
+            $NuGetGlobalPackagesPath = Get-NuGetGlobalPackagesPath
+            Remove-Item -LiteralPath $DestinationRoot -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -Path $DestinationRoot -ItemType Directory -Force | Out-Null
+
+            foreach ($PackageReference in $PackageReferences) {
+              $ModuleName = [string] $PackageReference.Include
+              $ModuleVersion = [string] $PackageReference.Version
+              if ([string]::IsNullOrWhiteSpace($ModuleName) -or [string]::IsNullOrWhiteSpace($ModuleVersion)) {
+                throw "Invalid PSGallery module PackageReference in $ProjectPath"
+              }
+
+              $CacheVersion = Get-NuGetCacheVersion -Version $ModuleVersion
+              $SourcePath = Join-Path $NuGetGlobalPackagesPath (Join-Path $ModuleName.ToLowerInvariant() $CacheVersion)
+              if (-not (Test-Path -LiteralPath $SourcePath -PathType Container)) {
+                throw "Restored PSGallery module package was not found: $SourcePath"
+              }
+
+              $DestinationPath = Join-Path $DestinationRoot $ModuleName
+              Remove-Item -LiteralPath $DestinationPath -Recurse -Force -ErrorAction SilentlyContinue
+              New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
+              Copy-Item -Path (Join-Path $SourcePath "*") -Destination $DestinationPath -Recurse -Force
+
+              $ExcludedNames = @("fullclr", "System.Runtime.InteropServices.RuntimeInformation.dll")
+              $ExcludedPatterns = @("*.nupkg", "*.nupkg.metadata", "*.nupkg.sha512", "*.nuspec")
+              Get-ChildItem -LiteralPath $DestinationPath -Recurse -Force |
+                Sort-Object FullName -Descending |
+                Where-Object {
+                  $ItemName = $_.Name
+                  $ExcludedNames -contains $ItemName -or
+                  (@($ExcludedPatterns | Where-Object { $ItemName -like $_ }).Count -gt 0)
+                } |
+                Remove-Item -Recurse -Force
+            }
+          }
+
+          function Pack-VendoredPackage {
+            param(
+              [Parameter(Mandatory)]
+              [string] $PackageStagePath,
+
+              [Parameter(Mandatory)]
+              [string] $PackageOutputPath
+            )
+
+            Push-Location $PackageStagePath
+            try {
+              nuget pack -OutputDirectory $PackageOutputPath -NonInteractive
+              if ($LASTEXITCODE -ne 0) {
+                throw "nuget pack failed for $PackageStagePath with exit code $LASTEXITCODE"
+              }
+            } finally {
+              Pop-Location
+            }
+          }
+
+          $SdkPackageRevision = '${{ inputs.sdk_package_revision }}'
+          if ($SdkPackageRevision -notmatch '^\d+$') {
+            throw "SDK package revision '$SdkPackageRevision' must be numeric."
+          }
+          $SdkPackageVersion = "$Env:POWERSHELL_VERSION.$SdkPackageRevision"
+          Write-Host "SDK package version: $SdkPackageVersion"
+
+          $PackageOutputPath = Join-Path $PWD "package"
+          $PackageStageRoot = Join-Path $PWD "nupkg-stage"
+          Remove-Item $PackageOutputPath -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $PackageStageRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item $PackageOutputPath -ItemType Directory -Force | Out-Null
+          New-Item $PackageStageRoot -ItemType Directory -Force | Out-Null
+
+          $PackageRuntimeDownloadPath = (Resolve-Path ../package-runtime-download).Path
+          $PackageRuntimeRoots = @{
+            'unix' = Join-Path $PackageRuntimeDownloadPath 'PowerShell-SDK-PackageRuntime-linux-x64';
+            'win' = Join-Path $PackageRuntimeDownloadPath 'PowerShell-SDK-PackageRuntime-win-x64';
+          }
+          foreach ($RuntimeGroup in $PackageRuntimeRoots.Keys) {
+            if (-not (Test-Path $PackageRuntimeRoots[$RuntimeGroup] -PathType Container)) {
+              throw "Missing package runtime artifact for $RuntimeGroup at $($PackageRuntimeRoots[$RuntimeGroup])"
+            }
+          }
+
+          $EmbeddedAssemblyDefinitions = @(
+            @{
+              AssemblyName = 'System.Management.Automation';
+              ProjectDirectory = 'System.Management.Automation';
+              RuntimeGroups = @('unix', 'win');
+            },
+            @{
+              AssemblyName = 'Microsoft.PowerShell.Commands.Management';
+              ProjectDirectory = 'Microsoft.PowerShell.Commands.Management';
+              RuntimeGroups = @('unix', 'win');
+            },
+            @{
+              AssemblyName = 'Microsoft.PowerShell.Commands.Utility';
+              ProjectDirectory = 'Microsoft.PowerShell.Commands.Utility';
+              RuntimeGroups = @('unix', 'win');
+            },
+            @{
+              AssemblyName = 'Microsoft.PowerShell.ConsoleHost';
+              ProjectDirectory = 'Microsoft.PowerShell.ConsoleHost';
+              RuntimeGroups = @('unix', 'win');
+            },
+            @{
+              AssemblyName = 'Microsoft.PowerShell.Security';
+              ProjectDirectory = 'Microsoft.PowerShell.Security';
+              RuntimeGroups = @('unix', 'win');
+            },
+            @{
+              AssemblyName = 'Microsoft.PowerShell.Commands.Diagnostics';
+              ProjectDirectory = 'Microsoft.PowerShell.Commands.Diagnostics';
+              RuntimeGroups = @('win');
+            },
+            @{
+              AssemblyName = 'Microsoft.Management.Infrastructure.CimCmdlets';
+              ProjectDirectory = 'Microsoft.Management.Infrastructure.CimCmdlets';
+              RuntimeGroups = @('win');
+            },
+            @{
+              AssemblyName = 'Microsoft.WSMan.Management';
+              ProjectDirectory = 'Microsoft.WSMan.Management';
+              RuntimeGroups = @('win');
+            },
+            @{
+              AssemblyName = 'Microsoft.PowerShell.CoreCLR.Eventing';
+              ProjectDirectory = 'Microsoft.PowerShell.CoreCLR.Eventing';
+              RuntimeGroups = @('win');
+            },
+            @{
+              AssemblyName = 'Microsoft.WSMan.Runtime';
+              ProjectDirectory = 'Microsoft.WSMan.Runtime';
+              RuntimeGroups = @('win');
+            },
+            @{
+              AssemblyName = 'Microsoft.PowerShell.SDK';
+              ProjectDirectory = 'Microsoft.PowerShell.SDK';
+              RuntimeGroups = @('unix', 'win');
+            }
+          )
+
+          $SdkStagePath = Join-Path $PackageStageRoot $Env:SDK_PACKAGE_ID
+          $SdkOverlayPathMap = @{}
+          foreach ($AssemblyDefinition in $EmbeddedAssemblyDefinitions) {
+            $AssemblyName = $AssemblyDefinition.AssemblyName
+            $LocalAssemblyPath = "./src/$($AssemblyDefinition.ProjectDirectory)/bin/Release/$TargetFramework"
+            $RefSourcePath = Join-Path $LocalAssemblyPath "$AssemblyName.dll"
+            if (-not (Test-Path $RefSourcePath -PathType Leaf)) {
+              $RefSourcePath = Join-Path $PackageRuntimeRoots['win'] "$AssemblyName.dll"
+            }
+
+            Add-OverlayFile $SdkOverlayPathMap "ref/$TargetFramework/$AssemblyName.dll" $RefSourcePath
+            $RefXmlPath = [System.IO.Path]::ChangeExtension($RefSourcePath, '.xml')
+            Add-OverlayFile $SdkOverlayPathMap "ref/$TargetFramework/$AssemblyName.xml" $RefXmlPath $false
+
+            foreach ($RuntimeGroup in $AssemblyDefinition.RuntimeGroups) {
+              $RuntimeSourceRoot = if ($RuntimeGroup -eq 'unix') { $LocalAssemblyPath } else { $PackageRuntimeRoots[$RuntimeGroup] }
+              Add-OverlayFile $SdkOverlayPathMap "runtimes/$RuntimeGroup/lib/$TargetFramework/$AssemblyName.dll" (Join-Path $RuntimeSourceRoot "$AssemblyName.dll")
+            }
+          }
+
+          ../eng/Vendor-PowerShellSdkPackage.ps1 `
+            -PackageRoot $SdkStagePath `
+            -PowerShellVersion $Env:POWERSHELL_VERSION `
+            -PackageVersion $SdkPackageVersion `
+            -PackageId $Env:SDK_PACKAGE_ID `
+            -VendorName $Env:SDK_VENDOR_NAME `
+            -OverlayPathMap $SdkOverlayPathMap
+
+          $AnyAnyRuntimesDir = Join-Path $SdkStagePath "contentFiles/any/any/runtimes"
+          Remove-Item $AnyAnyRuntimesDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item $AnyAnyRuntimesDir -ItemType Directory | Out-Null
+          Get-Item ./src/Modules/Unix/*/*.ps* | ForEach-Object {
+            $ModuleName = Split-Path (Split-Path $_.FullName -Parent) -Leaf
+            $DestinationDir = "$AnyAnyRuntimesDir/unix/lib/$TargetFramework/Modules/$ModuleName"
+            New-Item $DestinationDir -ItemType Directory -ErrorAction SilentlyContinue | Out-Null
+            Copy-Item $_ $DestinationDir
+          }
+          Get-Item ./src/Modules/Windows/*/*.ps* | ForEach-Object {
+            $ModuleName = Split-Path (Split-Path $_.FullName -Parent) -Leaf
+            $DestinationDir = "$AnyAnyRuntimesDir/win/lib/$TargetFramework/Modules/$ModuleName"
+            New-Item $DestinationDir -ItemType Directory -ErrorAction SilentlyContinue | Out-Null
+            Copy-Item $_ $DestinationDir
+          }
+
+          Copy-PSGalleryModulesToPackage `
+            -ProjectPath "./src/Modules/PSGalleryModules.csproj" `
+            -DestinationRoot (Join-Path $SdkStagePath "buildTransitive/psgallery-modules")
+
+          $AppHostDownloadPath = (Resolve-Path ../apphost-download).Path
+          $AppHostPackageRoot = Join-Path $SdkStagePath "tools/apphost"
+          New-Item $AppHostPackageRoot -ItemType Directory -Force | Out-Null
+          $AppHostFilesByRid = [ordered]@{
+            'win-x64' = @('pwsh.exe', 'pwsh.dll', 'pwsh.runtimeconfig.json')
+            'linux-x64' = @('pwsh', 'pwsh.dll', 'pwsh.runtimeconfig.json')
+            'linux-arm64' = @('pwsh', 'pwsh.dll', 'pwsh.runtimeconfig.json')
+            'osx-x64' = @('pwsh', 'pwsh.dll', 'pwsh.runtimeconfig.json')
+            'osx-arm64' = @('pwsh', 'pwsh.dll', 'pwsh.runtimeconfig.json')
+          }
+          foreach ($Rid in $AppHostFilesByRid.Keys) {
+            $ArtifactPath = Join-Path $AppHostDownloadPath "PowerShell-SDK-AppHost-$Rid"
+            if (-not (Test-Path $ArtifactPath -PathType Container)) {
+              throw "Missing PowerShell apphost artifact for $Rid at $ArtifactPath"
+            }
+
+            $DestinationPath = Join-Path $AppHostPackageRoot $Rid
+            New-Item $DestinationPath -ItemType Directory -Force | Out-Null
+            foreach ($FileName in $AppHostFilesByRid[$Rid]) {
+              $SourcePath = Join-Path $ArtifactPath $FileName
+              if (-not (Test-Path $SourcePath -PathType Leaf)) {
+                throw "Missing required PowerShell apphost file for $Rid`: $SourcePath"
+              }
+              Copy-Item $SourcePath $DestinationPath -Force
+            }
+
+            $RuntimeNativeDestinationPath = Join-Path $SdkStagePath "runtimes/$Rid/native"
+            New-Item $RuntimeNativeDestinationPath -ItemType Directory -Force | Out-Null
+            $RuntimeNativeAppHostPath = Join-Path $ArtifactPath "runtime-native/$($AppHostFilesByRid[$Rid][0])"
+            if (-not (Test-Path $RuntimeNativeAppHostPath -PathType Leaf)) {
+              throw "Missing shared-payload runtime-native apphost for $Rid`: $RuntimeNativeAppHostPath"
+            }
+            Copy-Item $RuntimeNativeAppHostPath $RuntimeNativeDestinationPath -Force
+          }
+
+          $BuildTransitivePath = Join-Path $SdkStagePath "buildTransitive"
+          New-Item $BuildTransitivePath -ItemType Directory -Force | Out-Null
+          Copy-Item "../eng/Microsoft.PowerShell.SDK.targets" (Join-Path $BuildTransitivePath "$Env:SDK_PACKAGE_ID.targets") -Force
+
+          Pack-VendoredPackage $SdkStagePath $PackageOutputPath
+
+      - name: Upload PowerShell package
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: PowerShell-SDK-${{env.POWERSHELL_VERSION}}.${{inputs.sdk_package_revision}}
+          path: "pwsh-src/package/*.nupkg"
+
+  validate:
+    name: Validate PowerShell SDK [${{matrix.rid}}]
+    runs-on: ${{matrix.runner}}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-2025
+          - rid: linux-x64
+            runner: ubuntu-24.04
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+          - rid: osx-x64
+            runner: macos-15-intel
+          - rid: osx-arm64
+            runner: macos-15
+
+    steps:
+      - name: Enable Windows long path support
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
+      - name: Clone project with PowerShell submodule
+        uses: actions/checkout@v7.0.0
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5.3.0
+        with:
+          global-json-file: pwsh-src/global.json
+
+      - name: Download PowerShell SDK package
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: PowerShell-SDK-${{env.POWERSHELL_VERSION}}.${{inputs.sdk_package_revision}}
+          path: sdk-package
+
+      - name: Validate PowerShell SDK package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [xml]$CommonProps = Get-Content ./pwsh-src/PowerShell.Common.props
+          $TargetFramework = $CommonProps.Project.PropertyGroup |
+            ForEach-Object { $_.TargetFramework } |
+            Where-Object { $_ } |
+            Select-Object -First 1
+          if (-not $TargetFramework) {
+            throw "Unable to determine PowerShell TargetFramework from PowerShell.Common.props"
+          }
+          $SdkPackageRevision = '${{ inputs.sdk_package_revision }}'
+          if ($SdkPackageRevision -notmatch '^\d+$') {
+            throw "SDK package revision '$SdkPackageRevision' must be numeric."
+          }
+          $SdkPackageVersion = "$Env:POWERSHELL_VERSION.$SdkPackageRevision"
+
+          ./eng/Validate-PowerShellSdkPackage.ps1 `
+            -PackageDirectory ./sdk-package `
+            -PowerShellVersion $Env:POWERSHELL_VERSION `
+            -PackageVersion $SdkPackageVersion `
+            -TargetFramework $TargetFramework `
+            -RuntimeIdentifier ${{matrix.rid}} `
+            -PackageId $Env:SDK_PACKAGE_ID `
+            -PackageVendorName $Env:SDK_VENDOR_NAME

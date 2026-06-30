@@ -1,0 +1,4 @@
+[submodule "pwsh-src"]
+	path = pwsh-src
+	url = ./
+	branch = downstream/v7.6.3
