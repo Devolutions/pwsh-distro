@@ -30,6 +30,10 @@ jobs:
             runner: windows-2025
             psbuild-runtime: fxdependent-win-desktop
             executable: pwsh.exe
+          - rid: win-arm64
+            runner: windows-2025
+            psbuild-runtime: fxdependent-win-desktop
+            executable: pwsh.exe
           - rid: linux-x64
             runner: ubuntu-24.04
             psbuild-runtime: fxdependent-linux-x64
@@ -156,6 +160,7 @@ jobs:
 
           $RequiredAppHostExecutables = [ordered]@{
             'win-x64' = 'pwsh.exe';
+            'win-arm64' = 'pwsh.exe';
             'linux-x64' = 'pwsh';
             'linux-arm64' = 'pwsh';
             'osx-x64' = 'pwsh';
@@ -236,9 +241,11 @@ jobs:
           "@
             Set-Content -Path $ProjectPath -Value $ResolverProject -Encoding utf8
 
-            & dotnet restore $ProjectPath --configfile $NuGetConfigPath --verbosity minimal
-            if ($LASTEXITCODE -ne 0) {
-              throw "Restoring $Env:MULTI_PWSH_APPHOST_PACKAGE_ID $Env:MULTI_PWSH_APPHOST_PACKAGE_VERSION failed with exit code $LASTEXITCODE"
+            $RestoreOutput = & dotnet restore $ProjectPath --configfile $NuGetConfigPath --verbosity minimal 2>&1
+            $RestoreExitCode = $LASTEXITCODE
+            $RestoreOutput | ForEach-Object { Write-Host $_ }
+            if ($RestoreExitCode -ne 0) {
+              throw "Restoring $Env:MULTI_PWSH_APPHOST_PACKAGE_ID $Env:MULTI_PWSH_APPHOST_PACKAGE_VERSION failed with exit code $RestoreExitCode"
             }
 
             $MSBuildArguments = @(
@@ -250,9 +257,11 @@ jobs:
               "/p:MultiPwshAppHostAssetOutputPath=$AssetListPath",
               "/p:MultiPwshAppHostInfoPath=$InfoPath"
             )
-            & dotnet @MSBuildArguments
-            if ($LASTEXITCODE -ne 0) {
-              throw "Resolving $Env:MULTI_PWSH_APPHOST_PACKAGE_ID apphost assets failed with exit code $LASTEXITCODE"
+            $MSBuildOutput = & dotnet @MSBuildArguments 2>&1
+            $MSBuildExitCode = $LASTEXITCODE
+            $MSBuildOutput | ForEach-Object { Write-Host $_ }
+            if ($MSBuildExitCode -ne 0) {
+              throw "Resolving $Env:MULTI_PWSH_APPHOST_PACKAGE_ID apphost assets failed with exit code $MSBuildExitCode"
             }
             if (-not (Test-Path $AssetListPath -PathType Leaf)) {
               throw "ResolveMultiPwshAppHostAssets did not write an apphost asset list at $AssetListPath"
@@ -922,6 +931,7 @@ jobs:
           New-Item $AppHostPackageRoot -ItemType Directory -Force | Out-Null
           $AppHostFilesByRid = [ordered]@{
             'win-x64' = @('pwsh.exe', 'pwsh.dll', 'pwsh.runtimeconfig.json')
+            'win-arm64' = @('pwsh.exe', 'pwsh.dll', 'pwsh.runtimeconfig.json')
             'linux-x64' = @('pwsh', 'pwsh.dll', 'pwsh.runtimeconfig.json')
             'linux-arm64' = @('pwsh', 'pwsh.dll', 'pwsh.runtimeconfig.json')
             'osx-x64' = @('pwsh', 'pwsh.dll', 'pwsh.runtimeconfig.json')
