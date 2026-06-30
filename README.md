@@ -12,7 +12,7 @@ cd pwsh-distro
 .\scripts\Initialize-Repository.ps1
 ```
 
-All workflows are manual and start from the GitHub Actions **Run workflow** button (see the Workflows table below). The workflows are the authoritative release builds.
+All workflows are manual and start from the GitHub Actions **Run workflow** button (see the Workflows table below). The workflows are the authoritative release builds, and the SDK workflow can publish the validated NuGet package to NuGet.org and GitHub Releases.
 
 > On Linux/macOS no long-path configuration is needed. On Windows, if `core.longpaths` is not enabled, the `pwsh-src` submodule checkout will fail with `Filename too long`. `scripts\Initialize-Repository.ps1` enables it before initializing the submodule. The workflows set this on their Windows runners automatically.
 
@@ -43,11 +43,26 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 
 | Workflow | Purpose | Output |
 | --- | --- | --- |
-| `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors the source-built PowerShell SDK assemblies into one `Devolutions.PowerShell.SDK` package, and validates it in a sample .NET app with opt-in apphost import. | `PowerShell-SDK-7.6.3.0` artifact containing one `.nupkg` by default. |
+| `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors the source-built PowerShell SDK assemblies into one `Devolutions.PowerShell.SDK` package, validates it in a sample .NET app with opt-in apphost import, and can publish the validated package. | `PowerShell-SDK-7.6.3.0` artifact containing one `.nupkg`; optional NuGet.org publish plus GitHub release `v7.6.3.0`. |
 | `.github/workflows/powershell.yml` | Builds self-contained PowerShell archives for Windows, macOS, and Linux on x64 and arm64. | `PowerShell-7.6.3-<os>-<arch>` `.tar.gz` artifacts. |
 | `.github/workflows/dotnet-runtime.yml` | Builds the .NET runtime tag used by this PowerShell release for Windows, macOS, and Linux on x86_64 and arm64 with prebuilt clang+llvm from `awakecoding/llvm-prebuilt`. | Runtime build output in the workflow logs/workspace. |
 
 All workflows are manual and can be started from the GitHub Actions **Run workflow** button.
+
+## Publishing the PowerShell SDK package
+
+The SDK workflow publishes only after the package has been built and validated on every RID in the validation matrix. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`.
+
+Manual inputs:
+
+| Input | Purpose |
+| --- | --- |
+| `sdk_package_revision` | Optional revision override. Leave blank to use the explicit `SDK_PACKAGE_REVISION` env pin, set a number such as `1` for a specific downstream revision, or set `auto` to infer the next revision from existing `vX.Y.Z.R` release tags. |
+| `github-env` | `auto`, `test`, or `prod`. `auto` selects `publish-prod` for manual runs from `master` and `publish-test` elsewhere. |
+| `skip-publish` | Builds and validates the package without publishing to NuGet.org or creating a GitHub release. |
+| `dry-run` | Simulates publishing. This defaults to `true`; non-production environments are forced to dry-run when publishing is requested. |
+
+Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation. A real publish pushes the validated `.nupkg` to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the package asset, and a SHA256 checksum file.
 
 ## Branching model
 
@@ -70,7 +85,7 @@ The PowerShell workflows check out this repository with `submodules: true` to po
 
 The SDK workflow intentionally derives the target framework from upstream `PowerShell.Common.props` instead of hardcoding it, so future PowerShell updates only need the version pins refreshed. The SDK package is assembled from locally built PowerShell binaries plus package layouts from the official NuGet packages for the same PowerShell version, then `eng/Vendor-PowerShellSdkPackage.ps1` rewrites the NuGet package ID, package version, and vendor metadata to Devolutions.
 
-The vendored SDK keeps upstream PowerShell build/runtime metadata separate from downstream NuGet package revisions. `POWERSHELL_VERSION` remains the upstream three-part PowerShell version used to restore Microsoft packages and validate `pwsh` runtime output. `.github/workflows/powershell-sdk.yml` accepts a manual `sdk_package_revision` input, defaulting to `0`, and packages `Devolutions.PowerShell.SDK` as `POWERSHELL_VERSION.sdk_package_revision` such as `7.6.3.0`, `7.6.3.1`, or `7.6.3.2`. NuGet normalizes a trailing `.0` in package identity metadata, file names, and restore folders, so `7.6.3.0` is expected to produce/use `Devolutions.PowerShell.SDK.7.6.3.nupkg`; nonzero revisions keep all four elements.
+The vendored SDK keeps upstream PowerShell build/runtime metadata separate from downstream NuGet package revisions. `POWERSHELL_VERSION` remains the upstream three-part PowerShell version used to restore Microsoft packages and validate `pwsh` runtime output. `.github/workflows/powershell-sdk.yml` keeps the default downstream revision explicit in `SDK_PACKAGE_REVISION`; the manual `sdk_package_revision` input can override it or use `auto` to infer the next release tag revision. The package version is `POWERSHELL_VERSION.sdk_package_revision`, such as `7.6.3.0`, `7.6.3.1`, or `7.6.3.2`. NuGet normalizes a trailing `.0` in package identity metadata, file names, and restore folders, so `7.6.3.0` is expected to produce/use `Devolutions.PowerShell.SDK.7.6.3.nupkg`; nonzero revisions keep all four elements.
 
 The package keeps original assembly identities (`System.Management.Automation.dll`, `Microsoft.PowerShell.Commands.Utility.dll`, and related assemblies) so consumers only need to change the NuGet package reference. Source-built PowerShell assemblies are embedded directly in `Devolutions.PowerShell.SDK`, so validation fails if original source-built package IDs such as `Microsoft.PowerShell.SDK` or `System.Management.Automation` appear in the restore graph. External packages that are not built by this repository, including `Microsoft.PowerShell.Native` and `Microsoft.PowerShell.MarkdownRender`, remain normal public NuGet dependencies.
 
