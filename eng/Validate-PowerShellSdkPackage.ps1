@@ -311,10 +311,36 @@ function Assert-SharedPowerShellOutput {
   Assert-RuntimeConfigMode -RuntimeConfigPath (Join-Path $Directory 'pwsh.runtimeconfig.json') -SelfContained $SelfContained -Description $Description
 }
 
+function Get-SourceBuiltRuntimePackageAsset {
+  param(
+    [Parameter(Mandatory)]
+    [string[]] $SourceBuiltPackageAssetEntries,
+
+    [Parameter(Mandatory)]
+    [string] $RuntimeAssetGroup,
+
+    [Parameter(Mandatory)]
+    [string] $TargetFramework
+  )
+
+  $RuntimeAssetPrefix = "runtimes/$RuntimeAssetGroup/lib/$TargetFramework/"
+  return @(
+    $SourceBuiltPackageAssetEntries |
+      Where-Object {
+        $_.StartsWith($RuntimeAssetPrefix, [System.StringComparison]::OrdinalIgnoreCase) -and
+        $_.EndsWith('.dll', [System.StringComparison]::OrdinalIgnoreCase)
+      } |
+      Sort-Object -Unique
+  )
+}
+
 function Assert-NoSharedPowerShellRuntimeLibDuplicate {
   param(
     [Parameter(Mandatory)]
     [string] $Directory,
+
+    [Parameter(Mandatory)]
+    [string[]] $SourceBuiltPackageAssetEntries,
 
     [Parameter(Mandatory)]
     [string] $RuntimeAssetGroup,
@@ -326,14 +352,16 @@ function Assert-NoSharedPowerShellRuntimeLibDuplicate {
     [string] $Description
   )
 
-  foreach ($RelativePayloadPath in @(
-      "runtimes/$RuntimeAssetGroup/lib/$TargetFramework/System.Management.Automation.dll",
-      "runtimes/$RuntimeAssetGroup/lib/$TargetFramework/Microsoft.PowerShell.SDK.dll",
-      "runtimes/$RuntimeAssetGroup/lib/$TargetFramework/Modules/Microsoft.PowerShell.Management/Microsoft.PowerShell.Management.psd1")) {
+  foreach ($RelativePayloadPath in Get-SourceBuiltRuntimePackageAsset -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework) {
     $PayloadPath = Join-Path $Directory ($RelativePayloadPath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
     if (Test-Path $PayloadPath) {
       throw "$Description unexpectedly duplicated shared PowerShell payload under runtime lib asset directory: $PayloadPath"
     }
+  }
+
+  $ModulePayloadPath = Join-Path $Directory ("runtimes/$RuntimeAssetGroup/lib/$TargetFramework/Modules/Microsoft.PowerShell.Management/Microsoft.PowerShell.Management.psd1" -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+  if (Test-Path $ModulePayloadPath) {
+    throw "$Description unexpectedly duplicated shared PowerShell module payload under runtime lib asset directory: $ModulePayloadPath"
   }
 }
 
@@ -444,7 +472,7 @@ function Assert-FileContentMatches {
   }
 }
 
-function Assert-SharedPackagePayloadPreserved {
+function Assert-SourceBuiltPackagePayloadPreserved {
   param(
     [Parameter(Mandatory)]
     [string] $RestoredSdkPath,
@@ -453,14 +481,21 @@ function Assert-SharedPackagePayloadPreserved {
     [string] $Directory,
 
     [Parameter(Mandatory)]
+    [string[]] $SourceBuiltPackageAssetEntries,
+
+    [Parameter(Mandatory)]
     [string] $RuntimeAssetGroup,
+
+    [Parameter(Mandatory)]
+    [string] $TargetFramework,
 
     [Parameter(Mandatory)]
     [string] $Description
   )
 
-  foreach ($FileName in @('System.Management.Automation.dll', 'Microsoft.PowerShell.ConsoleHost.dll')) {
-    $ExpectedPath = Join-Path $RestoredSdkPath "runtimes/$RuntimeAssetGroup/lib/$TargetFramework/$FileName"
+  foreach ($RelativePath in Get-SourceBuiltRuntimePackageAsset -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework) {
+    $FileName = Split-Path $RelativePath -Leaf
+    $ExpectedPath = Join-Path $RestoredSdkPath ($RelativePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
     $ActualPath = Join-Path $Directory $FileName
     Assert-FileContentMatches -ExpectedPath $ExpectedPath -ActualPath $ActualPath -Description "$Description shared $FileName"
   }
@@ -541,6 +576,9 @@ function Invoke-RuntimeNativeOverwriteProbe {
     [string] $RestoredSdkPath,
 
     [Parameter(Mandatory)]
+    [string[]] $SourceBuiltPackageAssetEntries,
+
+    [Parameter(Mandatory)]
     [string[]] $RuntimeIdentifiers,
 
     [Parameter(Mandatory)]
@@ -590,7 +628,7 @@ function Invoke-RuntimeNativeOverwriteProbe {
     Invoke-DotNet $Arguments
 
     $RuntimeAssetGroup = if ($CurrentRuntimeIdentifier -like 'win-*') { 'win' } else { 'unix' }
-    Assert-SharedPackagePayloadPreserved -RestoredSdkPath $RestoredSdkPath -Directory $Directory -RuntimeAssetGroup $RuntimeAssetGroup -Description $Description
+    Assert-SourceBuiltPackagePayloadPreserved -RestoredSdkPath $RestoredSdkPath -Directory $Directory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description $Description
   } finally {
     Copy-Item -LiteralPath $BackupPath -Destination $RootPayloadPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $BackupPath -Force -ErrorAction SilentlyContinue
@@ -827,6 +865,27 @@ function Get-NuspecMetadataValue {
   return $Element.InnerText
 }
 
+function Read-ZipTextFileLines {
+  param(
+    [Parameter(Mandatory)]
+    [System.IO.Compression.ZipArchive] $Zip,
+
+    [Parameter(Mandatory)]
+    [string] $EntryName
+  )
+
+  $Entry = $Zip.Entries | Where-Object FullName -EQ $EntryName | Select-Object -First 1
+  if (-not $Entry) {
+    return @()
+  }
+
+  return @(
+    (Read-ZipEntryText -Entry $Entry) -split '\r?\n' |
+      ForEach-Object { $_.Trim() } |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  )
+}
+
 function Assert-SdkPackageVersion {
   param(
     [Parameter(Mandatory)]
@@ -882,7 +941,7 @@ if (-not $Package) {
   throw "Unable to find $PackageId.$PackageVersion nupkg in $PackageDirectoryPath"
 }
 
-$EmbeddedPowerShellPackageIds = @(
+$FallbackEmbeddedPowerShellPackageIds = @(
   'Microsoft.PowerShell.SDK',
   'System.Management.Automation',
   'Microsoft.PowerShell.Commands.Management',
@@ -895,6 +954,10 @@ $EmbeddedPowerShellPackageIds = @(
   'Microsoft.PowerShell.CoreCLR.Eventing',
   'Microsoft.WSMan.Runtime'
 )
+$EmbeddedPowerShellPackageIds = $FallbackEmbeddedPowerShellPackageIds
+$SourceBuiltPackageAssetEntries = @()
+$EmbeddedPowerShellPackageIdsManifestEntry = 'buildTransitive/embedded-powershell-package-ids.txt'
+$SourceBuiltPackageAssetsManifestEntry = 'buildTransitive/source-built-package-assets.txt'
 
 $PSGalleryModulePackageIds = @(
   'PowerShellGet',
@@ -920,6 +983,8 @@ $PowerShellStandardPackageId = 'PowerShellStandard.Library'
 $PowerShellStandardPackageVersion = '5.1.0'
 $ExpectedPackageEntries = @(
   "buildTransitive/$PackageId.targets",
+  $EmbeddedPowerShellPackageIdsManifestEntry,
+  $SourceBuiltPackageAssetsManifestEntry,
   "tools/apphost/$RuntimeIdentifier/$ExecutableName",
   "tools/apphost/$RuntimeIdentifier/pwsh.dll",
   "tools/apphost/$RuntimeIdentifier/pwsh.runtimeconfig.json",
@@ -967,6 +1032,20 @@ if ($RuntimeAssetGroup -eq 'win') {
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $Zip = [System.IO.Compression.ZipFile]::OpenRead($Package.FullName)
 try {
+  $ManifestEmbeddedPackageIds = @(Read-ZipTextFileLines -Zip $Zip -EntryName $EmbeddedPowerShellPackageIdsManifestEntry)
+  if ($ManifestEmbeddedPackageIds.Count -gt 0) {
+    $EmbeddedPowerShellPackageIds = $ManifestEmbeddedPackageIds
+  }
+
+  $SourceBuiltPackageAssetEntries = @(Read-ZipTextFileLines -Zip $Zip -EntryName $SourceBuiltPackageAssetsManifestEntry)
+  if ($SourceBuiltPackageAssetEntries.Count -eq 0) {
+    $SourceBuiltPackageAssetEntries = @(
+      $ExpectedPackageEntries |
+        Where-Object { $_ -match '^(ref/[^/]+|runtimes/[^/]+/lib/[^/]+)/[^/]+\.dll$' }
+    )
+  }
+  $ExpectedPackageEntries += $SourceBuiltPackageAssetEntries
+
   foreach ($EntryName in $ExpectedPackageEntries) {
     if (-not ($Zip.Entries | Where-Object FullName -EQ $EntryName)) {
       throw "SDK package is missing expected entry: $EntryName"
@@ -1124,9 +1203,9 @@ foreach (PSObject result in ps.Invoke())
   Assert-SharedPowerShellOutput -Directory $OutputDirectory -SelfContained $false -Description 'Sample app output'
   Assert-PowerShellConfig -Directory $OutputDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample app output'
   Assert-NoRootRuntimeNativeAppHostOutput -Directory $OutputDirectory -ExecutableName $ExecutableName -Description 'Sample app output'
-  Assert-NoSharedPowerShellRuntimeLibDuplicate -Directory $OutputDirectory -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample app output'
+  Assert-NoSharedPowerShellRuntimeLibDuplicate -Directory $OutputDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample app output'
   Assert-PSGalleryModulesAbsent -Directory $OutputDirectory -ModuleNames $PSGalleryModulePackageIds -Description 'Sample app output'
-  Assert-SharedPackagePayloadPreserved -RestoredSdkPath $RestoredSdkPath -Directory $OutputDirectory -RuntimeAssetGroup $RuntimeAssetGroup -Description 'Sample app output'
+  Assert-SourceBuiltPackagePayloadPreserved -RestoredSdkPath $RestoredSdkPath -Directory $OutputDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample app output'
   foreach ($RuntimeNativeRid in $RuntimeNativeValidationRids) {
     $RuntimeNativeExecutableName = if ($RuntimeNativeRid -like 'win-*') { 'pwsh.exe' } else { 'pwsh' }
     $RuntimeNativePwshPath = Assert-RuntimeNativeAppHostOutput -Directory $OutputDirectory -RuntimeIdentifier $RuntimeNativeRid -ExecutableName $RuntimeNativeExecutableName -SelfContained $false -Description "Sample app output [$RuntimeNativeRid]"
@@ -1136,7 +1215,7 @@ foreach (PSObject result in ps.Invoke())
       Invoke-PwshStartJobProbe -PwshPath $RuntimeNativePwshPath
     }
   }
-  Invoke-RuntimeNativeOverwriteProbe -ProjectPath $ProjectPath -Directory $OutputDirectory -RestoredSdkPath $RestoredSdkPath -RuntimeIdentifiers $RuntimeNativeValidationRids -CurrentRuntimeIdentifier $RuntimeIdentifier -TargetName 'PowerShellSDKCopyRuntimeNativeAppHostsToOutput' -Description 'Sample app output overwrite probe'
+  Invoke-RuntimeNativeOverwriteProbe -ProjectPath $ProjectPath -Directory $OutputDirectory -RestoredSdkPath $RestoredSdkPath -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeIdentifiers $RuntimeNativeValidationRids -CurrentRuntimeIdentifier $RuntimeIdentifier -TargetName 'PowerShellSDKCopyRuntimeNativeAppHostsToOutput' -Description 'Sample app output overwrite probe'
 
   Set-PowerShellConfig -Directory $OutputDirectory -ExecutionPolicy 'RemoteSigned'
   Invoke-DotNet @(
@@ -1198,9 +1277,9 @@ foreach (PSObject result in ps.Invoke())
   Assert-SharedPowerShellOutput -Directory $PublishDirectory -SelfContained $true -Description 'Sample self-contained publish output'
   Assert-PowerShellConfig -Directory $PublishDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample self-contained publish output'
   Assert-NoRootRuntimeNativeAppHostOutput -Directory $PublishDirectory -ExecutableName $ExecutableName -Description 'Sample self-contained publish output'
-  Assert-NoSharedPowerShellRuntimeLibDuplicate -Directory $PublishDirectory -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample self-contained publish output'
+  Assert-NoSharedPowerShellRuntimeLibDuplicate -Directory $PublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample self-contained publish output'
   Assert-PSGalleryModulesAbsent -Directory $PublishDirectory -ModuleNames $PSGalleryModulePackageIds -Description 'Sample self-contained publish output'
-  Assert-SharedPackagePayloadPreserved -RestoredSdkPath $RestoredSdkPath -Directory $PublishDirectory -RuntimeAssetGroup $RuntimeAssetGroup -Description 'Sample self-contained publish output'
+  Assert-SourceBuiltPackagePayloadPreserved -RestoredSdkPath $RestoredSdkPath -Directory $PublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample self-contained publish output'
   foreach ($RuntimeNativeRid in $RuntimeNativeValidationRids) {
     $RuntimeNativeExecutableName = if ($RuntimeNativeRid -like 'win-*') { 'pwsh.exe' } else { 'pwsh' }
     $RuntimeNativePwshPath = Assert-RuntimeNativeAppHostOutput -Directory $PublishDirectory -RuntimeIdentifier $RuntimeNativeRid -ExecutableName $RuntimeNativeExecutableName -SelfContained $true -Description "Sample self-contained publish output [$RuntimeNativeRid]"
@@ -1217,9 +1296,9 @@ foreach (PSObject result in ps.Invoke())
   Assert-SharedPowerShellOutput -Directory $FrameworkDependentPublishDirectory -SelfContained $false -Description 'Sample framework-dependent publish output'
   Assert-PowerShellConfig -Directory $FrameworkDependentPublishDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample framework-dependent publish output'
   Assert-NoRootRuntimeNativeAppHostOutput -Directory $FrameworkDependentPublishDirectory -ExecutableName $ExecutableName -Description 'Sample framework-dependent publish output'
-  Assert-NoSharedPowerShellRuntimeLibDuplicate -Directory $FrameworkDependentPublishDirectory -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample framework-dependent publish output'
+  Assert-NoSharedPowerShellRuntimeLibDuplicate -Directory $FrameworkDependentPublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample framework-dependent publish output'
   Assert-PSGalleryModulesAbsent -Directory $FrameworkDependentPublishDirectory -ModuleNames $PSGalleryModulePackageIds -Description 'Sample framework-dependent publish output'
-  Assert-SharedPackagePayloadPreserved -RestoredSdkPath $RestoredSdkPath -Directory $FrameworkDependentPublishDirectory -RuntimeAssetGroup $RuntimeAssetGroup -Description 'Sample framework-dependent publish output'
+  Assert-SourceBuiltPackagePayloadPreserved -RestoredSdkPath $RestoredSdkPath -Directory $FrameworkDependentPublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample framework-dependent publish output'
   foreach ($RuntimeNativeRid in $RuntimeNativeValidationRids) {
     $RuntimeNativeExecutableName = if ($RuntimeNativeRid -like 'win-*') { 'pwsh.exe' } else { 'pwsh' }
     $RuntimeNativePwshPath = Assert-RuntimeNativeAppHostOutput -Directory $FrameworkDependentPublishDirectory -RuntimeIdentifier $RuntimeNativeRid -ExecutableName $RuntimeNativeExecutableName -SelfContained $false -Description "Sample framework-dependent publish output [$RuntimeNativeRid]"
@@ -1277,7 +1356,7 @@ foreach (PSObject result in ps.Invoke())
   Assert-SharedPowerShellOutput -Directory $PSGalleryPublishDirectory -SelfContained $false -Description 'Sample PSGallery publish output'
   Assert-PowerShellConfig -Directory $PSGalleryPublishDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample PSGallery publish output'
   Assert-NoRootRuntimeNativeAppHostOutput -Directory $PSGalleryPublishDirectory -ExecutableName $ExecutableName -Description 'Sample PSGallery publish output'
-  Assert-NoSharedPowerShellRuntimeLibDuplicate -Directory $PSGalleryPublishDirectory -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample PSGallery publish output'
+  Assert-NoSharedPowerShellRuntimeLibDuplicate -Directory $PSGalleryPublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample PSGallery publish output'
   Assert-PSGalleryModulesPresent -Directory $PSGalleryPublishDirectory -ModuleNames $PSGallerySubsetModuleNames -Description 'Sample PSGallery publish output'
   Assert-PSGalleryModulesAbsent -Directory $PSGalleryPublishDirectory -ModuleNames $UnexpectedPSGallerySubsetModuleNames -Description 'Sample PSGallery publish output'
   $PSGalleryPublishRuntimeNativePwshPath = Assert-RuntimeNativeAppHostOutput -Directory $PSGalleryPublishDirectory -RuntimeIdentifier $RuntimeIdentifier -ExecutableName $ExecutableName -SelfContained $false -Description "Sample PSGallery publish output [$RuntimeIdentifier]"

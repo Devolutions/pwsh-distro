@@ -365,30 +365,6 @@ function Resolve-MultiPwshAppHostAsset {
   }
 }
 
-function Add-OverlayFile {
-  param(
-    [Parameter(Mandatory)]
-    [hashtable] $OverlayPathMap,
-
-    [Parameter(Mandatory)]
-    [string] $PackageRelativePath,
-
-    [Parameter(Mandatory)]
-    [string] $SourcePath,
-
-    [bool] $Required = $true
-  )
-
-  if (Test-Path $SourcePath -PathType Leaf) {
-    $OverlayPathMap[$PackageRelativePath] = $SourcePath
-    return
-  }
-
-  if ($Required) {
-    throw "Missing source-built package file for $PackageRelativePath`: $SourcePath"
-  }
-}
-
 function Copy-LocalizedResourcesToPackage {
   param(
     [Parameter(Mandatory)]
@@ -527,6 +503,7 @@ $PwshSourceRoot = Join-Path $RepositoryRoot 'pwsh-src'
 if (-not (Test-Path (Join-Path $PwshSourceRoot 'PowerShell.Common.props') -PathType Leaf)) {
   throw 'pwsh-src is not initialized. Run scripts\Initialize-Repository.ps1 first.'
 }
+Import-Module (Join-Path $RepositoryRoot 'eng\PowerShellSdkPackaging.psm1') -Force
 
 $OutputRootPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath((Join-Path $RepositoryRoot (Join-Path $OutputRoot $RuntimeIdentifier)))
 $AppHostOutputPath = Join-Path $OutputRootPath 'PowerShell-AppHost'
@@ -597,55 +574,21 @@ try {
 
   Invoke-Native dotnet @('build', '.\src\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj', '-c', 'Release', "/p:ReleaseTag=$PowerShellVersion")
 
-  $CommonAssemblyDefinitions = @(
-    @{ AssemblyName = 'Microsoft.PowerShell.SDK'; ProjectDirectory = 'Microsoft.PowerShell.SDK' },
-    @{ AssemblyName = 'System.Management.Automation'; ProjectDirectory = 'System.Management.Automation' },
-    @{ AssemblyName = 'Microsoft.PowerShell.Commands.Management'; ProjectDirectory = 'Microsoft.PowerShell.Commands.Management' },
-    @{ AssemblyName = 'Microsoft.PowerShell.Commands.Utility'; ProjectDirectory = 'Microsoft.PowerShell.Commands.Utility' },
-    @{ AssemblyName = 'Microsoft.PowerShell.ConsoleHost'; ProjectDirectory = 'Microsoft.PowerShell.ConsoleHost' },
-    @{ AssemblyName = 'Microsoft.PowerShell.Security'; ProjectDirectory = 'Microsoft.PowerShell.Security' }
-  )
-  $WindowsAssemblyDefinitions = @(
-    @{ AssemblyName = 'Microsoft.PowerShell.Commands.Diagnostics'; ProjectDirectory = 'Microsoft.PowerShell.Commands.Diagnostics' },
-    @{ AssemblyName = 'Microsoft.Management.Infrastructure.CimCmdlets'; ProjectDirectory = 'Microsoft.Management.Infrastructure.CimCmdlets' },
-    @{ AssemblyName = 'Microsoft.WSMan.Management'; ProjectDirectory = 'Microsoft.WSMan.Management' },
-    @{ AssemblyName = 'Microsoft.PowerShell.CoreCLR.Eventing'; ProjectDirectory = 'Microsoft.PowerShell.CoreCLR.Eventing' },
-    @{ AssemblyName = 'Microsoft.WSMan.Runtime'; ProjectDirectory = 'Microsoft.WSMan.Runtime' }
-  )
-  $AssemblyDefinitions = if ($RuntimeGroup -eq 'win') { $CommonAssemblyDefinitions + $WindowsAssemblyDefinitions } else { $CommonAssemblyDefinitions }
-
-  foreach ($AssemblyDefinition in $AssemblyDefinitions) {
-    $AssemblyName = $AssemblyDefinition.AssemblyName
-    $SourceDirectory = if ($AssemblyName -eq 'Microsoft.PowerShell.SDK') {
-      Join-Path $PwshSourceRoot "src\$($AssemblyDefinition.ProjectDirectory)\bin\Release\$TargetFramework"
-    } else {
-      $AppHostOutputPath
-    }
-    $AssemblyPath = Join-Path $SourceDirectory "$AssemblyName.dll"
-    if (-not (Test-Path $AssemblyPath -PathType Leaf)) {
-      throw "PowerShell build did not produce package runtime assembly: $AssemblyPath"
-    }
-    Copy-Item $AssemblyPath $PackageRuntimePath -Force
-    $XmlPath = [System.IO.Path]::ChangeExtension($AssemblyPath, '.xml')
-    if (Test-Path $XmlPath -PathType Leaf) {
-      Copy-Item $XmlPath $PackageRuntimePath -Force
-    }
+  $SourceBuiltAssemblyDirectories = @(Get-PowerShellSdkSourceBuiltAssemblyDirectory -SourceRoot $PwshSourceRoot -TargetFramework $TargetFramework)
+  $SourceBuiltAssemblyNames = @(Get-PowerShellSdkSourceBuiltAssemblyName -Directory $SourceBuiltAssemblyDirectories)
+  if ($SourceBuiltAssemblyNames.Count -eq 0) {
+    throw "No source-built PowerShell assemblies were found under $PwshSourceRoot for $TargetFramework."
   }
 
-  $SdkStagePath = Join-Path $PackageStageRoot $PackageId
-  $SdkOverlayPathMap = @{}
-  foreach ($AssemblyDefinition in $AssemblyDefinitions) {
-    $AssemblyName = $AssemblyDefinition.AssemblyName
-    $LocalAssemblyPath = Join-Path $PwshSourceRoot "src\$($AssemblyDefinition.ProjectDirectory)\bin\Release\$TargetFramework"
-    $RefSourcePath = Join-Path $LocalAssemblyPath "$AssemblyName.dll"
-    if (-not (Test-Path $RefSourcePath -PathType Leaf)) {
-      $RefSourcePath = Join-Path $PackageRuntimePath "$AssemblyName.dll"
-    }
+  Copy-PowerShellSdkSourceBuiltFile `
+    -AssemblyName $SourceBuiltAssemblyNames `
+    -SourceDirectory (@($AppHostOutputPath) + $SourceBuiltAssemblyDirectories) `
+    -DestinationDirectory $PackageRuntimePath
 
-    Add-OverlayFile $SdkOverlayPathMap "ref/$TargetFramework/$AssemblyName.dll" $RefSourcePath
-    Add-OverlayFile $SdkOverlayPathMap "ref/$TargetFramework/$AssemblyName.xml" ([System.IO.Path]::ChangeExtension($RefSourcePath, '.xml')) $false
-    Add-OverlayFile $SdkOverlayPathMap "runtimes/$RuntimeGroup/lib/$TargetFramework/$AssemblyName.dll" (Join-Path $PackageRuntimePath "$AssemblyName.dll")
-    Add-OverlayFile $SdkOverlayPathMap "runtimes/$RuntimeGroup/lib/$TargetFramework/$AssemblyName.xml" (Join-Path $PackageRuntimePath "$AssemblyName.xml") $false
+  $SdkStagePath = Join-Path $PackageStageRoot $PackageId
+  $SourceBuiltAssemblyDirectoriesByPackagePath = @{
+    "ref/$TargetFramework" = @($PackageRuntimePath, $AppHostOutputPath) + $SourceBuiltAssemblyDirectories
+    "runtimes/$RuntimeGroup/lib/$TargetFramework" = @($PackageRuntimePath, $AppHostOutputPath) + $SourceBuiltAssemblyDirectories
   }
 
   & (Join-Path $RepositoryRoot 'eng\Vendor-PowerShellSdkPackage.ps1') `
@@ -654,7 +597,8 @@ try {
     -PackageVersion $SdkPackageVersion `
     -PackageId $PackageId `
     -VendorName $VendorName `
-    -OverlayPathMap $SdkOverlayPathMap
+    -SourceBuiltAssemblyNames $SourceBuiltAssemblyNames `
+    -SourceBuiltAssemblyDirectoriesByPackagePath $SourceBuiltAssemblyDirectoriesByPackagePath
 
   $AnyAnyRuntimesDir = Join-Path $SdkStagePath 'contentFiles\any\any\runtimes'
   Remove-Item $AnyAnyRuntimesDir -Recurse -Force -ErrorAction SilentlyContinue
