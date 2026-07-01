@@ -16,6 +16,10 @@ param(
 
   [hashtable] $OverlayPathMap,
 
+  [string[]] $SourceBuiltAssemblyNames,
+
+  [hashtable] $SourceBuiltAssemblyDirectoriesByPackagePath,
+
   [string] $SourcePackageDirectory
 )
 
@@ -23,7 +27,7 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 $OriginalPackageId = 'Microsoft.PowerShell.SDK'
-$EmbeddedPackageIds = @(
+$DefaultEmbeddedPackageIds = @(
   'Microsoft.PowerShell.SDK',
   'System.Management.Automation',
   'Microsoft.PowerShell.Commands.Management',
@@ -246,6 +250,171 @@ function Add-ExternalDependenciesFromNuspec {
   }
 }
 
+function Get-PackageDependenciesFromNuspec {
+  param(
+    [Parameter(Mandatory)]
+    [string] $NuspecPath
+  )
+
+  [xml] $Nuspec = Get-Content -LiteralPath $NuspecPath
+  $NamespaceManager = [System.Xml.XmlNamespaceManager]::new($Nuspec.NameTable)
+  $NamespaceManager.AddNamespace('n', $Nuspec.DocumentElement.NamespaceURI)
+
+  $Dependencies = @()
+  foreach ($Dependency in @($Nuspec.SelectNodes('/n:package/n:metadata/n:dependencies//n:dependency', $NamespaceManager))) {
+    $DependencyId = [string] $Dependency.id
+    $DependencyVersion = [string] $Dependency.version
+    if ([string]::IsNullOrWhiteSpace($DependencyId) -or [string]::IsNullOrWhiteSpace($DependencyVersion)) {
+      continue
+    }
+
+    $Dependencies += [pscustomobject]@{
+      Id = $DependencyId
+      Version = $DependencyVersion
+    }
+  }
+
+  return $Dependencies
+}
+
+function Test-PackageDependencyVersionMatchesPowerShell {
+  param(
+    [Parameter(Mandatory)]
+    [string] $DependencyVersion,
+
+    [Parameter(Mandatory)]
+    [string] $ExpectedVersion
+  )
+
+  $NormalizedDependencyVersion = $DependencyVersion.Trim()
+  return $NormalizedDependencyVersion -eq $ExpectedVersion -or $NormalizedDependencyVersion -eq "[$ExpectedVersion]"
+}
+
+function Get-PackageAssetAssemblyNames {
+  param(
+    [Parameter(Mandatory)]
+    [string] $PackageRootPath
+  )
+
+  $AssemblyNames = [System.Collections.Specialized.OrderedDictionary]::new([System.StringComparer]::OrdinalIgnoreCase)
+  $PackageRootFullPath = (Resolve-Path -LiteralPath $PackageRootPath).Path
+  foreach ($Assembly in Get-ChildItem -LiteralPath $PackageRootFullPath -Recurse -File -Filter '*.dll') {
+    $RelativePath = $Assembly.FullName.Substring($PackageRootFullPath.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $PackageRelativePath = $RelativePath -replace '\\', '/'
+    if ($PackageRelativePath -notmatch '^(ref/[^/]+|runtimes/[^/]+/lib/[^/]+)/[^/]+\.dll$') {
+      continue
+    }
+
+    if (-not $AssemblyNames.Contains($Assembly.BaseName)) {
+      $AssemblyNames[$Assembly.BaseName] = $true
+    }
+  }
+
+  return @($AssemblyNames.Keys)
+}
+
+function Resolve-EmbeddedPackageRoots {
+  param(
+    [Parameter(Mandatory)]
+    [string] $PowerShellPackageVersion,
+
+    [Parameter(Mandatory)]
+    [string] $PackageCachePath,
+
+    [Parameter(Mandatory)]
+    [string] $ExtractedPackagesPath,
+
+    [string] $LocalPackageDirectory,
+
+    [string[]] $SourceAssemblyNames
+  )
+
+  $SourceAssemblyNameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($AssemblyName in @($SourceAssemblyNames)) {
+    if (-not [string]::IsNullOrWhiteSpace($AssemblyName)) {
+      [void] $SourceAssemblyNameSet.Add($AssemblyName)
+    }
+  }
+
+  if ($SourceAssemblyNameSet.Count -eq 0) {
+    $FallbackPackageRoots = [ordered]@{}
+    foreach ($EmbeddedPackageId in $DefaultEmbeddedPackageIds) {
+      $PackagePath = Get-PackageSourcePath `
+        -Id $EmbeddedPackageId `
+        -Version $PowerShellPackageVersion `
+        -DestinationDirectory $PackageCachePath `
+        -LocalPackageDirectory $LocalPackageDirectory
+
+      $ExtractedPackagePath = Join-Path $ExtractedPackagesPath $EmbeddedPackageId
+      Expand-Package -PackagePath $PackagePath -DestinationPath $ExtractedPackagePath
+      $FallbackPackageRoots[$EmbeddedPackageId] = $ExtractedPackagePath
+    }
+
+    return $FallbackPackageRoots
+  }
+
+  $Candidates = [ordered]@{}
+  $Pending = [System.Collections.Generic.Queue[string]]::new()
+  $Pending.Enqueue($OriginalPackageId)
+
+  while ($Pending.Count -gt 0) {
+    $CandidatePackageId = $Pending.Dequeue()
+    if ($Candidates.Contains($CandidatePackageId)) {
+      continue
+    }
+
+    $PackagePath = Get-PackageSourcePath `
+      -Id $CandidatePackageId `
+      -Version $PowerShellPackageVersion `
+      -DestinationDirectory $PackageCachePath `
+      -LocalPackageDirectory $LocalPackageDirectory
+
+    $ExtractedPackagePath = Join-Path $ExtractedPackagesPath $CandidatePackageId
+    Expand-Package -PackagePath $PackagePath -DestinationPath $ExtractedPackagePath
+
+    $PackageAssetAssemblyNames = @(Get-PackageAssetAssemblyNames -PackageRootPath $ExtractedPackagePath)
+    $ContainsSourceBuiltAssembly = $CandidatePackageId -eq $OriginalPackageId
+    if (-not $ContainsSourceBuiltAssembly) {
+      foreach ($PackageAssetAssemblyName in $PackageAssetAssemblyNames) {
+        if ($SourceAssemblyNameSet.Contains($PackageAssetAssemblyName)) {
+          $ContainsSourceBuiltAssembly = $true
+          break
+        }
+      }
+    }
+
+    $Dependencies = @(Get-PackageDependenciesFromNuspec -NuspecPath (Get-NuspecPath -PackageRootPath $ExtractedPackagePath))
+    $Candidates[$CandidatePackageId] = [pscustomobject]@{
+      Id = $CandidatePackageId
+      Path = $ExtractedPackagePath
+      Embedded = $ContainsSourceBuiltAssembly
+      Dependencies = $Dependencies
+    }
+
+    foreach ($Dependency in $Dependencies) {
+      if (-not (Test-PackageDependencyVersionMatchesPowerShell -DependencyVersion $Dependency.Version -ExpectedVersion $PowerShellPackageVersion)) {
+        continue
+      }
+      if (-not $Candidates.Contains($Dependency.Id)) {
+        $Pending.Enqueue($Dependency.Id)
+      }
+    }
+  }
+
+  $EmbeddedPackageRoots = [ordered]@{}
+  foreach ($Candidate in $Candidates.Values) {
+    if ($Candidate.Embedded) {
+      $EmbeddedPackageRoots[$Candidate.Id] = $Candidate.Path
+    }
+  }
+
+  if (-not $EmbeddedPackageRoots.Contains($OriginalPackageId)) {
+    throw "Embedded package resolution did not include required root package '$OriginalPackageId'."
+  }
+
+  return $EmbeddedPackageRoots
+}
+
 function Set-NuspecDependencies {
   param(
     [Parameter(Mandatory)]
@@ -374,6 +543,134 @@ function Copy-OverlayFiles {
   }
 }
 
+function Get-NormalizedDirectoryList {
+  param(
+    [AllowNull()]
+    [object] $Value
+  )
+
+  $Directories = @()
+  foreach ($Directory in @($Value)) {
+    if ([string]::IsNullOrWhiteSpace([string] $Directory)) {
+      continue
+    }
+
+    $Directories += [string] $Directory
+  }
+
+  return $Directories
+}
+
+function Find-SourceBuiltPackageFile {
+  param(
+    [Parameter(Mandatory)]
+    [string] $FileName,
+
+    [Parameter(Mandatory)]
+    [string[]] $Directories
+  )
+
+  foreach ($Directory in $Directories) {
+    if ([string]::IsNullOrWhiteSpace($Directory) -or -not (Test-Path -LiteralPath $Directory -PathType Container)) {
+      continue
+    }
+
+    $CandidatePath = Join-Path $Directory $FileName
+    if (Test-Path -LiteralPath $CandidatePath -PathType Leaf) {
+      return $CandidatePath
+    }
+  }
+
+  return $null
+}
+
+function Copy-SourceBuiltPackageAssets {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Root,
+
+    [Parameter(Mandatory)]
+    [System.Collections.IDictionary] $ExtractedPackageRoots,
+
+    [Parameter(Mandatory)]
+    [hashtable] $PackagePathDirectories,
+
+    [Parameter(Mandatory)]
+    [AllowEmptyCollection()]
+    [string[]] $SourceAssemblyNames
+  )
+
+  $SourceAssemblyNameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($AssemblyName in @($SourceAssemblyNames)) {
+    if (-not [string]::IsNullOrWhiteSpace($AssemblyName)) {
+      [void] $SourceAssemblyNameSet.Add($AssemblyName)
+    }
+  }
+
+  if ($SourceAssemblyNameSet.Count -eq 0 -or $PackagePathDirectories.Count -eq 0) {
+    return @()
+  }
+
+  $CopiedPackageAssets = [System.Collections.Specialized.OrderedDictionary]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($PackageId in @($ExtractedPackageRoots.Keys | Sort-Object)) {
+    $ExtractedPackageRoot = (Resolve-Path -LiteralPath $ExtractedPackageRoots[$PackageId]).Path
+    foreach ($PackageAssembly in Get-ChildItem -LiteralPath $ExtractedPackageRoot -Recurse -File -Filter '*.dll') {
+      $RelativePath = $PackageAssembly.FullName.Substring($ExtractedPackageRoot.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+      $PackageRelativePath = $RelativePath -replace '\\', '/'
+      if ($PackageRelativePath -notmatch '^(?<assetDirectory>ref/[^/]+|runtimes/[^/]+/lib/[^/]+)/(?<fileName>[^/]+\.dll)$') {
+        continue
+      }
+
+      $AssetDirectory = $Matches['assetDirectory']
+      $AssemblyName = [System.IO.Path]::GetFileNameWithoutExtension($Matches['fileName'])
+      if (-not $SourceAssemblyNameSet.Contains($AssemblyName) -or -not $PackagePathDirectories.ContainsKey($AssetDirectory)) {
+        continue
+      }
+
+      $SourceDirectories = @(Get-NormalizedDirectoryList -Value $PackagePathDirectories[$AssetDirectory])
+      $SourceDllPath = Find-SourceBuiltPackageFile -FileName "$AssemblyName.dll" -Directories $SourceDirectories
+      if (-not $SourceDllPath) {
+        throw "Package asset '$PackageRelativePath' belongs to source-built assembly '$AssemblyName', but no source-built replacement was found in: $($SourceDirectories -join '; ')"
+      }
+
+      foreach ($Extension in @('.dll', '.xml', '.config')) {
+        $SourceFilePath = Find-SourceBuiltPackageFile -FileName "$AssemblyName$Extension" -Directories $SourceDirectories
+        if (-not $SourceFilePath) {
+          continue
+        }
+
+        $DestinationRelativePath = "$AssetDirectory/$AssemblyName$Extension"
+        $DestinationPath = Join-Path $Root ($DestinationRelativePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        New-Item (Split-Path $DestinationPath -Parent) -ItemType Directory -Force | Out-Null
+        Copy-Item -LiteralPath $SourceFilePath -Destination $DestinationPath -Force
+        if (-not $CopiedPackageAssets.Contains($DestinationRelativePath)) {
+          $CopiedPackageAssets[$DestinationRelativePath] = $true
+        }
+      }
+    }
+  }
+
+  return @($CopiedPackageAssets.Keys)
+}
+
+function Write-PackageTextList {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Root,
+
+    [Parameter(Mandatory)]
+    [string] $PackageRelativePath,
+
+    [Parameter(Mandatory)]
+    [AllowEmptyCollection()]
+    [string[]] $Value
+  )
+
+  $DestinationPath = Join-Path $Root ($PackageRelativePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+  New-Item (Split-Path $DestinationPath -Parent) -ItemType Directory -Force | Out-Null
+  @($Value | Sort-Object -Unique) | Set-Content -LiteralPath $DestinationPath -Encoding utf8
+}
+
 $PackageRootPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($PackageRoot)
 $TempRoot = if ($Env:RUNNER_TEMP) { $Env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
 $WorkDirectory = Join-Path $TempRoot "powershell-sdk-vendor-$([Guid]::NewGuid().ToString('N'))"
@@ -386,21 +683,17 @@ New-Item $PackageRootPath -ItemType Directory -Force | Out-Null
 New-Item $PackageCacheDirectory, $ExtractedPackagesDirectory -ItemType Directory -Force | Out-Null
 
 try {
-  $ExtractedPackageRoots = @{}
+  $ExtractedPackageRoots = Resolve-EmbeddedPackageRoots `
+    -PowerShellPackageVersion $PowerShellVersion `
+    -PackageCachePath $PackageCacheDirectory `
+    -ExtractedPackagesPath $ExtractedPackagesDirectory `
+    -LocalPackageDirectory $SourcePackageDirectory `
+    -SourceAssemblyNames $SourceBuiltAssemblyNames
+  $EmbeddedPackageIds = @($ExtractedPackageRoots.Keys)
 
   foreach ($EmbeddedPackageId in $EmbeddedPackageIds) {
-    $PackagePath = Get-PackageSourcePath `
-      -Id $EmbeddedPackageId `
-      -Version $PowerShellVersion `
-      -DestinationDirectory $PackageCacheDirectory `
-      -LocalPackageDirectory $SourcePackageDirectory
-
-    $ExtractedPackagePath = Join-Path $ExtractedPackagesDirectory $EmbeddedPackageId
-    Expand-Package -PackagePath $PackagePath -DestinationPath $ExtractedPackagePath
-    $ExtractedPackageRoots[$EmbeddedPackageId] = $ExtractedPackagePath
-
     Add-ExternalDependenciesFromNuspec `
-      -NuspecPath (Get-NuspecPath -PackageRootPath $ExtractedPackagePath) `
+      -NuspecPath (Get-NuspecPath -PackageRootPath $ExtractedPackageRoots[$EmbeddedPackageId]) `
       -EmbeddedIds $EmbeddedPackageIds `
       -DependencyGroups $DependencyGroups
   }
@@ -424,6 +717,24 @@ try {
   if ($OverlayPathMap) {
     Copy-OverlayFiles -Root $PackageRootPath -PathMap $OverlayPathMap
   }
+
+  $SourceBuiltPackageAssets = @()
+  if ($SourceBuiltAssemblyDirectoriesByPackagePath) {
+    $SourceBuiltPackageAssets = Copy-SourceBuiltPackageAssets `
+      -Root $PackageRootPath `
+      -ExtractedPackageRoots $ExtractedPackageRoots `
+      -PackagePathDirectories $SourceBuiltAssemblyDirectoriesByPackagePath `
+      -SourceAssemblyNames $SourceBuiltAssemblyNames
+  }
+
+  Write-PackageTextList `
+    -Root $PackageRootPath `
+    -PackageRelativePath 'buildTransitive/embedded-powershell-package-ids.txt' `
+    -Value $EmbeddedPackageIds
+  Write-PackageTextList `
+    -Root $PackageRootPath `
+    -PackageRelativePath 'buildTransitive/source-built-package-assets.txt' `
+    -Value $SourceBuiltPackageAssets
 
   Write-Host "Vendored $OriginalPackageId $PowerShellVersion as $PackageId $PackageVersion with embedded PowerShell assemblies"
 } finally {
