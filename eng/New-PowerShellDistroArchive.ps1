@@ -221,6 +221,21 @@ function Remove-DisposableHostFiles {
   }
 }
 
+function Remove-UnneededDistroFiles {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Root
+  )
+
+  Get-ChildItem -LiteralPath $Root -Filter 'Microsoft.DiaSymReader.Native.*.dll' -File -ErrorAction SilentlyContinue |
+    Remove-Item -Force
+
+  $RemainingDiaSymReaderFiles = @(Get-ChildItem -LiteralPath $Root -Filter 'Microsoft.DiaSymReader.Native.*.dll' -File -ErrorAction SilentlyContinue)
+  if ($RemainingDiaSymReaderFiles.Count -gt 0) {
+    throw "Unneeded DIA symbol reader file was not removed from the PowerShell distro: $($RemainingDiaSymReaderFiles[0].FullName)"
+  }
+}
+
 function Copy-FileIfPresent {
   param(
     [Parameter(Mandatory)]
@@ -799,6 +814,7 @@ Console.WriteLine(typeof(PowerShell).Assembly.GetName().Name);
     -RuntimeIdentifier $RuntimeIdentifier
 
   Remove-DisposableHostFiles -Root $OutputDirectoryPath -HostBaseName $HostBaseName
+  Remove-UnneededDistroFiles -Root $OutputDirectoryPath
   Test-PowerShellDistroLayout -Root $OutputDirectoryPath -Rid $RuntimeIdentifier -ExpectedVersion $PowerShellVersion
 
   Remove-Item -LiteralPath $ArchiveFullPath -Force -ErrorAction SilentlyContinue
