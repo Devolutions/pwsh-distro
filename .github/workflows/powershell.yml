@@ -1,5 +1,18 @@
 name: PowerShell
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_artifact_run_id:
+        description: Optional SDK workflow run ID whose nupkg artifact should be repackaged instead of SDK_PACKAGE_SOURCE
+        default: ""
+        required: false
+      sdk_artifact_name:
+        description: Optional SDK nupkg artifact name from sdk_artifact_run_id
+        default: ""
+        required: false
+permissions:
+  actions: read
+  contents: read
 env:
   POWERSHELL_VERSION: "7.6.3"
   POWERSHELL_RELEASE_TAG: "v7.6.3"
@@ -117,6 +130,15 @@ jobs:
         with:
           global-json-file: pwsh-src/global.json
 
+      - name: Download workflow-built SDK package
+        if: ${{ inputs.sdk_artifact_run_id != '' }}
+        uses: actions/download-artifact@v8.0.1
+        with:
+          run-id: ${{ inputs.sdk_artifact_run_id }}
+          name: ${{ inputs.sdk_artifact_name || format('PowerShell-SDK-Release-{0}', env.SDK_PACKAGE_VERSION) }}
+          path: sdk-package-source
+          github-token: ${{ github.token }}
+
       - name: Package PowerShell distro from SDK
         shell: pwsh
         run: |
@@ -125,11 +147,25 @@ jobs:
           $OutputPath = Join-Path $PWD "PowerShell-$Env:POWERSHELL_VERSION-${{matrix.os}}-${{matrix.arch}}"
           $ArchivePath = "$OutputPath.tar.gz"
           $PackageScript = Join-Path (Join-Path $PWD 'eng') 'New-PowerShellDistroArchive.ps1'
+          $PackageSource = $Env:SDK_PACKAGE_SOURCE
+
+          $SdkArtifactRunId = '${{ inputs.sdk_artifact_run_id }}'.Trim()
+          if ($SdkArtifactRunId) {
+            $PackageSource = Join-Path $PWD 'sdk-package-source'
+            $SdkPackages = @(Get-ChildItem -LiteralPath $PackageSource -Filter "$($Env:SDK_PACKAGE_ID).*nupkg" -File)
+            if ($SdkPackages.Count -ne 1) {
+              throw "Expected exactly one $Env:SDK_PACKAGE_ID nupkg from SDK workflow run '$SdkArtifactRunId', found $($SdkPackages.Count)."
+            }
+
+            Write-Host "Using workflow-built SDK package: $($SdkPackages[0].FullName)"
+          } else {
+            Write-Host "Using SDK package source: $PackageSource"
+          }
 
           & $PackageScript `
             -PackageId $Env:SDK_PACKAGE_ID `
             -PackageVersion $Env:SDK_PACKAGE_VERSION `
-            -PackageSource $Env:SDK_PACKAGE_SOURCE `
+            -PackageSource $PackageSource `
             -PowerShellVersion $Env:POWERSHELL_VERSION `
             -RuntimeIdentifier '${{matrix.rid}}' `
             -OutputDirectory $OutputPath `

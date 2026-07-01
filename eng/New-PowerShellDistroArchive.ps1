@@ -229,10 +229,6 @@ function Test-PowerShellDistroLayout {
   }
 
   $PwshPath = Join-Path $Root $ExecutableName
-  if (-not $IsWindows) {
-    Invoke-NativeCommand chmod @('+x', $PwshPath)
-  }
-
   $PwshOutput = & $PwshPath -NoLogo -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()'
   if ($LASTEXITCODE -ne 0) {
     throw "$PwshPath failed with exit code $LASTEXITCODE"
@@ -310,6 +306,7 @@ $TempRoot = if ($Env:RUNNER_TEMP) { $Env:RUNNER_TEMP } else { [System.IO.Path]::
 $WorkRoot = Join-Path $TempRoot "powershell-distro-$([Guid]::NewGuid().ToString('N'))"
 $ProjectDirectory = Join-Path $WorkRoot 'project'
 $PublishDirectory = Join-Path $WorkRoot 'publish'
+$ArchiveValidationDirectory = Join-Path $WorkRoot 'archive-validation'
 $PackagesDirectory = Join-Path $WorkRoot 'packages'
 $ProjectPath = Join-Path $ProjectDirectory 'PowerShellDistroPackagerHost.csproj'
 $NuGetConfigPath = Join-Path $ProjectDirectory 'nuget.config'
@@ -427,6 +424,9 @@ Console.WriteLine(typeof(PowerShell).Assembly.GetName().Name);
     throw "PowerShell distro archive was not created: $ArchiveFullPath"
   }
   Test-PowerShellDistroArchive -ArchivePath $ArchiveFullPath -Rid $RuntimeIdentifier -HostBaseName $HostBaseName
+  New-Item -Path $ArchiveValidationDirectory -ItemType Directory -Force | Out-Null
+  Invoke-NativeCommand tar @('-xzf', $ArchiveFullPath, '-C', $ArchiveValidationDirectory)
+  Test-PowerShellDistroLayout -Root $ArchiveValidationDirectory -Rid $RuntimeIdentifier -ExpectedVersion $PowerShellVersion
 
   Write-Output "Archive=$ArchiveFullPath"
   Write-Output "OutputDirectory=$OutputDirectoryPath"
