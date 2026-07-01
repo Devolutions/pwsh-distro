@@ -107,6 +107,33 @@ function Assert-SdkPackageVersion {
   }
 }
 
+function Get-NormalizedNuGetPackageVersion {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Version
+  )
+
+  $ParsedVersion = [version]::Parse($Version)
+  if ($ParsedVersion.Revision -eq 0) {
+    return "$($ParsedVersion.Major).$($ParsedVersion.Minor).$($ParsedVersion.Build)"
+  }
+
+  return $Version
+}
+
+function Get-PackageRuntimeGroup {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Rid
+  )
+
+  if ($Rid -like 'win-*') {
+    return 'win'
+  }
+
+  return 'unix'
+}
+
 function Get-CurrentRuntimeIdentifier {
   $Architecture = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
     'X64' { 'x64'; break }
@@ -173,6 +200,105 @@ function Remove-DisposableHostFiles {
   }
 }
 
+function Copy-FileIfPresent {
+  param(
+    [Parameter(Mandatory)]
+    [string] $SourcePath,
+
+    [Parameter(Mandatory)]
+    [string] $DestinationPath
+  )
+
+  if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
+    return
+  }
+
+  $DestinationDirectory = Split-Path -Parent $DestinationPath
+  if ($DestinationDirectory) {
+    New-Item -Path $DestinationDirectory -ItemType Directory -Force | Out-Null
+  }
+
+  Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Force
+}
+
+function Copy-DirectoryIfPresent {
+  param(
+    [Parameter(Mandatory)]
+    [string] $SourcePath,
+
+    [Parameter(Mandatory)]
+    [string] $DestinationPath
+  )
+
+  if (-not (Test-Path -LiteralPath $SourcePath -PathType Container)) {
+    return
+  }
+
+  Remove-Item -LiteralPath $DestinationPath -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -Path (Split-Path -Parent $DestinationPath) -ItemType Directory -Force | Out-Null
+  Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Recurse -Force
+}
+
+function Add-PowerShellDistroAncillaryFiles {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Root,
+
+    [Parameter(Mandatory)]
+    [string] $RepositoryRoot,
+
+    [Parameter(Mandatory)]
+    [string] $PackagesDirectory,
+
+    [Parameter(Mandatory)]
+    [string] $PackageId,
+
+    [Parameter(Mandatory)]
+    [string] $PackageVersion,
+
+    [Parameter(Mandatory)]
+    [string] $TargetFramework,
+
+    [Parameter(Mandatory)]
+    [string] $RuntimeIdentifier
+  )
+
+  $PowerShellSourceRoot = Join-Path $RepositoryRoot 'pwsh-src'
+  Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'LICENSE.txt') -DestinationPath (Join-Path $Root 'LICENSE.txt')
+  Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'ThirdPartyNotices.txt') -DestinationPath (Join-Path $Root 'ThirdPartyNotices.txt')
+  if ($RuntimeIdentifier -like 'win-*') {
+    Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'src\powershell-native\Install-PowerShellRemoting.ps1') -DestinationPath (Join-Path $Root 'Install-PowerShellRemoting.ps1')
+    Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'assets\GroupPolicy\InstallPSCorePolicyDefinitions.ps1') -DestinationPath (Join-Path $Root 'InstallPSCorePolicyDefinitions.ps1')
+  }
+  Copy-DirectoryIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'src\Schemas\PSMaml') -DestinationPath (Join-Path $Root 'Schemas\PSMaml')
+  Copy-DirectoryIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'src\Modules\Shared\Microsoft.PowerShell.Host') -DestinationPath (Join-Path $Root 'Modules\Microsoft.PowerShell.Host')
+  Get-ChildItem -LiteralPath (Join-Path $Root 'Modules') -Filter '.signature.p7s' -Recurse -File -ErrorAction SilentlyContinue |
+    Remove-Item -Force
+
+  $NormalizedPackageVersion = Get-NormalizedNuGetPackageVersion -Version $PackageVersion
+  $PackageRoot = Join-Path $PackagesDirectory (Join-Path $PackageId.ToLowerInvariant() $NormalizedPackageVersion)
+  if (-not (Test-Path -LiteralPath $PackageRoot -PathType Container)) {
+    throw "Restored SDK package directory was not found: $PackageRoot"
+  }
+
+  $RuntimeGroup = Get-PackageRuntimeGroup -Rid $RuntimeIdentifier
+  foreach ($XmlSourceRoot in @(
+      (Join-Path $PackageRoot "ref\$TargetFramework"),
+      (Join-Path $PackageRoot "runtimes\$RuntimeGroup\lib\$TargetFramework"))) {
+    if (-not (Test-Path -LiteralPath $XmlSourceRoot -PathType Container)) {
+      continue
+    }
+
+    Get-ChildItem -LiteralPath $XmlSourceRoot -Filter '*.xml' -File |
+      ForEach-Object {
+        $AssemblyName = [System.IO.Path]::ChangeExtension($_.Name, '.dll')
+        if (Test-Path -LiteralPath (Join-Path $Root $AssemblyName) -PathType Leaf) {
+          Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $Root $_.Name) -Force
+        }
+      }
+  }
+}
+
 function Get-RequiredDistroRelativePaths {
   param(
     [Parameter(Mandatory)]
@@ -182,15 +308,23 @@ function Get-RequiredDistroRelativePaths {
   $ExecutableName = Get-PowerShellExecutableName -Rid $Rid
   $RequiredPaths = @(
     $ExecutableName,
+    'LICENSE.txt',
+    'ThirdPartyNotices.txt',
     'pwsh.dll',
     'pwsh.runtimeconfig.json',
-    'powershell.config.json',
     'System.Management.Automation.dll',
-    'Microsoft.PowerShell.ConsoleHost.dll'
+    'System.Management.Automation.xml',
+    'Microsoft.PowerShell.Commands.Management.xml',
+    'Microsoft.PowerShell.ConsoleHost.dll',
+    'Schemas/PSMaml/Maml.xsd'
   )
+  if ($Rid -like 'win-*') {
+    $RequiredPaths += 'powershell.config.json'
+  }
 
   foreach ($ModuleName in @(
       'Microsoft.PowerShell.Management',
+      'Microsoft.PowerShell.Host',
       'Microsoft.PowerShell.Utility',
       'Microsoft.PowerShell.Security',
       'Microsoft.PowerShell.Archive',
@@ -324,6 +458,7 @@ try {
   $EscapedTargetFramework = ConvertTo-XmlAttributeValue $TargetFramework
   $EscapedRuntimeIdentifier = ConvertTo-XmlAttributeValue $RuntimeIdentifier
   $EscapedHostBaseName = ConvertTo-XmlAttributeValue $HostBaseName
+  $EscapedGenerateConfig = if ($RuntimeIdentifier -like 'win-*') { 'true' } else { 'false' }
 
   $ProjectXml = @"
 <Project Sdk="Microsoft.NET.Sdk">
@@ -336,6 +471,7 @@ try {
     <PowerShellSDKIncludeAppHost>true</PowerShellSDKIncludeAppHost>
     <PowerShellSDKAppHostRuntimeIdentifier>$EscapedRuntimeIdentifier</PowerShellSDKAppHostRuntimeIdentifier>
     <PowerShellSDKIncludePSGalleryModules>true</PowerShellSDKIncludePSGalleryModules>
+    <PowerShellSDKGenerateConfig>$EscapedGenerateConfig</PowerShellSDKGenerateConfig>
     <PowerShellSDKConfigExecutionPolicy>Bypass</PowerShellSDKConfigExecutionPolicy>
     <PowerShellSDKConfigOverwriteExisting>true</PowerShellSDKConfigOverwriteExisting>
   </PropertyGroup>
@@ -414,6 +550,16 @@ Console.WriteLine(typeof(PowerShell).Assembly.GetName().Name);
   Remove-Item -LiteralPath $OutputDirectoryPath -Recurse -Force -ErrorAction SilentlyContinue
   New-Item -Path $OutputDirectoryPath -ItemType Directory -Force | Out-Null
   Copy-Item -Path (Join-Path $PublishDirectory '*') -Destination $OutputDirectoryPath -Recurse -Force
+
+  Remove-Item -LiteralPath (Join-Path $OutputDirectoryPath 'runtimes') -Recurse -Force -ErrorAction SilentlyContinue
+  Add-PowerShellDistroAncillaryFiles `
+    -Root $OutputDirectoryPath `
+    -RepositoryRoot $RepositoryRootPath `
+    -PackagesDirectory $PackagesDirectory `
+    -PackageId $PackageId `
+    -PackageVersion $PackageVersion `
+    -TargetFramework $TargetFramework `
+    -RuntimeIdentifier $RuntimeIdentifier
 
   Remove-DisposableHostFiles -Root $OutputDirectoryPath -HostBaseName $HostBaseName
   Test-PowerShellDistroLayout -Root $OutputDirectoryPath -Rid $RuntimeIdentifier -ExpectedVersion $PowerShellVersion
