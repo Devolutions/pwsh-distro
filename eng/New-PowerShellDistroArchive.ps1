@@ -272,7 +272,7 @@ function Add-PowerShellDistroAncillaryFiles {
   }
   Copy-DirectoryIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'src\Schemas\PSMaml') -DestinationPath (Join-Path $Root 'Schemas\PSMaml')
   Copy-DirectoryIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'src\Modules\Shared\Microsoft.PowerShell.Host') -DestinationPath (Join-Path $Root 'Modules\Microsoft.PowerShell.Host')
-  Get-ChildItem -LiteralPath (Join-Path $Root 'Modules') -Filter '.signature.p7s' -Recurse -File -ErrorAction SilentlyContinue |
+  Get-ChildItem -LiteralPath (Join-Path $Root 'Modules') -Filter '.signature.p7s' -Recurse -File -Force -ErrorAction SilentlyContinue |
     Remove-Item -Force
 
   $NormalizedPackageVersion = Get-NormalizedNuGetPackageVersion -Version $PackageVersion
