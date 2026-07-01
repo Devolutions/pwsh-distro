@@ -1037,7 +1037,7 @@ jobs:
           $SourceBuiltAssemblyDirectoriesByPackagePath = @{
             "ref/$TargetFramework" = $SourceBuiltAssemblyDirectories + @($PackageRuntimeRoots['win'], $PackageRuntimeRoots['unix'])
             "runtimes/unix/lib/$TargetFramework" = $SourceBuiltAssemblyDirectories + @($PackageRuntimeRoots['unix'])
-            "runtimes/win/lib/$TargetFramework" = $SourceBuiltAssemblyDirectories + @($PackageRuntimeRoots['win'])
+            "runtimes/win/lib/$TargetFramework" = @($PackageRuntimeRoots['win']) + $SourceBuiltAssemblyDirectories
           }
 
           ../eng/Vendor-PowerShellSdkPackage.ps1 `
