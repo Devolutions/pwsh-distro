@@ -389,6 +389,32 @@ function Add-OverlayFile {
   }
 }
 
+function Copy-LocalizedResourcesToPackage {
+  param(
+    [Parameter(Mandatory)]
+    [string] $SourceRoot,
+
+    [Parameter(Mandatory)]
+    [string] $DestinationRoot
+  )
+
+  if (-not (Test-Path $SourceRoot -PathType Container)) {
+    return
+  }
+
+  Get-ChildItem -LiteralPath $SourceRoot -Directory |
+    Where-Object { $_.Name -match '^[a-z]{2}(-[A-Za-z0-9]+)?$' } |
+    ForEach-Object {
+      $CultureDirectory = $_
+      Get-ChildItem -LiteralPath $CultureDirectory.FullName -File -Filter '*.resources.dll' |
+        ForEach-Object {
+          $DestinationDirectory = Join-Path $DestinationRoot $CultureDirectory.Name
+          New-Item $DestinationDirectory -ItemType Directory -Force | Out-Null
+          Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $DestinationDirectory $_.Name) -Force
+        }
+    }
+}
+
 function Get-NuGetGlobalPackagesPath {
   $Output = & dotnet nuget locals global-packages --list
   if ($LASTEXITCODE -ne 0) {
@@ -619,6 +645,7 @@ try {
     Add-OverlayFile $SdkOverlayPathMap "ref/$TargetFramework/$AssemblyName.dll" $RefSourcePath
     Add-OverlayFile $SdkOverlayPathMap "ref/$TargetFramework/$AssemblyName.xml" ([System.IO.Path]::ChangeExtension($RefSourcePath, '.xml')) $false
     Add-OverlayFile $SdkOverlayPathMap "runtimes/$RuntimeGroup/lib/$TargetFramework/$AssemblyName.dll" (Join-Path $PackageRuntimePath "$AssemblyName.dll")
+    Add-OverlayFile $SdkOverlayPathMap "runtimes/$RuntimeGroup/lib/$TargetFramework/$AssemblyName.xml" (Join-Path $PackageRuntimePath "$AssemblyName.xml") $false
   }
 
   & (Join-Path $RepositoryRoot 'eng\Vendor-PowerShellSdkPackage.ps1') `
@@ -644,6 +671,23 @@ try {
     -ProjectPath (Join-Path $PwshSourceRoot 'src\Modules\PSGalleryModules.csproj') `
     -DestinationRoot (Join-Path $SdkStagePath 'buildTransitive\psgallery-modules')
 
+  Copy-LocalizedResourcesToPackage `
+    -SourceRoot $AppHostOutputPath `
+    -DestinationRoot (Join-Path $SdkStagePath "buildTransitive\localized-resources\$RuntimeGroup\lib\$TargetFramework")
+
+  if ($RuntimeGroup -eq 'win') {
+    $WindowsDesktopPayloadRoot = Join-Path $SdkStagePath "buildTransitive\windows-desktop-payload\win\lib\$TargetFramework"
+    New-Item $WindowsDesktopPayloadRoot -ItemType Directory -Force | Out-Null
+    foreach ($FileName in @('Microsoft.PowerShell.GraphicalHost.dll', 'Microsoft.PowerShell.GraphicalHost.dll.config', 'Microsoft.PowerShell.GraphicalHost.xml')) {
+      $SourcePath = Join-Path $AppHostOutputPath $FileName
+      if (Test-Path $SourcePath -PathType Leaf) {
+        Copy-Item -LiteralPath $SourcePath -Destination (Join-Path $WindowsDesktopPayloadRoot $FileName) -Force
+      } elseif ($FileName -eq 'Microsoft.PowerShell.GraphicalHost.dll') {
+        throw "Missing Windows desktop payload file: $SourcePath"
+      }
+    }
+  }
+
   foreach ($AppHostRuntimeIdentifier in $AppHostRuntimeIdentifiers) {
     $AppHostAsset = $AppHostAssets[$AppHostRuntimeIdentifier]
     $ExpectedExecutableName = Get-AppHostExecutableName -Rid $AppHostRuntimeIdentifier
@@ -660,12 +704,32 @@ try {
     $SharedPayloadAppHostPath = Join-Path $NativeAppHostPackageRoot $AppHostAsset.AppHostFileName
     New-SharedPayloadAppHost -Rid $AppHostRuntimeIdentifier -DestinationPath $SharedPayloadAppHostPath -ResourceAssemblyPath (Join-Path $AppHostOutputPath 'pwsh.dll')
 
-    foreach ($FileName in @('pwsh.dll', 'pwsh.runtimeconfig.json')) {
+    foreach ($AppHostFile in @(
+        @{ Name = 'pwsh.dll'; Required = $true },
+        @{ Name = 'pwsh.runtimeconfig.json'; Required = $true })) {
+      $FileName = $AppHostFile.Name
       $SourcePath = Join-Path $AppHostOutputPath $FileName
       if (-not (Test-Path $SourcePath -PathType Leaf)) {
+        if (-not $AppHostFile.Required) {
+          continue
+        }
         throw "Missing apphost file: $SourcePath"
       }
       Copy-Item $SourcePath $AppHostPackageRoot -Force
+    }
+
+    $DistroPayloadPackageRoot = Join-Path $SdkStagePath "buildTransitive\powershell-distro-payload\$AppHostRuntimeIdentifier"
+    New-Item $DistroPayloadPackageRoot -ItemType Directory -Force | Out-Null
+    foreach ($DistroFile in @(
+        @{ Name = 'pwsh.xml'; Required = $false })) {
+      $SourcePath = Join-Path $AppHostOutputPath $DistroFile.Name
+      if (-not (Test-Path $SourcePath -PathType Leaf)) {
+        if (-not $DistroFile.Required) {
+          continue
+        }
+        throw "Missing distro payload file: $SourcePath"
+      }
+      Copy-Item $SourcePath $DistroPayloadPackageRoot -Force
     }
   }
 

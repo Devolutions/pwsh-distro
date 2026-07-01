@@ -697,9 +697,43 @@ jobs:
             Copy-Item $SourcePath $StagePath -Force
           }
 
+          $DistroPayloadStagePath = Join-Path $StagePath "powershell-distro-payload"
+          New-Item $DistroPayloadStagePath -ItemType Directory -Force | Out-Null
+          $PwshXmlPath = Join-Path $OutputPath "pwsh.xml"
+          if (-not (Test-Path $PwshXmlPath -PathType Leaf)) {
+            throw "PowerShell apphost build did not produce required distro payload file: $PwshXmlPath"
+          }
+          Copy-Item -LiteralPath $PwshXmlPath -Destination (Join-Path $DistroPayloadStagePath 'pwsh.xml') -Force
+
           $RuntimeNativeStagePath = Join-Path $StagePath "runtime-native"
           $RuntimeNativeAppHostPath = Join-Path $RuntimeNativeStagePath $AppHostAsset.AppHostFileName
           New-SharedPayloadAppHost -Rid $Rid -DestinationPath $RuntimeNativeAppHostPath -ResourceAssemblyPath (Join-Path $OutputPath 'pwsh.dll')
+
+          $LocalizedResourcesStagePath = Join-Path $StagePath "localized-resources"
+          Get-ChildItem -LiteralPath $OutputPath -Directory |
+            Where-Object { $_.Name -match '^[a-z]{2}(-[A-Za-z0-9]+)?$' } |
+            ForEach-Object {
+              $CultureDirectory = $_
+              Get-ChildItem -LiteralPath $CultureDirectory.FullName -File -Filter '*.resources.dll' |
+                ForEach-Object {
+                  $DestinationDirectory = Join-Path $LocalizedResourcesStagePath $CultureDirectory.Name
+                  New-Item $DestinationDirectory -ItemType Directory -Force | Out-Null
+                  Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $DestinationDirectory $_.Name) -Force
+                }
+            }
+
+          if ($Rid -like 'win-*') {
+            $WindowsDesktopPayloadStagePath = Join-Path $StagePath "windows-desktop-payload"
+            New-Item $WindowsDesktopPayloadStagePath -ItemType Directory -Force | Out-Null
+            foreach ($FileName in @('Microsoft.PowerShell.GraphicalHost.dll', 'Microsoft.PowerShell.GraphicalHost.dll.config', 'Microsoft.PowerShell.GraphicalHost.xml')) {
+              $SourcePath = Join-Path $OutputPath $FileName
+              if (Test-Path $SourcePath -PathType Leaf) {
+                Copy-Item -LiteralPath $SourcePath -Destination (Join-Path $WindowsDesktopPayloadStagePath $FileName) -Force
+              } elseif ($FileName -eq 'Microsoft.PowerShell.GraphicalHost.dll') {
+                throw "Missing Windows desktop payload file: $SourcePath"
+              }
+            }
+          }
 
       - name: Validate staged PowerShell apphost
         shell: pwsh
@@ -970,6 +1004,36 @@ jobs:
             }
           }
 
+          function Copy-LocalizedResourcesToPackage {
+            param(
+              [Parameter(Mandatory)]
+              [string] $SourceRoot,
+
+              [Parameter(Mandatory)]
+              [string] $DestinationRoot
+            )
+
+            if (-not (Test-Path $SourceRoot -PathType Container)) {
+              return 0
+            }
+
+            $CopiedCount = 0
+            Get-ChildItem -LiteralPath $SourceRoot -Directory |
+              Where-Object { $_.Name -match '^[a-z]{2}(-[A-Za-z0-9]+)?$' } |
+              ForEach-Object {
+                $CultureDirectory = $_
+                Get-ChildItem -LiteralPath $CultureDirectory.FullName -File -Filter '*.resources.dll' |
+                  ForEach-Object {
+                    $DestinationDirectory = Join-Path $DestinationRoot $CultureDirectory.Name
+                    New-Item $DestinationDirectory -ItemType Directory -Force | Out-Null
+                    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $DestinationDirectory $_.Name) -Force
+                    $CopiedCount++
+                  }
+              }
+
+            return $CopiedCount
+          }
+
           function Pack-VendoredPackage {
             param(
               [Parameter(Mandatory)]
@@ -1121,6 +1185,32 @@ jobs:
             -DestinationRoot (Join-Path $SdkStagePath "buildTransitive/psgallery-modules")
 
           $AppHostDownloadPath = (Resolve-Path ../apphost-download).Path
+          $LocalizedResourceSources = @{
+            'unix' = Join-Path $AppHostDownloadPath 'PowerShell-SDK-AppHost-linux-x64/localized-resources';
+            'win' = Join-Path $AppHostDownloadPath 'PowerShell-SDK-AppHost-win-x64/localized-resources';
+          }
+          foreach ($RuntimeGroup in $LocalizedResourceSources.Keys) {
+            $LocalizedResourceDestinationRoot = Join-Path $SdkStagePath "buildTransitive/localized-resources/$RuntimeGroup/lib/$TargetFramework"
+            $CopiedLocalizedResourceCount = Copy-LocalizedResourcesToPackage `
+              -SourceRoot $LocalizedResourceSources[$RuntimeGroup] `
+              -DestinationRoot $LocalizedResourceDestinationRoot
+            if ($CopiedLocalizedResourceCount -eq 0) {
+              throw "No localized resources were staged for runtime group '$RuntimeGroup' from $($LocalizedResourceSources[$RuntimeGroup])"
+            }
+          }
+
+          $WindowsDesktopPayloadSourceRoot = Join-Path $AppHostDownloadPath 'PowerShell-SDK-AppHost-win-x64/windows-desktop-payload'
+          $WindowsDesktopPayloadDestinationRoot = Join-Path $SdkStagePath "buildTransitive/windows-desktop-payload/win/lib/$TargetFramework"
+          New-Item $WindowsDesktopPayloadDestinationRoot -ItemType Directory -Force | Out-Null
+          foreach ($FileName in @('Microsoft.PowerShell.GraphicalHost.dll', 'Microsoft.PowerShell.GraphicalHost.dll.config', 'Microsoft.PowerShell.GraphicalHost.xml')) {
+            $SourcePath = Join-Path $WindowsDesktopPayloadSourceRoot $FileName
+            if (Test-Path $SourcePath -PathType Leaf) {
+              Copy-Item -LiteralPath $SourcePath -Destination (Join-Path $WindowsDesktopPayloadDestinationRoot $FileName) -Force
+            } elseif ($FileName -eq 'Microsoft.PowerShell.GraphicalHost.dll') {
+              throw "Missing Windows desktop payload file: $SourcePath"
+            }
+          }
+
           $AppHostPackageRoot = Join-Path $SdkStagePath "tools/apphost"
           New-Item $AppHostPackageRoot -ItemType Directory -Force | Out-Null
           $AppHostFilesByRid = [ordered]@{
@@ -1154,6 +1244,14 @@ jobs:
               throw "Missing shared-payload runtime-native apphost for $Rid`: $RuntimeNativeAppHostPath"
             }
             Copy-Item $RuntimeNativeAppHostPath $RuntimeNativeDestinationPath -Force
+
+            $DistroPayloadDestinationPath = Join-Path $SdkStagePath "buildTransitive/powershell-distro-payload/$Rid"
+            New-Item $DistroPayloadDestinationPath -ItemType Directory -Force | Out-Null
+            $PwshXmlPath = Join-Path $ArtifactPath "powershell-distro-payload/pwsh.xml"
+            if (-not (Test-Path $PwshXmlPath -PathType Leaf)) {
+              throw "Missing required PowerShell distro payload file for $Rid`: $PwshXmlPath"
+            }
+            Copy-Item -LiteralPath $PwshXmlPath -Destination (Join-Path $DistroPayloadDestinationPath 'pwsh.xml') -Force
           }
 
           $BuildTransitivePath = Join-Path $SdkStagePath "buildTransitive"
