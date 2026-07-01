@@ -645,7 +645,7 @@ jobs:
 
             Copy-PowerShellSdkSourceBuiltFile `
               -AssemblyName $SourceBuiltAssemblyNames `
-              -SourceDirectory (@($OutputPath, $SdkBinPath) + $SourceBuiltAssemblyDirectories) `
+              -SourceDirectory ($SourceBuiltAssemblyDirectories + @($SdkBinPath, $OutputPath)) `
               -DestinationDirectory $PackageRuntimePath
           }
 
@@ -1035,9 +1035,9 @@ jobs:
             throw "No source-built PowerShell assemblies were found for $TargetFramework."
           }
           $SourceBuiltAssemblyDirectoriesByPackagePath = @{
-            "ref/$TargetFramework" = @($PackageRuntimeRoots['win'], $PackageRuntimeRoots['unix']) + $SourceBuiltAssemblyDirectories
-            "runtimes/unix/lib/$TargetFramework" = @($PackageRuntimeRoots['unix']) + $SourceBuiltAssemblyDirectories
-            "runtimes/win/lib/$TargetFramework" = @($PackageRuntimeRoots['win']) + $SourceBuiltAssemblyDirectories
+            "ref/$TargetFramework" = $SourceBuiltAssemblyDirectories + @($PackageRuntimeRoots['win'], $PackageRuntimeRoots['unix'])
+            "runtimes/unix/lib/$TargetFramework" = $SourceBuiltAssemblyDirectories + @($PackageRuntimeRoots['unix'])
+            "runtimes/win/lib/$TargetFramework" = $SourceBuiltAssemblyDirectories + @($PackageRuntimeRoots['win'])
           }
 
           ../eng/Vendor-PowerShellSdkPackage.ps1 `

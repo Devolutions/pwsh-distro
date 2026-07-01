@@ -582,13 +582,13 @@ try {
 
   Copy-PowerShellSdkSourceBuiltFile `
     -AssemblyName $SourceBuiltAssemblyNames `
-    -SourceDirectory (@($AppHostOutputPath) + $SourceBuiltAssemblyDirectories) `
+    -SourceDirectory ($SourceBuiltAssemblyDirectories + @($AppHostOutputPath)) `
     -DestinationDirectory $PackageRuntimePath
 
   $SdkStagePath = Join-Path $PackageStageRoot $PackageId
   $SourceBuiltAssemblyDirectoriesByPackagePath = @{
-    "ref/$TargetFramework" = @($PackageRuntimePath, $AppHostOutputPath) + $SourceBuiltAssemblyDirectories
-    "runtimes/$RuntimeGroup/lib/$TargetFramework" = @($PackageRuntimePath, $AppHostOutputPath) + $SourceBuiltAssemblyDirectories
+    "ref/$TargetFramework" = $SourceBuiltAssemblyDirectories + @($PackageRuntimePath, $AppHostOutputPath)
+    "runtimes/$RuntimeGroup/lib/$TargetFramework" = $SourceBuiltAssemblyDirectories + @($PackageRuntimePath, $AppHostOutputPath)
   }
 
   & (Join-Path $RepositoryRoot 'eng\Vendor-PowerShellSdkPackage.ps1') `
