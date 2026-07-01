@@ -111,7 +111,7 @@ The SDK package also includes apphost files for `win-x64`, `win-arm64`, `linux-x
 </PropertyGroup>
 ```
 
-The package selects `$(RuntimeIdentifier)` first, then falls back to the SDK host runtime identifier. Set `PowerShellSDKAppHostRuntimeIdentifier` to override that selection explicitly. Unsupported runtime identifiers fail the build with a clear error instead of silently omitting apphost files. The apphost output is intended for running scripts with the core built-in modules from `$PSHOME/Modules`; it is not a full PowerShell distribution archive with localized resources, help content, or optional PSGallery modules.
+The package selects `$(RuntimeIdentifier)` first, then falls back to the SDK host runtime identifier. Set `PowerShellSDKAppHostRuntimeIdentifier` to override that selection explicitly. Unsupported runtime identifiers fail the build with a clear error instead of silently omitting apphost files. The apphost output is intended for running scripts with the core built-in modules from `$PSHOME/Modules`; it is not a full PowerShell distribution archive unless consumers deliberately enable the optional payloads below.
 
 For applications that need architecture-specific apphost launchers in a native asset layout, opt in to runtime-native apphost output:
 
@@ -128,6 +128,16 @@ The source-built PowerShell runtime is patched so out-of-process jobs can use th
 
 When either apphost mode is enabled, the package also generates `powershell.config.json` beside `pwsh.dll` and `pwsh.runtimeconfig.json` in the app or publish root. The default config sets `Microsoft.PowerShell:ExecutionPolicy` to `Bypass`, which lets bundled script modules load from the app-root `$PSHOME` without requiring every launcher invocation to pass `-ExecutionPolicy Bypass`. Set `PowerShellSDKConfigExecutionPolicy` to use another policy value. Set `PowerShellSDKGenerateConfig`, `PowerShellSDKConfigCopyToOutput`, or `PowerShellSDKConfigCopyToPublish` to `false` to disable generation or one copy phase. Existing `powershell.config.json` files are preserved by default; set `PowerShellSDKConfigOverwriteExisting` to `true` only when the package-generated config should replace an existing file.
 
+Localized resource assemblies are staged in the SDK package but are inert by default to keep normal SDK consumers lean. To copy the staged culture directories beside the apphost payload, opt in explicitly:
+
+```xml
+<PropertyGroup>
+  <PowerShellSDKIncludeLocalizedResources>true</PowerShellSDKIncludeLocalizedResources>
+</PropertyGroup>
+```
+
+Set `PowerShellSDKLocalizedResourcesCopyToOutput` or `PowerShellSDKLocalizedResourcesCopyToPublish` to `false` to disable one copy phase. The PowerShell distro archive workflow opts in when the restored SDK package contains localized resources.
+
 The SDK package also stages the optional PSGallery modules that upstream PowerShell bundles into full distribution archives. They are separate from the core built-in module payload and are inert by default. To copy all staged PSGallery modules to the app or publish root `Modules` directory, opt in explicitly:
 
 ```xml
@@ -138,7 +148,7 @@ The SDK package also stages the optional PSGallery modules that upstream PowerSh
 
 Set `PowerShellSDKPSGalleryModuleNames` to a semicolon-delimited subset such as `Microsoft.PowerShell.Archive;Microsoft.PowerShell.ThreadJob` when a consumer does not need every staged PSGallery module. Set `PowerShellSDKPSGalleryModulesCopyToOutput` or `PowerShellSDKPSGalleryModulesCopyToPublish` to `false` to disable one copy phase. PSGallery modules increase package and output size, include additional package-management or interactive functionality, and several are script modules subject to the bundled PowerShell execution policy, so consumers should enable them deliberately.
 
-The secondary PowerShell distro workflow uses this same package-consumer path instead of rebuilding PowerShell from source. It creates a temporary .NET project, restores the pinned SDK package from the pinned package source, enables root apphost and PSGallery module import, publishes self-contained for the matrix RID, removes the temporary host application files, validates the PowerShell layout, and archives the result as `.tar.gz` for every platform, including Windows. For end-to-end dry runs, pass `sdk_artifact_run_id` to `.github/workflows/powershell.yml` so it downloads the `PowerShell-SDK-Release-X.Y.Z.R` artifact from a prior `.github/workflows/powershell-sdk.yml` run and repackages that workflow-built `.nupkg` instead of restoring from NuGet.org.
+The secondary PowerShell distro workflow uses this same package-consumer path instead of rebuilding PowerShell from source. It creates a temporary .NET project, restores the pinned SDK package from the pinned package source, enables root apphost and PSGallery module import, opts into localized resources when present, publishes self-contained for the matrix RID, removes the temporary host application files, validates the PowerShell layout, and archives the result as `.tar.gz` for every platform, including Windows. Windows archives additionally stage the matching `Microsoft.WindowsDesktop.App.Runtime.<rid>` payload so WPF/WinForms assemblies such as `PresentationFramework.dll`, `System.Windows.Forms.dll`, and `WindowsBase.dll` load from `$PSHOME`. For end-to-end dry runs, pass `sdk_artifact_run_id` to `.github/workflows/powershell.yml` so it downloads the `PowerShell-SDK-Release-X.Y.Z.R` artifact from a prior `.github/workflows/powershell-sdk.yml` run and repackages that workflow-built `.nupkg` instead of restoring from NuGet.org.
 
 During NuGet packing, upstream `Microsoft.PowerShell.SDK` content file/reference metadata can emit NU5100/NU5131 package analysis warnings. The SDK workflow treats package validation as the source of truth: the generated sample must restore only the vendored PowerShell package ID, build, publish framework-dependent and self-contained outputs, execute `pwsh`, and load copied built-in modules.
 

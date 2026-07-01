@@ -121,6 +121,27 @@ function Get-NormalizedNuGetPackageVersion {
   return $Version
 }
 
+function Get-RestoredSdkPackageRoot {
+  param(
+    [Parameter(Mandatory)]
+    [string] $PackagesDirectory,
+
+    [Parameter(Mandatory)]
+    [string] $PackageId,
+
+    [Parameter(Mandatory)]
+    [string] $PackageVersion
+  )
+
+  $NormalizedPackageVersion = Get-NormalizedNuGetPackageVersion -Version $PackageVersion
+  $PackageRoot = Join-Path $PackagesDirectory (Join-Path $PackageId.ToLowerInvariant() $NormalizedPackageVersion)
+  if (-not (Test-Path -LiteralPath $PackageRoot -PathType Container)) {
+    throw "Restored SDK package directory was not found: $PackageRoot"
+  }
+
+  return $PackageRoot
+}
+
 function Get-PackageRuntimeGroup {
   param(
     [Parameter(Mandatory)]
@@ -239,6 +260,139 @@ function Copy-DirectoryIfPresent {
   Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Recurse -Force
 }
 
+function Get-IncludedFrameworkVersion {
+  param(
+    [Parameter(Mandatory)]
+    [string] $RuntimeConfigPath,
+
+    [Parameter(Mandatory)]
+    [string] $FrameworkName
+  )
+
+  if (-not (Test-Path -LiteralPath $RuntimeConfigPath -PathType Leaf)) {
+    throw "Runtime config was not found: $RuntimeConfigPath"
+  }
+
+  $RuntimeConfig = Get-Content -LiteralPath $RuntimeConfigPath -Raw | ConvertFrom-Json
+  $IncludedFramework = @($RuntimeConfig.runtimeOptions.includedFrameworks) |
+    Where-Object { [string] $_.name -eq $FrameworkName } |
+    Select-Object -First 1
+  if (-not $IncludedFramework -or [string]::IsNullOrWhiteSpace([string] $IncludedFramework.version)) {
+    throw "Runtime config '$RuntimeConfigPath' does not include framework '$FrameworkName'."
+  }
+
+  return [string] $IncludedFramework.version
+}
+
+function Restore-WindowsDesktopRuntimePack {
+  param(
+    [Parameter(Mandatory)]
+    [string] $RuntimeIdentifier,
+
+    [Parameter(Mandatory)]
+    [string] $TargetFramework,
+
+    [Parameter(Mandatory)]
+    [string] $RuntimePackVersion,
+
+    [Parameter(Mandatory)]
+    [string] $PackagesDirectory,
+
+    [Parameter(Mandatory)]
+    [string] $NuGetConfigPath,
+
+    [Parameter(Mandatory)]
+    [string] $WorkRoot
+  )
+
+  $PackageId = "Microsoft.WindowsDesktop.App.Runtime.$RuntimeIdentifier"
+  $PackageRoot = Join-Path $PackagesDirectory (Join-Path $PackageId.ToLowerInvariant() $RuntimePackVersion)
+  $RuntimePackRoot = Join-Path $PackageRoot "runtimes\$RuntimeIdentifier"
+  if (Test-Path -LiteralPath $RuntimePackRoot -PathType Container) {
+    return $RuntimePackRoot
+  }
+
+  $RestoreDirectory = Join-Path $WorkRoot "windowsdesktop-runtime-$RuntimeIdentifier"
+  New-Item -Path $RestoreDirectory -ItemType Directory -Force | Out-Null
+  $ProjectPath = Join-Path $RestoreDirectory 'WindowsDesktopRuntimeResolver.csproj'
+  $WindowsTargetFramework = "$TargetFramework-windows"
+  $EscapedTargetFramework = ConvertTo-XmlAttributeValue $WindowsTargetFramework
+  $EscapedRuntimeIdentifier = ConvertTo-XmlAttributeValue $RuntimeIdentifier
+  $EscapedRuntimePackVersion = ConvertTo-XmlAttributeValue $RuntimePackVersion
+  @"
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>$EscapedTargetFramework</TargetFramework>
+    <RuntimeIdentifier>$EscapedRuntimeIdentifier</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RuntimeFrameworkVersion>$EscapedRuntimePackVersion</RuntimeFrameworkVersion>
+    <EnableDefaultItems>false</EnableDefaultItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
+  </ItemGroup>
+</Project>
+"@ | Set-Content -LiteralPath $ProjectPath -Encoding utf8
+
+  Invoke-NativeCommand dotnet @('restore', $ProjectPath, '--configfile', $NuGetConfigPath, '--verbosity', 'minimal', '-r', $RuntimeIdentifier, '/p:SelfContained=true')
+  if (-not (Test-Path -LiteralPath $RuntimePackRoot -PathType Container)) {
+    throw "WindowsDesktop runtime pack '$PackageId' version '$RuntimePackVersion' was not restored to: $RuntimePackRoot"
+  }
+
+  return $RuntimePackRoot
+}
+
+function Add-WindowsDesktopRuntimePayload {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Root,
+
+    [Parameter(Mandatory)]
+    [string] $RuntimeIdentifier,
+
+    [Parameter(Mandatory)]
+    [string] $TargetFramework,
+
+    [Parameter(Mandatory)]
+    [string] $PackagesDirectory,
+
+    [Parameter(Mandatory)]
+    [string] $NuGetConfigPath,
+
+    [Parameter(Mandatory)]
+    [string] $WorkRoot
+  )
+
+  if ($RuntimeIdentifier -notlike 'win-*') {
+    return
+  }
+
+  $RuntimePackVersion = Get-IncludedFrameworkVersion `
+    -RuntimeConfigPath (Join-Path $Root 'pwsh.runtimeconfig.json') `
+    -FrameworkName 'Microsoft.WindowsDesktop.App'
+  $RuntimePackRoot = Restore-WindowsDesktopRuntimePack `
+    -RuntimeIdentifier $RuntimeIdentifier `
+    -TargetFramework $TargetFramework `
+    -RuntimePackVersion $RuntimePackVersion `
+    -PackagesDirectory $PackagesDirectory `
+    -NuGetConfigPath $NuGetConfigPath `
+    -WorkRoot $WorkRoot
+
+  foreach ($PayloadRoot in @(
+      (Join-Path $RuntimePackRoot "lib\$TargetFramework"),
+      (Join-Path $RuntimePackRoot 'native'))) {
+    if (Test-Path -LiteralPath $PayloadRoot -PathType Container) {
+      Copy-Item -Path (Join-Path $PayloadRoot '*') -Destination $Root -Recurse -Force
+    }
+  }
+
+  foreach ($BookkeepingFile in @('Microsoft.WindowsDesktop.App.deps.json', 'Microsoft.WindowsDesktop.App.runtimeconfig.json')) {
+    Remove-Item -LiteralPath (Join-Path $Root $BookkeepingFile) -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Add-PowerShellDistroAncillaryFiles {
   param(
     [Parameter(Mandatory)]
@@ -266,22 +420,33 @@ function Add-PowerShellDistroAncillaryFiles {
   $PowerShellSourceRoot = Join-Path $RepositoryRoot 'pwsh-src'
   Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'LICENSE.txt') -DestinationPath (Join-Path $Root 'LICENSE.txt')
   Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'ThirdPartyNotices.txt') -DestinationPath (Join-Path $Root 'ThirdPartyNotices.txt')
+  Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'assets\default.help.txt') -DestinationPath (Join-Path $Root 'en-US\default.help.txt')
   if ($RuntimeIdentifier -like 'win-*') {
     Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'src\powershell-native\Install-PowerShellRemoting.ps1') -DestinationPath (Join-Path $Root 'Install-PowerShellRemoting.ps1')
+    Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'src\PowerShell.Core.Instrumentation\PowerShell.Core.Instrumentation.man') -DestinationPath (Join-Path $Root 'PowerShell.Core.Instrumentation.man')
+    Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'src\PowerShell.Core.Instrumentation\RegisterManifest.ps1') -DestinationPath (Join-Path $Root 'RegisterManifest.ps1')
+    Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'assets\MicrosoftUpdate\RegisterMicrosoftUpdate.ps1') -DestinationPath (Join-Path $Root 'RegisterMicrosoftUpdate.ps1')
     Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'assets\GroupPolicy\InstallPSCorePolicyDefinitions.ps1') -DestinationPath (Join-Path $Root 'InstallPSCorePolicyDefinitions.ps1')
+    Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'assets\GroupPolicy\PowerShellCoreExecutionPolicy.adml') -DestinationPath (Join-Path $Root 'PowerShellCoreExecutionPolicy.adml')
+    Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'assets\GroupPolicy\PowerShellCoreExecutionPolicy.admx') -DestinationPath (Join-Path $Root 'PowerShellCoreExecutionPolicy.admx')
+    Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'src\powershell-win-core\pwsh-preview.cmd') -DestinationPath (Join-Path $Root 'preview\pwsh-preview.cmd')
+    Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'dsc\pwsh.profile.dsc.resource.json') -DestinationPath (Join-Path $Root 'pwsh.profile.dsc.resource.json')
+    Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'dsc\pwsh.profile.resource.ps1') -DestinationPath (Join-Path $Root 'pwsh.profile.resource.ps1')
   }
   Copy-DirectoryIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'src\Schemas\PSMaml') -DestinationPath (Join-Path $Root 'Schemas\PSMaml')
   Copy-DirectoryIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'src\Modules\Shared\Microsoft.PowerShell.Host') -DestinationPath (Join-Path $Root 'Modules\Microsoft.PowerShell.Host')
-  Get-ChildItem -LiteralPath (Join-Path $Root 'Modules') -Filter '.signature.p7s' -Recurse -File -Force -ErrorAction SilentlyContinue |
-    Remove-Item -Force
 
-  $NormalizedPackageVersion = Get-NormalizedNuGetPackageVersion -Version $PackageVersion
-  $PackageRoot = Join-Path $PackagesDirectory (Join-Path $PackageId.ToLowerInvariant() $NormalizedPackageVersion)
-  if (-not (Test-Path -LiteralPath $PackageRoot -PathType Container)) {
-    throw "Restored SDK package directory was not found: $PackageRoot"
-  }
+  $PackageRoot = Get-RestoredSdkPackageRoot -PackagesDirectory $PackagesDirectory -PackageId $PackageId -PackageVersion $PackageVersion
 
   $RuntimeGroup = Get-PackageRuntimeGroup -Rid $RuntimeIdentifier
+  $DistroPayloadPackageRoot = Join-Path $PackageRoot "buildTransitive\powershell-distro-payload\$RuntimeIdentifier"
+  Copy-FileIfPresent -SourcePath (Join-Path $DistroPayloadPackageRoot 'pwsh.xml') -DestinationPath (Join-Path $Root 'pwsh.xml')
+  if ($RuntimeIdentifier -like 'win-*') {
+    $WindowsDesktopPayloadRoot = Join-Path $PackageRoot "buildTransitive\windows-desktop-payload\win\lib\$TargetFramework"
+    Copy-FileIfPresent -SourcePath (Join-Path $WindowsDesktopPayloadRoot 'Microsoft.PowerShell.GraphicalHost.dll') -DestinationPath (Join-Path $Root 'Microsoft.PowerShell.GraphicalHost.dll')
+    Copy-FileIfPresent -SourcePath (Join-Path $WindowsDesktopPayloadRoot 'Microsoft.PowerShell.GraphicalHost.dll.config') -DestinationPath (Join-Path $Root 'Microsoft.PowerShell.GraphicalHost.dll.config')
+    Copy-FileIfPresent -SourcePath (Join-Path $WindowsDesktopPayloadRoot 'Microsoft.PowerShell.GraphicalHost.xml') -DestinationPath (Join-Path $Root 'Microsoft.PowerShell.GraphicalHost.xml')
+  }
   foreach ($XmlSourceRoot in @(
       (Join-Path $PackageRoot "ref\$TargetFramework"),
       (Join-Path $PackageRoot "runtimes\$RuntimeGroup\lib\$TargetFramework"))) {
@@ -310,8 +475,10 @@ function Get-RequiredDistroRelativePaths {
     $ExecutableName,
     'LICENSE.txt',
     'ThirdPartyNotices.txt',
+    'en-US/default.help.txt',
     'pwsh.dll',
     'pwsh.runtimeconfig.json',
+    'pwsh.xml',
     'System.Management.Automation.dll',
     'System.Management.Automation.xml',
     'Microsoft.PowerShell.Commands.Management.xml',
@@ -319,7 +486,23 @@ function Get-RequiredDistroRelativePaths {
     'Schemas/PSMaml/Maml.xsd'
   )
   if ($Rid -like 'win-*') {
-    $RequiredPaths += 'powershell.config.json'
+    $RequiredPaths += @(
+      'Microsoft.PowerShell.GraphicalHost.dll',
+      'Microsoft.PowerShell.GraphicalHost.dll.config',
+      'Microsoft.PowerShell.GraphicalHost.xml',
+      'PowerShell.Core.Instrumentation.man',
+      'PowerShellCoreExecutionPolicy.adml',
+      'PowerShellCoreExecutionPolicy.admx',
+      'PresentationFramework.dll',
+      'RegisterManifest.ps1',
+      'RegisterMicrosoftUpdate.ps1',
+      'System.Windows.Forms.dll',
+      'WindowsBase.dll',
+      'powershell.config.json',
+      'preview/pwsh-preview.cmd',
+      'pwsh.profile.dsc.resource.json',
+      'pwsh.profile.resource.ps1'
+    )
   }
 
   foreach ($ModuleName in @(
@@ -334,6 +517,12 @@ function Get-RequiredDistroRelativePaths {
       'PowerShellGet',
       'PSReadLine')) {
     $RequiredPaths += "Modules/$ModuleName/$ModuleName.psd1"
+  }
+  foreach ($SignedModuleName in @(
+      'Microsoft.PowerShell.PSResourceGet',
+      'Microsoft.PowerShell.ThreadJob',
+      'PSReadLine')) {
+    $RequiredPaths += "Modules/$SignedModuleName/.signature.p7s"
   }
 
   return $RequiredPaths
@@ -371,6 +560,40 @@ function Test-PowerShellDistroLayout {
   $ActualVersion = [string] ($PwshOutput | Select-Object -Last 1)
   if ($ActualVersion.Trim() -ne $ExpectedVersion) {
     throw "$PwshPath reported PowerShell version '$ActualVersion', expected '$ExpectedVersion'"
+  }
+
+  if ($Rid -like 'win-*') {
+    $WindowsDesktopProbe = @'
+$ErrorActionPreference = 'Stop'
+$pshomePath = [System.IO.Path]::GetFullPath($PSHOME).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+foreach ($assemblyName in 'PresentationFramework', 'System.Windows.Forms', 'WindowsBase') {
+  $assembly = [System.Reflection.Assembly]::Load($assemblyName)
+  if ([string]::IsNullOrWhiteSpace($assembly.Location)) {
+    throw "Assembly '$assemblyName' loaded without a file location."
+  }
+
+  $assemblyPath = [System.IO.Path]::GetFullPath($assembly.Location)
+  if (-not $assemblyPath.StartsWith($pshomePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Assembly '$assemblyName' loaded from '$assemblyPath' instead of '$PSHOME'."
+  }
+}
+'@
+    $PreviousDotNetRoot = $Env:DOTNET_ROOT
+    $PreviousDotNetRootX64 = $Env:DOTNET_ROOT_X64
+    $PreviousMultiLevelLookup = $Env:DOTNET_MULTILEVEL_LOOKUP
+    try {
+      $Env:DOTNET_ROOT = 'Z:\missing-dotnet-root'
+      $Env:DOTNET_ROOT_X64 = 'Z:\missing-dotnet-root-x64'
+      $Env:DOTNET_MULTILEVEL_LOOKUP = '0'
+      & $PwshPath -NoLogo -NoProfile -NonInteractive -Command $WindowsDesktopProbe
+      if ($LASTEXITCODE -ne 0) {
+        throw "$PwshPath failed WindowsDesktop self-contained probe with exit code $LASTEXITCODE"
+      }
+    } finally {
+      $Env:DOTNET_ROOT = $PreviousDotNetRoot
+      $Env:DOTNET_ROOT_X64 = $PreviousDotNetRootX64
+      $Env:DOTNET_MULTILEVEL_LOOKUP = $PreviousMultiLevelLookup
+    }
   }
 }
 
@@ -530,7 +753,10 @@ Console.WriteLine(typeof(PowerShell).Assembly.GetName().Name);
   Set-Content -LiteralPath $NuGetConfigPath -Value $NuGetConfig -Encoding utf8
 
   Invoke-NativeCommand dotnet @('restore', $ProjectPath, '--configfile', $NuGetConfigPath, '--verbosity', 'minimal', '-r', $RuntimeIdentifier, '/p:SelfContained=true')
-  Invoke-NativeCommand dotnet @(
+  $PackageRoot = Get-RestoredSdkPackageRoot -PackagesDirectory $PackagesDirectory -PackageId $PackageId -PackageVersion $PackageVersion
+  $RuntimeGroup = Get-PackageRuntimeGroup -Rid $RuntimeIdentifier
+  $LocalizedResourceRoot = Join-Path $PackageRoot "buildTransitive\localized-resources\$RuntimeGroup\lib\$TargetFramework"
+  $PublishArguments = @(
     'publish',
     $ProjectPath,
     '--no-restore',
@@ -546,12 +772,23 @@ Console.WriteLine(typeof(PowerShell).Assembly.GetName().Name);
     '-o',
     $PublishDirectory
   )
+  if (Test-Path -LiteralPath $LocalizedResourceRoot -PathType Container) {
+    $PublishArguments += '/p:PowerShellSDKIncludeLocalizedResources=true'
+  }
+  Invoke-NativeCommand dotnet @PublishArguments
 
   Remove-Item -LiteralPath $OutputDirectoryPath -Recurse -Force -ErrorAction SilentlyContinue
   New-Item -Path $OutputDirectoryPath -ItemType Directory -Force | Out-Null
   Copy-Item -Path (Join-Path $PublishDirectory '*') -Destination $OutputDirectoryPath -Recurse -Force
 
   Remove-Item -LiteralPath (Join-Path $OutputDirectoryPath 'runtimes') -Recurse -Force -ErrorAction SilentlyContinue
+  Add-WindowsDesktopRuntimePayload `
+    -Root $OutputDirectoryPath `
+    -RuntimeIdentifier $RuntimeIdentifier `
+    -TargetFramework $TargetFramework `
+    -PackagesDirectory $PackagesDirectory `
+    -NuGetConfigPath $NuGetConfigPath `
+    -WorkRoot $WorkRoot
   Add-PowerShellDistroAncillaryFiles `
     -Root $OutputDirectoryPath `
     -RepositoryRoot $RepositoryRootPath `
