@@ -697,6 +697,14 @@ jobs:
             Copy-Item $SourcePath $StagePath -Force
           }
 
+          $DistroPayloadStagePath = Join-Path $StagePath "powershell-distro-payload"
+          New-Item $DistroPayloadStagePath -ItemType Directory -Force | Out-Null
+          $PwshXmlPath = Join-Path $OutputPath "pwsh.xml"
+          if (-not (Test-Path $PwshXmlPath -PathType Leaf)) {
+            throw "PowerShell apphost build did not produce required distro payload file: $PwshXmlPath"
+          }
+          Copy-Item -LiteralPath $PwshXmlPath -Destination (Join-Path $DistroPayloadStagePath 'pwsh.xml') -Force
+
           $RuntimeNativeStagePath = Join-Path $StagePath "runtime-native"
           $RuntimeNativeAppHostPath = Join-Path $RuntimeNativeStagePath $AppHostAsset.AppHostFileName
           New-SharedPayloadAppHost -Rid $Rid -DestinationPath $RuntimeNativeAppHostPath -ResourceAssemblyPath (Join-Path $OutputPath 'pwsh.dll')
@@ -1236,6 +1244,14 @@ jobs:
               throw "Missing shared-payload runtime-native apphost for $Rid`: $RuntimeNativeAppHostPath"
             }
             Copy-Item $RuntimeNativeAppHostPath $RuntimeNativeDestinationPath -Force
+
+            $DistroPayloadDestinationPath = Join-Path $SdkStagePath "buildTransitive/powershell-distro-payload/$Rid"
+            New-Item $DistroPayloadDestinationPath -ItemType Directory -Force | Out-Null
+            $PwshXmlPath = Join-Path $ArtifactPath "powershell-distro-payload/pwsh.xml"
+            if (-not (Test-Path $PwshXmlPath -PathType Leaf)) {
+              throw "Missing required PowerShell distro payload file for $Rid`: $PwshXmlPath"
+            }
+            Copy-Item -LiteralPath $PwshXmlPath -Destination (Join-Path $DistroPayloadDestinationPath 'pwsh.xml') -Force
           }
 
           $BuildTransitivePath = Join-Path $SdkStagePath "buildTransitive"

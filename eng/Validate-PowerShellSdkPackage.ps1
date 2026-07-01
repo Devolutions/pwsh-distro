@@ -941,6 +941,7 @@ foreach ($RuntimeNativeRid in $RuntimeNativeValidationRids) {
     "tools/apphost/$RuntimeNativeRid/$RuntimeNativeExecutableName",
     "tools/apphost/$RuntimeNativeRid/pwsh.dll",
     "tools/apphost/$RuntimeNativeRid/pwsh.runtimeconfig.json",
+    "buildTransitive/powershell-distro-payload/$RuntimeNativeRid/pwsh.xml",
     "runtimes/$RuntimeNativeRid/native/$RuntimeNativeExecutableName"
   )
 }
