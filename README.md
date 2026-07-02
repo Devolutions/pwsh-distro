@@ -45,7 +45,7 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 
 | Workflow | Purpose | Output |
 | --- | --- | --- |
-| `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors the source-built PowerShell SDK assemblies into one `Devolutions.PowerShell.SDK` package, signs Windows PE payloads inside it for release, validates it in a sample .NET app with opt-in apphost import, and can publish the validated package. | `PowerShell-SDK-Release-7.6.3.0` artifact containing one `.nupkg`; optional NuGet.org publish plus GitHub release `v7.6.3.0`. |
+| `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors the source-built PowerShell SDK assemblies into one `Devolutions.PowerShell.SDK` package, signs the source-built payloads inside it for release, validates it in a sample .NET app with opt-in apphost import, and can publish the validated package. | `PowerShell-SDK-Release-7.6.3.0` artifact containing one `.nupkg`; optional NuGet.org publish plus GitHub release `v7.6.3.0`. |
 | `.github/workflows/powershell.yml` | Restores the pinned `Devolutions.PowerShell.SDK` package, imports its apphost and module payload through MSBuild, publishes a self-contained PowerShell layout, and repackages it for Windows, macOS, and Linux on x64 and arm64. | `PowerShell-7.6.3-<os>-<arch>` `.tar.gz` artifacts. |
 | `.github/workflows/dotnet-runtime.yml` | Builds the .NET runtime tag used by this PowerShell release for Windows, macOS, and Linux on x86_64 and arm64 with prebuilt clang+llvm from `awakecoding/llvm-prebuilt`. | Runtime build output in the workflow logs/workspace. |
 
@@ -53,7 +53,7 @@ All workflows are manual and can be started from the GitHub Actions **Run workfl
 
 ## Publishing the PowerShell SDK package
 
-The SDK workflow publishes only after the package has been built, had its Windows PE payloads signed for release, and been validated on every RID in the validation matrix. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`.
+The SDK workflow publishes only after the package has been built, had its source-built payloads signed for release, and been validated on every RID in the validation matrix. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`.
 
 Manual inputs:
 
@@ -65,7 +65,7 @@ Manual inputs:
 | `dry-run` | Simulates publishing. This defaults to `true`; non-production environments are forced to dry-run when publishing is requested. |
 | `sign-dry-run` | Signs the package during a dry-run when code signing secrets are available. This defaults to `false` so dry-runs can exercise packaging and release flow without requiring signing credentials. |
 
-Before validation and publishing, the SDK workflow runs a signing stage that downloads the built `.nupkg`, installs the pinned `Devolutions/psign` `psign-tool-linux-x64.zip`, verifies its SHA256, extracts the package, signs Windows `.dll` and `.exe` payloads with Azure Key Vault, and repacks the `.nupkg` without adding a NuGet package signature. A non-dry-run publish requires these environment secrets and variables:
+Before validation and publishing, the SDK workflow runs a signing stage that downloads the built `.nupkg`, installs the pinned `Devolutions/psign` `psign-tool-linux-x64.zip`, verifies its SHA256, extracts the package, signs the source-built payloads inside it with Azure Key Vault, and repacks the `.nupkg` without adding a NuGet package signature. The signing pass covers the built PowerShell assemblies in `ref/` and `runtimes/*/lib/`, the apphost payloads in `tools/apphost/*` and `runtimes/*/native`, the Windows desktop payload, and the built-in module manifests/format/script files in `contentFiles/any/any/runtimes/**/Modules/**`. A non-dry-run publish requires these environment secrets and variables:
 
 | Name | Type |
 | --- | --- |
