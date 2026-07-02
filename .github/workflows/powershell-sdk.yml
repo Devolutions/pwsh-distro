@@ -1286,18 +1286,30 @@ jobs:
 
           $CandidateRoots = @(
             'ref',
+            'runtimes/unix',
             'runtimes/win',
             'runtimes/win-x64/native',
             'runtimes/win-arm64/native',
+            'runtimes/linux-x64/native',
+            'runtimes/linux-arm64/native',
+            'runtimes/osx-x64/native',
+            'runtimes/osx-arm64/native',
             'tools/apphost/win-x64',
-            'tools/apphost/win-arm64'
+            'tools/apphost/win-arm64',
+            'tools/apphost/linux-x64',
+            'tools/apphost/linux-arm64',
+            'tools/apphost/osx-x64',
+            'tools/apphost/osx-arm64',
+            'buildTransitive/windows-desktop-payload',
+            'contentFiles/any/any/runtimes'
           ) | ForEach-Object { Join-Path $ExpandedPackageRoot $_ }
 
+          $SignableExtensions = @('.dll', '.exe', '.psd1', '.psm1', '.ps1xml', '.ps1')
           $CandidateTargets = @(
             foreach ($CandidateRoot in $CandidateRoots) {
               if (Test-Path -LiteralPath $CandidateRoot -PathType Container) {
                 Get-ChildItem -LiteralPath $CandidateRoot -Recurse -File |
-                  Where-Object { $_.Extension -in @('.dll', '.exe') }
+                  Where-Object { $_.Extension -in $SignableExtensions }
               }
             }
           ) | Sort-Object FullName -Unique
@@ -1305,26 +1317,31 @@ jobs:
           $SigningTargets = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
           foreach ($CandidateTarget in $CandidateTargets) {
             $RelativeTarget = [System.IO.Path]::GetRelativePath($ExpandedPackageRoot, $CandidateTarget.FullName)
-            $VerifyOutput = & psign-tool portable verify-pe $CandidateTarget.FullName 2>&1
-            $VerifyExitCode = $LASTEXITCODE
-            if ($VerifyExitCode -eq 0) {
-              Write-Host "Skipping already-signed Windows binary payload: $RelativeTarget"
-              continue
-            }
-            if (($VerifyOutput -join "`n") -match 'PE has no certificate table') {
-              $SigningTargets.Add($CandidateTarget)
-              continue
+            $FileExtension = [System.IO.Path]::GetExtension($CandidateTarget.Name).ToLowerInvariant()
+            if ($FileExtension -in @('.dll', '.exe')) {
+              $VerifyOutput = & psign-tool portable verify-pe $CandidateTarget.FullName 2>&1
+              $VerifyExitCode = $LASTEXITCODE
+              if ($VerifyExitCode -eq 0) {
+                Write-Host "Skipping already-signed Windows binary payload: $RelativeTarget"
+                continue
+              }
+              if (($VerifyOutput -join "`n") -match 'PE has no certificate table') {
+                $SigningTargets.Add($CandidateTarget)
+                continue
+              }
+
+              $VerifyOutput | ForEach-Object { Write-Host $_ }
+              throw "Unable to determine signing state for Windows binary payload '$RelativeTarget'."
             }
 
-            $VerifyOutput | ForEach-Object { Write-Host $_ }
-            throw "Unable to determine signing state for Windows binary payload '$RelativeTarget'."
+            $SigningTargets.Add($CandidateTarget)
           }
 
           if ($SigningTargets.Count -eq 0) {
-            throw "No Windows binary signing targets were found in $($NugetPackage.Name)."
+            throw "No source-built signing targets were found in $($NugetPackage.Name)."
           }
 
-          Write-Host "Signing $($SigningTargets.Count) Windows binary payload(s) inside $($NugetPackage.Name)."
+          Write-Host "Signing $($SigningTargets.Count) source-built payload(s) inside $($NugetPackage.Name)."
           $SigningArgs = @(
             '--mode', 'portable',
             'sign',
