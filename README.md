@@ -35,7 +35,7 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 | PowerShell SDK package source | `https://api.nuget.org/v3/index.json` |
 | multi-pwsh apphost package | `Devolutions.MultiPwsh.Cli` / `0.14.0` |
 | multi-pwsh apphost package source | `https://api.nuget.org/v3/index.json` |
-| psign code signing tool | `v0.5.1` |
+| psign code signing tool | `latest release (un-pinned)` |
 | .NET runtime workflow | `v10.0.5` |
 | llvm-prebuilt | `v2026.1.1` |
 | clang+llvm | `22.1.4` |
@@ -65,7 +65,7 @@ Manual inputs:
 | `dry-run` | Simulates publishing. This defaults to `true`; non-production environments are forced to dry-run when publishing is requested. |
 | `sign-dry-run` | Signs the package during a dry-run when code signing secrets are available. This defaults to `false` so dry-runs can exercise packaging and release flow without requiring signing credentials. |
 
-Before validation and publishing, the SDK workflow runs a signing stage that downloads the built `.nupkg`, installs the pinned `Devolutions/psign` `psign-tool-linux-x64.zip`, verifies its SHA256, extracts the package, signs the source-built payloads inside it with Azure Key Vault, and repacks the `.nupkg` without adding a NuGet package signature. The signing pass covers the built PowerShell assemblies in `ref/` and `runtimes/*/lib/`, the apphost payloads in `tools/apphost/*` and `runtimes/*/native`, the Windows desktop payload, and the built-in module manifests/format/script files in `contentFiles/any/any/runtimes/**/Modules/**`. A non-dry-run publish requires these environment secrets and variables:
+Before validation and publishing, the SDK workflow runs a signing stage that downloads the built `.nupkg`, installs the latest `Devolutions/psign` `psign-tool-linux-x64.zip`, extracts the package, signs the source-built payloads inside it with Azure Key Vault, and repacks the `.nupkg` without adding a NuGet package signature. The signing pass covers the built PowerShell assemblies in `ref/` and `runtimes/*/lib/`, the apphost payloads in `tools/apphost/*` and `runtimes/*/native`, the Windows desktop payload, and the built-in module manifests/format/script files in `contentFiles/any/any/runtimes/**/Modules/**`. A non-dry-run publish requires these environment secrets and variables:
 
 | Name | Type |
 | --- | --- |

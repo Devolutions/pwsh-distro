@@ -42,8 +42,7 @@ env:
   MULTI_PWSH_APPHOST_PACKAGE_ID: "Devolutions.MultiPwsh.Cli"
   MULTI_PWSH_APPHOST_PACKAGE_VERSION: "0.14.0"
   MULTI_PWSH_APPHOST_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
-  PSIGN_RELEASE_TAG: "v0.5.1"
-  PSIGN_TOOL_LINUX_X64_SHA256: "de293360c1aed93709b80980e1ad47998b2b73f76fae40cf48f08213f862a463"
+  PSIGN_TOOL_LINUX_X64_URL: "https://github.com/Devolutions/psign/releases/latest/download/psign-tool-linux-x64.zip"
 jobs:
   preflight:
     name: Preflight
@@ -1216,7 +1215,7 @@ jobs:
           echo "::notice::SDKCodeSigningSignDryRun: $SignDryRun"
           echo "::notice::SDKPackageWillBeCodeSigned: $ShouldSign"
 
-      - name: Install psign tool
+      - name: Install latest psign tool
         if: steps.signing-mode.outputs.should_sign == 'true'
         shell: pwsh
         run: |
@@ -1227,13 +1226,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $ToolRoot | Out-Null
 
           $ArchivePath = Join-Path $ToolRoot "psign-tool-linux-x64.zip"
-          $DownloadUrl = "https://github.com/Devolutions/psign/releases/download/$Env:PSIGN_RELEASE_TAG/psign-tool-linux-x64.zip"
-          Invoke-WebRequest -Uri $DownloadUrl -OutFile $ArchivePath
-
-          $ActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ArchivePath).Hash.ToLowerInvariant()
-          if ($ActualHash -ne $Env:PSIGN_TOOL_LINUX_X64_SHA256) {
-            throw "Unexpected psign-tool-linux-x64.zip SHA256 '$ActualHash', expected '$Env:PSIGN_TOOL_LINUX_X64_SHA256'."
-          }
+          Invoke-WebRequest -Uri $Env:PSIGN_TOOL_LINUX_X64_URL -OutFile $ArchivePath
 
           Expand-Archive -Path $ArchivePath -DestinationPath $ToolRoot -Force
           $ToolPath = Join-Path $ToolRoot "psign-tool"
@@ -1243,10 +1236,11 @@ jobs:
 
           chmod +x $ToolPath
           $ToolRoot >> $Env:GITHUB_PATH
-          & $ToolPath --version
+          $VersionOutput = & $ToolPath --version 2>&1
           if ($LASTEXITCODE -ne 0) {
             throw "psign-tool --version failed with exit code $LASTEXITCODE"
           }
+          Write-Host "Installed psign-tool version: $(($VersionOutput | Out-String).Trim())"
 
       - name: Code sign PowerShell SDK package
         shell: pwsh
