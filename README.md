@@ -45,15 +45,16 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 
 | Workflow | Purpose | Output |
 | --- | --- | --- |
-| `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors the source-built PowerShell SDK assemblies into one `Devolutions.PowerShell.SDK` package, signs the source-built payloads inside it for release, validates it in a sample .NET app with opt-in apphost import, and can publish the validated package. | `PowerShell-SDK-Release-7.6.3.0` artifact containing one `.nupkg`; optional NuGet.org publish plus GitHub release `v7.6.3.0`. |
-| `.github/workflows/powershell.yml` | Restores the pinned `Devolutions.PowerShell.SDK` package, imports its apphost and module payload through MSBuild, publishes a self-contained PowerShell layout, and repackages it for Windows, macOS, and Linux on x64 and arm64. | `PowerShell-7.6.3-<os>-<arch>` `.tar.gz` artifacts. |
+| `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors the source-built PowerShell SDK assemblies into one `Devolutions.PowerShell.SDK` package, signs the source-built payloads, and validates it in a sample .NET app with opt-in apphost import. It can run manually or as a reusable workflow. | `PowerShell-SDK-Release-7.6.3.0` artifact containing one `.nupkg`. |
+| `.github/workflows/powershell-cli.yml` | Restores a pinned or workflow-built `Devolutions.PowerShell.SDK` package, imports its apphost and module payload through MSBuild, publishes a self-contained PowerShell layout, and repackages it for Windows, macOS, and Linux on x64 and arm64. It can run manually or as a reusable workflow. | `PowerShell-7.6.3-<os>-<arch>` `.tar.gz` artifacts. |
+| `.github/workflows/release.yml` | Orchestrates the reusable SDK workflow first, repackages that signed SDK artifact through the reusable CLI workflow, publishes the SDK package, and creates the GitHub release. | NuGet.org publish plus GitHub release `v7.6.3.0` containing the SDK `.nupkg`, all CLI `.tar.gz` archives, and checksums. |
 | `.github/workflows/dotnet-runtime.yml` | Builds the .NET runtime tag used by this PowerShell release for Windows, macOS, and Linux on x86_64 and arm64 with prebuilt clang+llvm from `awakecoding/llvm-prebuilt`. | Runtime build output in the workflow logs/workspace. |
 
 All workflows are manual and can be started from the GitHub Actions **Run workflow** button.
 
-## Publishing the PowerShell SDK package
+## Publishing PowerShell releases
 
-The SDK workflow publishes only after the package has been built, had its source-built payloads signed for release, and been validated on every RID in the validation matrix. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`.
+The release workflow publishes only after the SDK package has been built, had its source-built payloads signed for release, been validated on every RID in the validation matrix, and been repackaged into every CLI archive. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`.
 
 Manual inputs:
 
@@ -61,11 +62,11 @@ Manual inputs:
 | --- | --- |
 | `sdk_package_revision` | Optional revision override. Leave blank to use the explicit `SDK_PACKAGE_REVISION` env pin, set a number such as `1` for a specific downstream revision, or set `auto` to infer the next revision from existing `vX.Y.Z.R` release tags. |
 | `github-env` | `auto`, `test`, or `prod`. `auto` selects `publish-prod` for manual runs from `master` and `publish-test` elsewhere. |
-| `skip-publish` | Builds and validates the package without publishing to NuGet.org or creating a GitHub release. |
+| `skip-publish` | Builds, signs when requested, validates, and packages artifacts without publishing to NuGet.org or creating a GitHub release. |
 | `dry-run` | Simulates publishing. This defaults to `true`; non-production environments are forced to dry-run when publishing is requested. |
 | `sign-dry-run` | Signs the package during a dry-run when code signing secrets are available. This defaults to `false` so dry-runs can exercise packaging and release flow without requiring signing credentials. |
 
-Before validation and publishing, the SDK workflow runs a signing stage that downloads the built `.nupkg`, installs the latest `Devolutions/psign` `psign-tool-linux-x64.zip`, extracts the package, signs the source-built payloads inside it with Azure Key Vault, and repacks the `.nupkg` without adding a NuGet package signature. The signing pass covers the built PowerShell assemblies in `ref/` and `runtimes/*/lib/`, the apphost payloads in `tools/apphost/*` and `runtimes/*/native`, the Windows desktop payload, and the built-in module manifests/format/script files in `contentFiles/any/any/runtimes/**/Modules/**`. A non-dry-run publish requires these environment secrets and variables:
+Before validation and CLI packaging, the SDK workflow runs a signing stage that downloads the built `.nupkg`, installs the latest `Devolutions/psign` `psign-tool-linux-x64.zip`, extracts the package, signs the source-built payloads inside it with Azure Key Vault, and repacks the `.nupkg` without adding a NuGet package signature. The signing pass covers the built PowerShell assemblies in `ref/` and `runtimes/*/lib/`, the apphost payloads in `tools/apphost/*` and `runtimes/*/native`, the Windows desktop payload, and the built-in module manifests/format/script files in `contentFiles/any/any/runtimes/**/Modules/**`. CLI archives are built from this release-ready SDK package, so their Windows executable and module payloads come from the signed `.nupkg`. A non-dry-run publish requires these environment secrets and variables:
 
 | Name | Type |
 | --- | --- |
@@ -76,7 +77,7 @@ Before validation and publishing, the SDK workflow runs a signing stage that dow
 | `CODE_SIGNING_CERTIFICATE_NAME` | Secret |
 | `CODE_SIGNING_TIMESTAMP_SERVER` | Variable |
 
-Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation. A real publish pushes the validated `.nupkg` containing signed Windows payloads to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the package asset, and a SHA256 checksum file.
+Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The release workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation only in the publishing job. A real publish pushes the validated `.nupkg` containing signed Windows payloads to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the SDK package asset, every CLI archive, and a SHA256 checksum file covering all release assets.
 
 ## Branching model
 
@@ -86,7 +87,7 @@ This repository follows a downstream patch branch model inspired by `Devolutions
 
 When moving to a new upstream PowerShell release, the bump touches four surfaces in the same PR:
 
-1. Workflow `env` blocks in `.github/workflows/powershell-sdk.yml` and `.github/workflows/powershell.yml`: `POWERSHELL_VERSION`, `POWERSHELL_RELEASE_TAG`, `POWERSHELL_UPSTREAM_TAG`, and `POWERSHELL_SOURCE_REF`. Reset `.github/workflows/powershell-sdk.yml` `SDK_PACKAGE_REVISION` to `0` for the first downstream SDK package built from a new upstream tag, and keep `.github/workflows/powershell.yml` `SDK_PACKAGE_VERSION` and `SDK_PACKAGE_REVISION` aligned with the SDK package version that the distro workflow should repackage.
+1. Workflow `env` blocks in `.github/workflows/powershell-sdk.yml` and `.github/workflows/powershell-cli.yml`: `POWERSHELL_VERSION`, `POWERSHELL_RELEASE_TAG`, `POWERSHELL_UPSTREAM_TAG`, and `POWERSHELL_SOURCE_REF`. Reset `.github/workflows/powershell-sdk.yml` `SDK_PACKAGE_REVISION` to `0` for the first downstream SDK package built from a new upstream tag, and keep `.github/workflows/powershell-cli.yml` `SDK_PACKAGE_VERSION` and `SDK_PACKAGE_REVISION` aligned with the SDK package version that the CLI workflow should repackage by default.
 2. `.gitmodules`: the `branch = downstream/vX.Y.Z` line under `[submodule "pwsh-src"]` (git does not expand variables in `.gitmodules`, so this must be edited literally).
 3. The `pwsh-src` submodule pointer on `master`, bumped to the new `downstream/vX.Y.Z` tip with `git submodule update --remote pwsh-src && git add pwsh-src`.
 4. The "Current pins" table above.
@@ -148,7 +149,7 @@ The SDK package also stages the optional PSGallery modules that upstream PowerSh
 
 Set `PowerShellSDKPSGalleryModuleNames` to a semicolon-delimited subset such as `Microsoft.PowerShell.Archive;Microsoft.PowerShell.ThreadJob` when a consumer does not need every staged PSGallery module. Set `PowerShellSDKPSGalleryModulesCopyToOutput` or `PowerShellSDKPSGalleryModulesCopyToPublish` to `false` to disable one copy phase. PSGallery modules increase package and output size, include additional package-management or interactive functionality, and several are script modules subject to the bundled PowerShell execution policy, so consumers should enable them deliberately.
 
-The secondary PowerShell distro workflow uses this same package-consumer path instead of rebuilding PowerShell from source. It creates a temporary .NET project, restores the pinned SDK package from the pinned package source, enables root apphost and PSGallery module import, opts into localized resources when present, publishes self-contained for the matrix RID, removes the temporary host application files, validates the PowerShell layout, and archives the result as `.tar.gz` for every platform, including Windows. Windows archives additionally stage the matching `Microsoft.WindowsDesktop.App.Runtime.<rid>` payload so WPF/WinForms assemblies such as `PresentationFramework.dll`, `System.Windows.Forms.dll`, and `WindowsBase.dll` load from `$PSHOME`. For end-to-end dry runs, pass `sdk_artifact_run_id` to `.github/workflows/powershell.yml` so it downloads the `PowerShell-SDK-Release-X.Y.Z.R` artifact from a prior `.github/workflows/powershell-sdk.yml` run and repackages that workflow-built `.nupkg` instead of restoring from NuGet.org.
+The secondary PowerShell CLI workflow uses this same package-consumer path instead of rebuilding PowerShell from source. It creates a temporary .NET project, restores the pinned SDK package from the pinned package source or a workflow-built SDK artifact, enables root apphost and PSGallery module import, opts into localized resources when present, publishes self-contained for the matrix RID, removes the temporary host application files, validates the PowerShell layout, and archives the result as `.tar.gz` for every platform, including Windows. Windows archives additionally stage the matching `Microsoft.WindowsDesktop.App.Runtime.<rid>` payload so WPF/WinForms assemblies such as `PresentationFramework.dll`, `System.Windows.Forms.dll`, and `WindowsBase.dll` load from `$PSHOME`. For end-to-end dry runs outside `.github/workflows/release.yml`, pass `sdk_artifact_run_id` to `.github/workflows/powershell-cli.yml` so it downloads the `PowerShell-SDK-Release-X.Y.Z.R` artifact from a prior `.github/workflows/powershell-sdk.yml` run and repackages that workflow-built `.nupkg` instead of restoring from NuGet.org. If the artifact name does not include the SDK version, also pass `sdk_package_version`.
 
 During NuGet packing, upstream `Microsoft.PowerShell.SDK` content file/reference metadata can emit NU5100/NU5131 package analysis warnings. The SDK workflow treats package validation as the source of truth: the generated sample must restore only the vendored PowerShell package ID, build, publish framework-dependent and self-contained outputs, execute `pwsh`, and load copied built-in modules.
 
