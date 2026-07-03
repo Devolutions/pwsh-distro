@@ -613,7 +613,7 @@ function Invoke-RuntimeNativeOverwriteProbe {
       '-verbosity:minimal',
       "-t:$TargetName",
       "/p:RuntimeIdentifier=$CurrentRuntimeIdentifier",
-      "/p:PowerShellSDKIncludeRuntimeNativeAppHosts=true",
+      "/p:PowerShellSDKAppHostLayout=RuntimeNative",
       "/p:PowerShellSDKRuntimeNativeAppHostRuntimeIdentifiers=$RuntimeIdentifiersPropertyValue"
     )
     if ($PublishDirectory) {
@@ -1161,7 +1161,7 @@ foreach (PSObject result in ps.Invoke())
     Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'TargetFramework' -Value $SampleTargetFramework
   }
   Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'RuntimeIdentifier' -Value $RuntimeIdentifier
-  Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'PowerShellSDKIncludeRuntimeNativeAppHosts' -Value 'true'
+  Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'PowerShellSDKAppHostLayout' -Value 'RuntimeNative'
   Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'PowerShellSDKRuntimeNativeAppHostRuntimeIdentifiers' -Value ($RuntimeNativeValidationRids -join ';')
   Add-RuntimeNativePublishDuplicateProbeTarget -Project $Project -PackageId $PackageId -PackageVersion $NormalizedPackageVersion -RuntimeIdentifiers $RuntimeNativeValidationRids
   if ($RuntimeAssetGroup -eq 'win') {
@@ -1257,7 +1257,7 @@ foreach (PSObject result in ps.Invoke())
     '-nologo',
     '-verbosity:minimal',
     '-t:PowerShellSDKCopyRuntimeNativeLocalizedResourcesToOutput',
-    '/p:PowerShellSDKIncludeLocalizedResources=true'
+    '/p:PowerShellSDKLocalizedResources=Copy'
   )
   Assert-LocalizedResourcePresent -Directory $OutputDirectory -RelativePath $RepresentativeLocalizedResourcePath -Description 'Sample app output with localized resources opt-in'
   Assert-FileContentMatches -ExpectedPath $RepresentativeLocalizedResourcePackagePath -ActualPath $OutputLocalizedResourcePath -Description 'Sample app output localized resource opt-in'
@@ -1308,7 +1308,7 @@ foreach (PSObject result in ps.Invoke())
     }
   }
 
-  $PSGallerySubsetModuleNamesPropertyValue = $PSGallerySubsetModuleNames -join ';'
+  $PSGallerySubsetModuleNamesPropertyValue = $PSGallerySubsetModuleNames -join '%3B'
   $UnexpectedPSGallerySubsetModuleNames = @($PSGalleryModulePackageIds | Where-Object { $PSGallerySubsetModuleNames -notcontains $_ })
   Invoke-DotNet @(
     'msbuild',
@@ -1316,8 +1316,7 @@ foreach (PSObject result in ps.Invoke())
     '-nologo',
     '-verbosity:minimal',
     '-t:PowerShellSDKCopyPSGalleryModulesToOutput',
-    "/p:PowerShellSDKIncludePSGalleryModules=true",
-    "/p:PowerShellSDKPSGalleryModuleNames=$PSGallerySubsetModuleNamesPropertyValue"
+    "/p:PowerShellSDKPSGalleryModules=$PSGallerySubsetModuleNamesPropertyValue"
   )
   Assert-PSGalleryModulesPresent -Directory $OutputDirectory -ModuleNames $PSGallerySubsetModuleNames -Description 'Sample app output with PSGallery subset opt-in'
   Assert-PSGalleryModulesAbsent -Directory $OutputDirectory -ModuleNames $UnexpectedPSGallerySubsetModuleNames -Description 'Sample app output with PSGallery subset opt-in'
@@ -1328,7 +1327,7 @@ foreach (PSObject result in ps.Invoke())
     '-nologo',
     '-verbosity:minimal',
     '-t:PowerShellSDKCopyPSGalleryModulesToOutput',
-    "/p:PowerShellSDKIncludePSGalleryModules=true"
+    "/p:PowerShellSDKPSGalleryModules=All"
   )
   Assert-PSGalleryModulesPresent -Directory $OutputDirectory -ModuleNames $PSGalleryProbeModuleNames -Description 'Sample app output with PSGallery opt-in'
   $OutputRuntimeNativePwshPath = Join-Path $OutputDirectory "runtimes/$RuntimeIdentifier/native/$ExecutableName"
@@ -1350,8 +1349,7 @@ foreach (PSObject result in ps.Invoke())
     'false',
     '-o',
     $PSGalleryPublishDirectory,
-    "/p:PowerShellSDKIncludePSGalleryModules=true",
-    "/p:PowerShellSDKPSGalleryModuleNames=$PSGallerySubsetModuleNamesPropertyValue"
+    "/p:PowerShellSDKPSGalleryModules=$PSGallerySubsetModuleNamesPropertyValue"
   )
   Assert-SharedPowerShellOutput -Directory $PSGalleryPublishDirectory -SelfContained $false -Description 'Sample PSGallery publish output'
   Assert-PowerShellConfig -Directory $PSGalleryPublishDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample PSGallery publish output'
@@ -1378,7 +1376,7 @@ foreach (PSObject result in ps.Invoke())
     'false',
     '-o',
     $LocalizedPublishDirectory,
-    '/p:PowerShellSDKIncludeLocalizedResources=true'
+    '/p:PowerShellSDKLocalizedResources=Copy'
   )
   Assert-SharedPowerShellOutput -Directory $LocalizedPublishDirectory -SelfContained $false -Description 'Sample localized resource publish output'
   Assert-LocalizedResourcePresent -Directory $LocalizedPublishDirectory -RelativePath $RepresentativeLocalizedResourcePath -Description 'Sample localized resource publish output'

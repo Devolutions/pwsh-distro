@@ -746,7 +746,7 @@ try {
   $EscapedTargetFramework = ConvertTo-XmlAttributeValue $TargetFramework
   $EscapedRuntimeIdentifier = ConvertTo-XmlAttributeValue $RuntimeIdentifier
   $EscapedHostBaseName = ConvertTo-XmlAttributeValue $HostBaseName
-  $EscapedGenerateConfig = if ($RuntimeIdentifier -like 'win-*') { 'true' } else { 'false' }
+  $EscapedConfigMode = if ($RuntimeIdentifier -like 'win-*') { 'Copy' } else { 'None' }
 
   $ProjectXml = @"
 <Project Sdk="Microsoft.NET.Sdk">
@@ -756,10 +756,10 @@ try {
     <RuntimeIdentifier>$EscapedRuntimeIdentifier</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <AssemblyName>$EscapedHostBaseName</AssemblyName>
-    <PowerShellSDKIncludeAppHost>true</PowerShellSDKIncludeAppHost>
+    <PowerShellSDKAppHostLayout>Root</PowerShellSDKAppHostLayout>
     <PowerShellSDKAppHostRuntimeIdentifier>$EscapedRuntimeIdentifier</PowerShellSDKAppHostRuntimeIdentifier>
-    <PowerShellSDKIncludePSGalleryModules>true</PowerShellSDKIncludePSGalleryModules>
-    <PowerShellSDKGenerateConfig>$EscapedGenerateConfig</PowerShellSDKGenerateConfig>
+    <PowerShellSDKPSGalleryModules>All</PowerShellSDKPSGalleryModules>
+    <PowerShellSDKConfig>$EscapedConfigMode</PowerShellSDKConfig>
     <PowerShellSDKConfigExecutionPolicy>Bypass</PowerShellSDKConfigExecutionPolicy>
     <PowerShellSDKConfigOverwriteExisting>true</PowerShellSDKConfigOverwriteExisting>
   </PropertyGroup>
@@ -838,7 +838,7 @@ Console.WriteLine(typeof(PowerShell).Assembly.GetName().Name);
     $PublishDirectory
   )
   if (Test-Path -LiteralPath $LocalizedResourceRoot -PathType Container) {
-    $PublishArguments += '/p:PowerShellSDKIncludeLocalizedResources=true'
+    $PublishArguments += '/p:PowerShellSDKLocalizedResources=Copy'
   }
   Invoke-NativeCommand dotnet @PublishArguments
 
