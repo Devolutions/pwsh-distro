@@ -1,15 +1,36 @@
-name: PowerShell
+name: PowerShell CLI
 on:
   workflow_dispatch:
     inputs:
+      sdk_package_version:
+        description: Optional SDK package version override (blank = use SDK_PACKAGE_VERSION)
+        default: ""
+        required: false
       sdk_artifact_run_id:
         description: Optional SDK workflow run ID whose nupkg artifact should be repackaged instead of SDK_PACKAGE_SOURCE
         default: ""
         required: false
       sdk_artifact_name:
-        description: Optional SDK nupkg artifact name from sdk_artifact_run_id
+        description: Optional SDK nupkg artifact name to repackage instead of SDK_PACKAGE_SOURCE
         default: ""
         required: false
+  workflow_call:
+    inputs:
+      sdk_package_version:
+        description: Optional SDK package version override (blank = use SDK_PACKAGE_VERSION)
+        default: ""
+        required: false
+        type: string
+      sdk_artifact_run_id:
+        description: Optional SDK workflow run ID whose nupkg artifact should be repackaged instead of SDK_PACKAGE_SOURCE
+        default: ""
+        required: false
+        type: string
+      sdk_artifact_name:
+        description: Optional SDK nupkg artifact name to repackage instead of SDK_PACKAGE_SOURCE
+        default: ""
+        required: false
+        type: string
 permissions:
   actions: read
   contents: read
@@ -101,14 +122,24 @@ jobs:
             throw "POWERSHELL_VERSION '$Env:POWERSHELL_VERSION' does not match POWERSHELL_RELEASE_TAG '$Env:POWERSHELL_RELEASE_TAG'."
           }
 
-          $ExpectedSdkPackageVersion = "$Env:POWERSHELL_VERSION.$Env:SDK_PACKAGE_REVISION"
-          if ($Env:SDK_PACKAGE_VERSION -ne $ExpectedSdkPackageVersion) {
-            throw "SDK_PACKAGE_VERSION '$Env:SDK_PACKAGE_VERSION' does not match POWERSHELL_VERSION.SDK_PACKAGE_REVISION '$ExpectedSdkPackageVersion'."
+          $SdkPackageVersion = '${{ inputs.sdk_package_version }}'.Trim()
+          if ([string]::IsNullOrWhiteSpace($SdkPackageVersion)) {
+            $SdkArtifactName = '${{ inputs.sdk_artifact_name }}'.Trim()
+            if ($SdkArtifactName -match '^PowerShell-SDK-Release-(\d+\.\d+\.\d+\.\d+)$') {
+              $SdkPackageVersion = $Matches[1]
+            } else {
+              $SdkPackageVersion = $Env:SDK_PACKAGE_VERSION
+            }
+          }
+
+          $EscapedPowerShellVersion = [regex]::Escape($Env:POWERSHELL_VERSION)
+          if ($SdkPackageVersion -notmatch "^$EscapedPowerShellVersion\.\d+$") {
+            throw "SDK package version '$SdkPackageVersion' does not match expected PowerShell version prefix '$Env:POWERSHELL_VERSION'."
           }
 
           $SourceCommit = (Invoke-GitPowerShell rev-parse HEAD).Trim()
           Write-Host "PowerShell source: $Env:POWERSHELL_SOURCE_REPOSITORY@$Env:POWERSHELL_SOURCE_REF ($SourceCommit)"
-          Write-Host "PowerShell SDK package: $Env:SDK_PACKAGE_ID $Env:SDK_PACKAGE_VERSION from $Env:SDK_PACKAGE_SOURCE"
+          Write-Host "PowerShell SDK package: $Env:SDK_PACKAGE_ID $SdkPackageVersion from $Env:SDK_PACKAGE_SOURCE"
 
           $BaseRef = if ($Env:POWERSHELL_SOURCE_REPOSITORY -eq $Env:GITHUB_REPOSITORY) {
             $Env:POWERSHELL_UPSTREAM_TAG
@@ -130,12 +161,19 @@ jobs:
         with:
           global-json-file: pwsh-src/global.json
 
-      - name: Download workflow-built SDK package
+      - name: Download current-run SDK package
+        if: ${{ inputs.sdk_artifact_name != '' && inputs.sdk_artifact_run_id == '' }}
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: ${{ inputs.sdk_artifact_name }}
+          path: sdk-package-source
+
+      - name: Download previous-run SDK package
         if: ${{ inputs.sdk_artifact_run_id != '' }}
         uses: actions/download-artifact@v8.0.1
         with:
           run-id: ${{ inputs.sdk_artifact_run_id }}
-          name: ${{ inputs.sdk_artifact_name || format('PowerShell-SDK-Release-{0}', env.SDK_PACKAGE_VERSION) }}
+          name: ${{ inputs.sdk_artifact_name || format('PowerShell-SDK-Release-{0}', inputs.sdk_package_version || env.SDK_PACKAGE_VERSION) }}
           path: sdk-package-source
           github-token: ${{ github.token }}
 
@@ -148,13 +186,24 @@ jobs:
           $ArchivePath = "$OutputPath.tar.gz"
           $PackageScript = Join-Path (Join-Path $PWD 'eng') 'New-PowerShellDistroArchive.ps1'
           $PackageSource = $Env:SDK_PACKAGE_SOURCE
+          $SdkPackageVersion = '${{ inputs.sdk_package_version }}'.Trim()
+          if ([string]::IsNullOrWhiteSpace($SdkPackageVersion)) {
+            $SdkArtifactName = '${{ inputs.sdk_artifact_name }}'.Trim()
+            if ($SdkArtifactName -match '^PowerShell-SDK-Release-(\d+\.\d+\.\d+\.\d+)$') {
+              $SdkPackageVersion = $Matches[1]
+            } else {
+              $SdkPackageVersion = $Env:SDK_PACKAGE_VERSION
+            }
+          }
 
           $SdkArtifactRunId = '${{ inputs.sdk_artifact_run_id }}'.Trim()
-          if ($SdkArtifactRunId) {
+          $SdkArtifactName = '${{ inputs.sdk_artifact_name }}'.Trim()
+          if ($SdkArtifactName -or $SdkArtifactRunId) {
             $PackageSource = Join-Path $PWD 'sdk-package-source'
             $SdkPackages = @(Get-ChildItem -LiteralPath $PackageSource -Filter "$($Env:SDK_PACKAGE_ID).*nupkg" -File)
             if ($SdkPackages.Count -ne 1) {
-              throw "Expected exactly one $Env:SDK_PACKAGE_ID nupkg from SDK workflow run '$SdkArtifactRunId', found $($SdkPackages.Count)."
+              $SourceDescription = if ($SdkArtifactRunId) { "SDK workflow run '$SdkArtifactRunId'" } else { "current workflow run artifact '$SdkArtifactName'" }
+              throw "Expected exactly one $Env:SDK_PACKAGE_ID nupkg from $SourceDescription, found $($SdkPackages.Count)."
             }
 
             Write-Host "Using workflow-built SDK package: $($SdkPackages[0].FullName)"
@@ -164,7 +213,7 @@ jobs:
 
           & $PackageScript `
             -PackageId $Env:SDK_PACKAGE_ID `
-            -PackageVersion $Env:SDK_PACKAGE_VERSION `
+            -PackageVersion $SdkPackageVersion `
             -PackageSource $PackageSource `
             -PowerShellVersion $Env:POWERSHELL_VERSION `
             -RuntimeIdentifier '${{matrix.rid}}' `

@@ -16,7 +16,7 @@ on:
           - prod
         default: auto
       skip-publish:
-        description: Skip NuGet and GitHub Release publishing
+        description: Skip downstream publishing when called by release.yml
         required: true
         type: boolean
         default: false
@@ -30,6 +30,78 @@ on:
         required: true
         type: boolean
         default: false
+  workflow_call:
+    inputs:
+      sdk_package_revision:
+        description: Downstream SDK package revision override (blank = use SDK_PACKAGE_REVISION, auto = infer next release revision)
+        default: ""
+        required: false
+        type: string
+      github-env:
+        description: GitHub environment selection
+        required: false
+        type: string
+        default: auto
+      skip-publish:
+        description: Skip downstream publishing in the caller
+        required: false
+        type: boolean
+        default: false
+      dry-run:
+        description: Dry run (simulate publishing)
+        required: false
+        type: boolean
+        default: true
+      sign-dry-run:
+        description: Sign package during dry-run when code signing secrets are available
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      package-env:
+        description: Selected GitHub publishing environment
+        value: ${{ jobs.preflight.outputs.package-env }}
+      powershell-version:
+        description: PowerShell version
+        value: ${{ jobs.preflight.outputs.powershell-version }}
+      powershell-release-tag:
+        description: PowerShell upstream release tag
+        value: ${{ jobs.preflight.outputs.powershell-release-tag }}
+      powershell-source-ref:
+        description: Downstream PowerShell source ref
+        value: ${{ jobs.preflight.outputs.powershell-source-ref }}
+      powershell-source-commit:
+        description: Checked-out PowerShell source commit
+        value: ${{ jobs.preflight.outputs.powershell-source-commit }}
+      sdk-package-version:
+        description: SDK package version
+        value: ${{ jobs.preflight.outputs.sdk-package-version }}
+      sdk-package-artifact:
+        description: Unsigned SDK package artifact name
+        value: ${{ jobs.preflight.outputs.sdk-package-artifact }}
+      release-sdk-package-artifact:
+        description: Release-ready SDK package artifact name
+        value: ${{ jobs.preflight.outputs.release-sdk-package-artifact }}
+      release-tag:
+        description: GitHub release tag
+        value: ${{ jobs.preflight.outputs.release-tag }}
+      release-title:
+        description: GitHub release title
+        value: ${{ jobs.preflight.outputs.release-title }}
+      skip-publish:
+        description: Whether downstream publishing should be skipped
+        value: ${{ jobs.preflight.outputs.skip-publish }}
+      dry-run:
+        description: Effective dry-run value
+        value: ${{ jobs.preflight.outputs.dry-run }}
+      code-signed:
+        description: Whether the release SDK package was code signed
+        value: ${{ jobs.sign.outputs.code-signed }}
+
+permissions:
+  actions: read
+  contents: read
+
 env:
   POWERSHELL_VERSION: "7.6.3"
   POWERSHELL_RELEASE_TAG: "v7.6.3"
@@ -49,6 +121,9 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       package-env: ${{ steps.info.outputs.package-env }}
+      powershell-version: ${{ steps.info.outputs.powershell-version }}
+      powershell-release-tag: ${{ steps.info.outputs.powershell-release-tag }}
+      powershell-source-ref: ${{ steps.info.outputs.powershell-source-ref }}
       sdk-package-revision: ${{ steps.info.outputs.sdk-package-revision }}
       sdk-package-version: ${{ steps.info.outputs.sdk-package-version }}
       sdk-package-artifact: ${{ steps.info.outputs.sdk-package-artifact }}
@@ -193,6 +268,9 @@ jobs:
           }
 
           echo "package-env=$PackageEnv" >> $Env:GITHUB_OUTPUT
+          echo "powershell-version=$Env:POWERSHELL_VERSION" >> $Env:GITHUB_OUTPUT
+          echo "powershell-release-tag=$Env:POWERSHELL_RELEASE_TAG" >> $Env:GITHUB_OUTPUT
+          echo "powershell-source-ref=$Env:POWERSHELL_SOURCE_REF" >> $Env:GITHUB_OUTPUT
           echo "sdk-package-revision=$SdkPackageRevision" >> $Env:GITHUB_OUTPUT
           echo "sdk-package-version=$SdkPackageVersion" >> $Env:GITHUB_OUTPUT
           echo "sdk-package-artifact=$SdkPackageArtifact" >> $Env:GITHUB_OUTPUT
@@ -342,6 +420,16 @@ jobs:
               '</configuration>'
             )
             Set-Content -Path "./src/Modules/nuget.config" -Value $ModuleNugetConfig -Encoding utf8
+
+            $GlobalToolShimProjectPath = "./src/Microsoft.PowerShell.GlobalTool.Shim/Microsoft.PowerShell.GlobalTool.Shim.csproj"
+            $GlobalToolShimProject = Get-Content -LiteralPath $GlobalToolShimProjectPath -Raw
+            $WindowsDesktopShimImport = 'Sdk="Microsoft.NET.Sdk.WindowsDesktop" Condition="''$(SDKToUse)'' == ''Microsoft.NET.Sdk.WindowsDesktop'' "'
+            if (-not $GlobalToolShimProject.Contains($WindowsDesktopShimImport)) {
+              throw "Unable to find expected WindowsDesktop SDK imports in $GlobalToolShimProjectPath"
+            }
+
+            $PatchedGlobalToolShimProject = $GlobalToolShimProject.Replace($WindowsDesktopShimImport, 'Sdk="Microsoft.NET.Sdk" Condition="''$(SDKToUse)'' == ''Microsoft.NET.Sdk.WindowsDesktop'' "')
+            Set-Content -LiteralPath $GlobalToolShimProjectPath -Value $PatchedGlobalToolShimProject -Encoding utf8NoBOM
           }
 
           [xml]$CommonProps = Get-Content ./PowerShell.Common.props
@@ -1207,7 +1295,7 @@ jobs:
           $ShouldSign = $HasSigningSecrets -and ($RealPublish -or $SignDryRun)
 
           if ($RealPublish -and -not $HasSigningSecrets) {
-            throw "Azure Key Vault code signing secrets are required for non-dry-run SDK publishing."
+            throw "Azure Key Vault code signing secrets are required for non-dry-run release signing."
           }
 
           echo "should_sign=$($ShouldSign.ToString().ToLower())" >> $Env:GITHUB_OUTPUT
@@ -1445,121 +1533,3 @@ jobs:
             -RuntimeIdentifier ${{matrix.rid}} `
             -PackageId $Env:SDK_PACKAGE_ID `
             -PackageVendorName $Env:SDK_VENDOR_NAME
-
-  publish:
-    name: Publish PowerShell SDK
-    runs-on: ubuntu-24.04
-    needs: [preflight, sign, validate]
-    if: ${{ fromJSON(needs.preflight.outputs.skip-publish) == false }}
-    environment: ${{ needs.preflight.outputs.package-env }}
-    permissions:
-      id-token: write
-      contents: write
-
-    steps:
-      - name: Download PowerShell SDK package
-        uses: actions/download-artifact@v8.0.1
-        with:
-          name: ${{ needs.preflight.outputs.release-sdk-package-artifact }}
-          path: package
-
-      - name: NuGet login (OIDC)
-        if: ${{ fromJSON(needs.preflight.outputs.dry-run) == false }}
-        id: nuget-login
-        uses: NuGet/login@v1
-        with:
-          user: ${{ secrets.NUGET_BOT_USERNAME }}
-
-      - name: Publish to nuget.org
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $DryRun = [System.Boolean]::Parse('${{ needs.preflight.outputs.dry-run }}')
-          $NuGetApiKey = '${{ steps.nuget-login.outputs.NUGET_API_KEY }}'
-          $NugetPackages = @(Get-ChildItem -Path ./package -Filter *.nupkg -File | Sort-Object Name)
-          if ($NugetPackages.Count -ne 1) {
-            throw "Expected exactly one SDK .nupkg in ./package, found $($NugetPackages.Count)."
-          }
-
-          foreach ($NugetPackage in $NugetPackages) {
-            $PackagePath = Resolve-Path -LiteralPath $NugetPackage.FullName -Relative
-            Write-Host "Publishing $PackagePath to nuget.org"
-
-            if ($DryRun) {
-              Write-Host "Dry Run: skipping nuget.org publishing!"
-              continue
-            }
-
-            if ([string]::IsNullOrWhiteSpace($NuGetApiKey)) {
-              throw "NuGet/login did not provide a NuGet API key."
-            }
-
-            $PushArgs = @(
-              'nuget', 'push', $PackagePath,
-              '--api-key', $NuGetApiKey,
-              '--source', 'https://api.nuget.org/v3/index.json',
-              '--skip-duplicate', '--no-symbols'
-            )
-            & dotnet @PushArgs
-            if ($LASTEXITCODE -ne 0) {
-              throw "dotnet nuget push failed for $PackagePath with exit code $LASTEXITCODE"
-            }
-          }
-
-      - name: Create GitHub release
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        working-directory: package
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $DryRun = [System.Boolean]::Parse('${{ needs.preflight.outputs.dry-run }}')
-          $PackageVersion = '${{ needs.preflight.outputs.sdk-package-version }}'
-          $ReleaseTag = '${{ needs.preflight.outputs.release-tag }}'
-          $ReleaseTitle = '${{ needs.preflight.outputs.release-title }}'
-          $Repository = $Env:GITHUB_REPOSITORY
-          $SourceCommit = '${{ needs.preflight.outputs.powershell-source-commit }}'
-          $CodeSigned = '${{ needs.sign.outputs.code-signed }}'
-
-          $NugetPackages = @(Get-ChildItem -Filter *.nupkg -File | Sort-Object Name)
-          if ($NugetPackages.Count -ne 1) {
-            throw "Expected exactly one SDK .nupkg in the release package directory, found $($NugetPackages.Count)."
-          }
-
-          $HashPath = 'checksums'
-          $ChecksumLines = foreach ($NugetPackage in $NugetPackages) {
-            $Hash = Get-FileHash -Algorithm SHA256 -LiteralPath $NugetPackage.FullName
-            "$($Hash.Hash)  $($NugetPackage.Name)"
-          }
-          Set-Content -Path $HashPath -Value $ChecksumLines -Encoding ASCII
-
-          echo "::group::checksums"
-          Get-Content $HashPath
-          echo "::endgroup::"
-
-          $NotesPath = 'release-notes.md'
-          $ReleaseNotes = @(
-            "# $ReleaseTitle",
-            "",
-            "| Field | Value |",
-            "| --- | --- |",
-            "| Package ID | $Env:SDK_PACKAGE_ID |",
-            "| Package version | $PackageVersion |",
-            "| PowerShell upstream release | $Env:POWERSHELL_RELEASE_TAG |",
-            "| PowerShell downstream source ref | $Env:POWERSHELL_SOURCE_REF |",
-            "| PowerShell source commit | $SourceCommit |",
-            "| Code signed | $CodeSigned |"
-          )
-          Set-Content -Path $NotesPath -Value $ReleaseNotes -Encoding utf8
-
-          if ($DryRun) {
-            Write-Host "Dry Run: skipping GitHub release!"
-          } else {
-            $ReleaseAssets = @($NugetPackages | ForEach-Object { $_.Name }) + $HashPath
-            & gh release create $ReleaseTag --repo $Repository --target $Env:GITHUB_SHA --title $ReleaseTitle --notes-file $NotesPath @ReleaseAssets
-            if ($LASTEXITCODE -ne 0) {
-              throw "gh release create failed for $ReleaseTag with exit code $LASTEXITCODE"
-            }
-          }
