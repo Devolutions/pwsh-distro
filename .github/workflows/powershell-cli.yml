@@ -221,24 +221,17 @@ jobs:
             Write-Host "Using SDK package source: $PackageSource"
           }
 
-          $PackageArguments = @(
-            '-PackageId',
-            $Env:SDK_PACKAGE_ID,
-            '-PackageVersion',
-            $SdkPackageVersion,
-            '-PackageSource',
-            $PackageSource,
-            '-PowerShellVersion',
-            $Env:POWERSHELL_VERSION,
-            '-RuntimeIdentifier',
-            '${{matrix.rid}}',
-            '-OutputDirectory',
-            $OutputPath,
-            '-ArchivePath',
-            $ArchivePath
-          )
+          $PackageArguments = @{
+            PackageId = $Env:SDK_PACKAGE_ID
+            PackageVersion = $SdkPackageVersion
+            PackageSource = $PackageSource
+            PowerShellVersion = $Env:POWERSHELL_VERSION
+            RuntimeIdentifier = '${{matrix.rid}}'
+            OutputDirectory = $OutputPath
+            ArchivePath = $ArchivePath
+          }
           if ('${{ inputs.ready_to_run }}' -eq 'true') {
-            $PackageArguments += '-ReadyToRun'
+            $PackageArguments.ReadyToRun = $true
           }
 
           & $PackageScript @PackageArguments
