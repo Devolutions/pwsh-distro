@@ -420,6 +420,16 @@ jobs:
               '</configuration>'
             )
             Set-Content -Path "./src/Modules/nuget.config" -Value $ModuleNugetConfig -Encoding utf8
+
+            $GlobalToolShimProjectPath = "./src/Microsoft.PowerShell.GlobalTool.Shim/Microsoft.PowerShell.GlobalTool.Shim.csproj"
+            $GlobalToolShimProject = Get-Content -LiteralPath $GlobalToolShimProjectPath -Raw
+            $WindowsDesktopShimImport = 'Sdk="Microsoft.NET.Sdk.WindowsDesktop" Condition="''$(SDKToUse)'' == ''Microsoft.NET.Sdk.WindowsDesktop'' "'
+            if (-not $GlobalToolShimProject.Contains($WindowsDesktopShimImport)) {
+              throw "Unable to find expected WindowsDesktop SDK imports in $GlobalToolShimProjectPath"
+            }
+
+            $PatchedGlobalToolShimProject = $GlobalToolShimProject.Replace($WindowsDesktopShimImport, 'Sdk="Microsoft.NET.Sdk" Condition="''$(SDKToUse)'' == ''Microsoft.NET.Sdk.WindowsDesktop'' "')
+            Set-Content -LiteralPath $GlobalToolShimProjectPath -Value $PatchedGlobalToolShimProject -Encoding utf8NoBOM
           }
 
           [xml]$CommonProps = Get-Content ./PowerShell.Common.props
