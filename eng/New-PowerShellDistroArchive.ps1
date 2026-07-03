@@ -26,7 +26,11 @@ param(
 
   [switch] $ReadyToRunUseCache,
 
-  [string] $ReadyToRunCachePath
+  [string] $ReadyToRunCachePath,
+
+  [string] $CustomRuntimeSource,
+
+  [string] $CustomRuntimePackageVersion
 )
 
 Set-StrictMode -Version 3.0
@@ -58,6 +62,80 @@ function ConvertTo-XmlAttributeValue {
   }
 
   return [System.Security.SecurityElement]::Escape($Value)
+}
+
+function Get-EffectiveCustomRuntimePackageVersion {
+  param(
+    [Parameter(Mandatory)]
+    [string] $PackageVersion
+  )
+
+  if ($PackageVersion -match '^(?<stable>\d+(?:\.\d+)+)-') {
+    return $Matches['stable']
+  }
+
+  return $PackageVersion
+}
+
+function New-CustomRuntimeFeed {
+  param(
+    [Parameter(Mandatory)]
+    [string] $SourceRoot,
+
+    [Parameter(Mandatory)]
+    [string] $DestinationRoot,
+
+    [Parameter(Mandatory)]
+    [string] $RuntimeIdentifier,
+
+    [Parameter(Mandatory)]
+    [string] $PackageVersion,
+
+    [Parameter(Mandatory)]
+    [string] $EffectivePackageVersion
+  )
+
+  $SourceRootPath = (Resolve-Path -LiteralPath $SourceRoot).Path
+  Remove-Item -LiteralPath $DestinationRoot -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -Path $DestinationRoot -ItemType Directory -Force | Out-Null
+
+  $RuntimePackPattern = '^Microsoft\.NETCore\.App\.(Ref|Runtime\.' + [regex]::Escape($RuntimeIdentifier) + ')\.' + [regex]::Escape($PackageVersion) + '\.nupkg$'
+  $RuntimePacks = @(Get-ChildItem -LiteralPath $SourceRootPath -Filter '*.nupkg' -File | Where-Object {
+    $_.Name -match $RuntimePackPattern -and $_.Name -notmatch '\.symbols\.nupkg$'
+  })
+  if ($RuntimePacks.Count -eq 0) {
+    throw "No runtime/ref packages matching version '$PackageVersion' for RID '$RuntimeIdentifier' were found in $SourceRootPath"
+  }
+
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+  foreach ($RuntimePack in $RuntimePacks) {
+    if ($EffectivePackageVersion -eq $PackageVersion) {
+      Copy-Item -LiteralPath $RuntimePack.FullName -Destination $DestinationRoot -Force
+      continue
+    }
+
+    $PackageExtractRoot = Join-Path $DestinationRoot ([System.IO.Path]::GetFileNameWithoutExtension($RuntimePack.Name))
+    Remove-Item -LiteralPath $PackageExtractRoot -Recurse -Force -ErrorAction SilentlyContinue
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($RuntimePack.FullName, $PackageExtractRoot)
+
+    $NuspecPath = Get-ChildItem -LiteralPath $PackageExtractRoot -Filter '*.nuspec' -File | Select-Object -First 1 -ExpandProperty FullName
+    if (-not $NuspecPath) {
+      throw "Could not find a nuspec inside custom runtime package: $($RuntimePack.FullName)"
+    }
+
+    $NuspecContent = Get-Content -LiteralPath $NuspecPath -Raw
+    $UpdatedNuspecContent = $NuspecContent -replace '<version>[^<]+</version>', "<version>$EffectivePackageVersion</version>"
+    Set-Content -LiteralPath $NuspecPath -Value $UpdatedNuspecContent -Encoding utf8
+
+    $RepackedName = $RuntimePack.Name -replace [regex]::Escape(".$PackageVersion.nupkg"), ".$EffectivePackageVersion.nupkg"
+    $RepackedPath = Join-Path $DestinationRoot $RepackedName
+    Remove-Item -LiteralPath $RepackedPath -Force -ErrorAction SilentlyContinue
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($PackageExtractRoot, $RepackedPath)
+    Remove-Item -LiteralPath $PackageExtractRoot -Recurse -Force
+  }
+
+  return (Resolve-Path -LiteralPath $DestinationRoot).Path
 }
 
 function Get-PowerShellTargetFramework {
@@ -779,8 +857,63 @@ Console.WriteLine(typeof(PowerShell).Assembly.GetName().Name);
 
   $NuGetOrgSource = 'https://api.nuget.org/v3/index.json'
   $PackageSourceMatchesNuGetOrg = $PackageSource.TrimEnd('/') -eq $NuGetOrgSource.TrimEnd('/')
+
+  # When a source-built .NET runtime pack is supplied, inject a local folder feed that takes
+  # precedence over nuget.org for the Microsoft.NETCore.App ref/runtime packs for this RID.
+  # Combined with the stable RuntimeFrameworkVersion passed to restore/publish below, this makes
+  # the self-contained publish consume the custom runtime pack without hijacking unrelated host
+  # or AspNetCore runtime packs from nuget.org. When the source-built pack version is prerelease
+  # (for example 10.0.4-dev), repack it locally as the corresponding stable patch version solely
+  # for restore so the SDK can still resolve the stable host/framework packs it needs.
+  $UseCustomRuntime = -not [string]::IsNullOrWhiteSpace($CustomRuntimeSource)
+  $EffectiveCustomRuntimeSource = $null
+  $EffectiveCustomRuntimePackageVersion = $null
+  if ($UseCustomRuntime) {
+    $EffectiveCustomRuntimePackageVersion = Get-EffectiveCustomRuntimePackageVersion -PackageVersion $CustomRuntimePackageVersion
+    $EffectiveCustomRuntimeSource = New-CustomRuntimeFeed `
+      -SourceRoot $CustomRuntimeSource `
+      -DestinationRoot (Join-Path $WorkRoot 'custom-runtime-feed') `
+      -RuntimeIdentifier $RuntimeIdentifier `
+      -PackageVersion $CustomRuntimePackageVersion `
+      -EffectivePackageVersion $EffectiveCustomRuntimePackageVersion
+    $CustomRuntimeSourcePath = (Resolve-Path -LiteralPath $EffectiveCustomRuntimeSource).Path
+    $EscapedCustomRuntimeSource = ConvertTo-XmlAttributeValue $CustomRuntimeSourcePath
+    $CustomRuntimeSourceLine = "    <add key=`"custom-runtime`" value=`"$EscapedCustomRuntimeSource`" />"
+    $CustomRuntimeMappingBlock = @"
+    <packageSource key="custom-runtime">
+      <package pattern="Microsoft.NETCore.App.Ref" />
+      <package pattern="Microsoft.NETCore.App.Runtime.$EscapedRuntimeIdentifier" />
+    </packageSource>
+"@
+    if ($EffectiveCustomRuntimePackageVersion -ne $CustomRuntimePackageVersion) {
+      Write-Host "Normalizing custom runtime restore version from $CustomRuntimePackageVersion to $EffectiveCustomRuntimePackageVersion"
+    }
+  } else {
+    $CustomRuntimeSourceLine = $null
+    $CustomRuntimeMappingBlock = $null
+  }
+
   if ($PackageSourceMatchesNuGetOrg) {
-    $NuGetConfig = @"
+    if ($UseCustomRuntime) {
+      $NuGetConfig = @"
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    $CustomRuntimeSourceLine
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+  </packageSources>
+  <packageSourceMapping>
+$CustomRuntimeMappingBlock
+    <packageSource key="nuget.org">
+      <package pattern="$EscapedPackageId" />
+      <package pattern="*" />
+    </packageSource>
+  </packageSourceMapping>
+</configuration>
+"@
+    } else {
+      $NuGetConfig = @"
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
@@ -795,8 +928,31 @@ Console.WriteLine(typeof(PowerShell).Assembly.GetName().Name);
   </packageSourceMapping>
 </configuration>
 "@
+    }
   } else {
-    $NuGetConfig = @"
+    if ($UseCustomRuntime) {
+      $NuGetConfig = @"
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    $CustomRuntimeSourceLine
+    <add key="powershell-sdk" value="$EscapedPackageSource" />
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+  </packageSources>
+  <packageSourceMapping>
+$CustomRuntimeMappingBlock
+    <packageSource key="powershell-sdk">
+      <package pattern="$EscapedPackageId" />
+    </packageSource>
+    <packageSource key="nuget.org">
+      <package pattern="*" />
+    </packageSource>
+  </packageSourceMapping>
+</configuration>
+"@
+    } else {
+      $NuGetConfig = @"
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
@@ -814,10 +970,15 @@ Console.WriteLine(typeof(PowerShell).Assembly.GetName().Name);
   </packageSourceMapping>
 </configuration>
 "@
+    }
   }
   Set-Content -LiteralPath $NuGetConfigPath -Value $NuGetConfig -Encoding utf8
 
-  Invoke-NativeCommand dotnet @('restore', $ProjectPath, '--configfile', $NuGetConfigPath, '--verbosity', 'minimal', '-r', $RuntimeIdentifier, '/p:SelfContained=true')
+  $RestoreArguments = @('restore', $ProjectPath, '--configfile', $NuGetConfigPath, '--verbosity', 'minimal', '-r', $RuntimeIdentifier, '/p:SelfContained=true')
+  if ($UseCustomRuntime) {
+    $RestoreArguments += "/p:RuntimeFrameworkVersion=$EffectiveCustomRuntimePackageVersion"
+  }
+  Invoke-NativeCommand dotnet @RestoreArguments
   $PackageRoot = Get-RestoredSdkPackageRoot -PackagesDirectory $PackagesDirectory -PackageId $PackageId -PackageVersion $PackageVersion
   $RuntimeGroup = Get-PackageRuntimeGroup -Rid $RuntimeIdentifier
   $LocalizedResourceRoot = Join-Path $PackageRoot "buildTransitive\localized-resources\$RuntimeGroup\lib\$TargetFramework"
@@ -837,6 +998,9 @@ Console.WriteLine(typeof(PowerShell).Assembly.GetName().Name);
     '-o',
     $PublishDirectory
   )
+  if ($UseCustomRuntime) {
+    $PublishArguments += "/p:RuntimeFrameworkVersion=$EffectiveCustomRuntimePackageVersion"
+  }
   if (Test-Path -LiteralPath $LocalizedResourceRoot -PathType Container) {
     $PublishArguments += '/p:PowerShellSDKLocalizedResources=Copy'
   }

@@ -33,8 +33,15 @@ on:
       ready_to_run:
         description: Apply ReadyToRun optimization to CLI archives and sign final R2R payloads when signing is enabled
         required: true
+      use_custom_dotnet_runtime:
+        description: Build the CLI against a source-built .NET runtime (runs dotnet-runtime.yml first unless dotnet_runtime_run_id is provided)
+        required: false
         type: boolean
         default: false
+      dotnet_runtime_run_id:
+        description: Optional dotnet-runtime.yml run ID to reuse; leave blank to build in this workflow, or set latest to select the latest successful runtime run
+        required: false
+        default: ""
 
 permissions:
   actions: read
@@ -60,9 +67,19 @@ jobs:
       sign-dry-run: ${{ inputs.sign-dry-run }}
     secrets: inherit
 
+  dotnet-runtime:
+    name: Build source .NET runtime
+    if: ${{ inputs.use_custom_dotnet_runtime == true && inputs.dotnet_runtime_run_id == '' }}
+    uses: ./.github/workflows/dotnet-runtime.yml
+    permissions:
+      actions: read
+      contents: read
+    secrets: inherit
+
   cli:
     name: Build PowerShell CLI
-    needs: sdk
+    needs: [sdk, dotnet-runtime]
+    if: ${{ always() && needs.sdk.result == 'success' }}
     uses: ./.github/workflows/powershell-cli.yml
     permissions:
       actions: read
@@ -71,13 +88,15 @@ jobs:
       sdk_package_version: ${{ needs.sdk.outputs.sdk-package-version }}
       sdk_artifact_name: ${{ needs.sdk.outputs.release-sdk-package-artifact }}
       ready_to_run: ${{ inputs.ready_to_run }}
+      use_custom_dotnet_runtime: ${{ inputs.use_custom_dotnet_runtime }}
+      dotnet_runtime_run_id: ${{ inputs.dotnet_runtime_run_id || needs.dotnet-runtime.outputs.workflow-run-id }}
     secrets: inherit
 
   publish:
     name: Publish PowerShell release
     runs-on: ubuntu-24.04
-    needs: [sdk, cli]
-    if: ${{ fromJSON(needs.sdk.outputs.skip-publish) == false }}
+    needs: [sdk, cli, dotnet-runtime]
+    if: ${{ always() && fromJSON(needs.sdk.outputs.skip-publish) == false && needs.cli.result == 'success' }}
     environment: ${{ needs.sdk.outputs.package-env }}
     permissions:
       actions: read

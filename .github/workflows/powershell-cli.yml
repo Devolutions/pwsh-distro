@@ -19,6 +19,15 @@ on:
         required: true
         type: boolean
         default: false
+      use_custom_dotnet_runtime:
+        description: Use a source-built .NET runtime pack (from dotnet-runtime.yml) instead of the stock runtime
+        required: false
+        type: boolean
+        default: false
+      dotnet_runtime_run_id:
+        description: Optional dotnet-runtime.yml run ID whose pack artifact should be used (blank = build in this workflow, latest = select latest successful runtime run, or a specific run ID to reuse its artifacts)
+        default: ""
+        required: false
   workflow_call:
     inputs:
       sdk_package_version:
@@ -41,6 +50,16 @@ on:
         required: false
         type: boolean
         default: false
+      use_custom_dotnet_runtime:
+        description: Use a source-built .NET runtime pack (from dotnet-runtime.yml) instead of the stock runtime
+        default: false
+        required: false
+        type: boolean
+      dotnet_runtime_run_id:
+        description: Optional dotnet-runtime.yml run ID whose pack artifact should be used (blank = build in this workflow, latest = select latest successful runtime run, or a specific run ID to reuse its artifacts)
+        default: ""
+        required: false
+        type: string
 permissions:
   actions: read
   contents: read
@@ -187,6 +206,40 @@ jobs:
           path: sdk-package-source
           github-token: ${{ github.token }}
 
+      - name: Resolve dotnet runtime workflow run
+        if: ${{ inputs.use_custom_dotnet_runtime == true }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $RequestedRunId = '${{ inputs.dotnet_runtime_run_id }}'.Trim()
+          if ([string]::IsNullOrWhiteSpace($RequestedRunId)) {
+            throw "use_custom_dotnet_runtime is enabled but dotnet_runtime_run_id is blank. Set it to a specific dotnet-runtime.yml run ID, or 'latest' to select the latest successful runtime run."
+          }
+
+          $ResolvedRunId = $RequestedRunId
+          if ($RequestedRunId -eq 'latest') {
+            $Runs = gh run list -R $Env:GITHUB_REPOSITORY -w '.NET runtime' --json databaseId,status,conclusion 2>$null | ConvertFrom-Json
+            $ResolvedRunId = @($Runs | Where-Object { $_.status -eq 'completed' -and $_.conclusion -eq 'success' } | Select-Object -First 1 -ExpandProperty databaseId)
+            if (-not $ResolvedRunId) {
+              throw "No successful '.NET runtime' workflow runs were found to reuse."
+            }
+          }
+
+          "DOTNET_RUNTIME_RUN_ID=$ResolvedRunId" | Out-File -FilePath $Env:GITHUB_ENV -Append
+          Write-Host "Resolved dotnet-runtime workflow run: $ResolvedRunId"
+
+      - name: Download source-built .NET runtime pack
+        if: ${{ inputs.use_custom_dotnet_runtime == true }}
+        uses: actions/download-artifact@v8.0.1
+        with:
+          run-id: ${{ env.DOTNET_RUNTIME_RUN_ID }}
+          name: DotNet-Runtime-${{matrix.rid}}
+          path: custom-runtime-source
+          github-token: ${{ github.token }}
+
       - name: Package PowerShell distro from SDK
         shell: pwsh
         run: |
@@ -232,6 +285,28 @@ jobs:
           }
           if ('${{ inputs.ready_to_run }}' -eq 'true') {
             $PackageArguments.ReadyToRun = $true
+          }
+          $UseCustomRuntime = '${{ inputs.use_custom_dotnet_runtime }}' -ieq 'true'
+          if ($UseCustomRuntime) {
+            $CustomRuntimeSource = Join-Path $PWD 'custom-runtime-source'
+            $RuntimePackNamePattern = '^Microsoft\.NETCore\.App\.Runtime\.' + [regex]::Escape('${{matrix.rid}}') + '\.(?<version>.+)\.nupkg$'
+            $RuntimePacks = @(Get-ChildItem -LiteralPath $CustomRuntimeSource -Filter 'Microsoft.NETCore.App.Runtime.*.nupkg' -File | Where-Object {
+              $_.Name -match $RuntimePackNamePattern -and $_.Name -notmatch '\.symbols\.nupkg$'
+            })
+            if ($RuntimePacks.Count -eq 0) {
+              throw "use_custom_dotnet_runtime is enabled but no Microsoft.NETCore.App.Runtime.*.nupkg was found in $CustomRuntimeSource."
+            }
+
+            $RuntimePack = $RuntimePacks | Select-Object -First 1
+            $RuntimeVersion = [regex]::Match($RuntimePack.Name, $RuntimePackNamePattern).Groups['version'].Value
+            if ([string]::IsNullOrWhiteSpace($RuntimeVersion)) {
+              throw "Could not determine runtime pack version from filename: $($RuntimePack.Name)"
+            }
+
+            Write-Host "Discovered custom runtime pack: $($RuntimePack.Name)"
+            Write-Host "Using source-built .NET runtime: $CustomRuntimeSource (version $RuntimeVersion)"
+            $PackageArguments.CustomRuntimeSource = $CustomRuntimeSource
+            $PackageArguments.CustomRuntimePackageVersion = $RuntimeVersion
           }
 
           & $PackageScript @PackageArguments

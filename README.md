@@ -39,7 +39,7 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 | .NET runtime workflow | `v10.0.5` |
 | llvm-prebuilt | `v2026.1.1` |
 | clang+llvm | `22.1.4` |
-| VsDevShell | `2026.1.0` / `9b4518e6c45a2abedbf6a05b77c9912aaef70f1e` |
+| VsDevShell | `latest from PSGallery` |
 
 ## Workflows
 
@@ -48,7 +48,7 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 | `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors the source-built PowerShell SDK assemblies into one `Devolutions.PowerShell.SDK` package, signs the source-built payloads, and validates it in a sample .NET app with opt-in apphost import. It can run manually or as a reusable workflow. | `PowerShell-SDK-Release-7.6.3.0` artifact containing one `.nupkg`. |
 | `.github/workflows/powershell-cli.yml` | Restores a pinned or workflow-built `Devolutions.PowerShell.SDK` package, imports its apphost and module payload through MSBuild, publishes a self-contained PowerShell layout, and repackages it for Windows, macOS, and Linux on x64 and arm64. It can run manually or as a reusable workflow. | `PowerShell-7.6.3-<os>-<arch>` `.tar.gz` artifacts. |
 | `.github/workflows/release.yml` | Orchestrates the reusable SDK workflow first, repackages that signed SDK artifact through the reusable CLI workflow, publishes the SDK package, and creates the GitHub release. | NuGet.org publish plus GitHub release `v7.6.3.0` containing the SDK `.nupkg`, all CLI `.tar.gz` archives, and checksums. |
-| `.github/workflows/dotnet-runtime.yml` | Builds the .NET runtime tag used by this PowerShell release for Windows, macOS, and Linux on x86_64 and arm64 with prebuilt clang+llvm from `awakecoding/llvm-prebuilt`. | Runtime build output in the workflow logs/workspace. |
+| `.github/workflows/dotnet-runtime.yml` | Builds the .NET runtime tag used by this PowerShell release for Windows, macOS, and Linux on x86_64 and arm64 with prebuilt clang+llvm from `awakecoding/llvm-prebuilt`. It can run manually or as a reusable workflow and uploads a `DotNet-Runtime-<rid>` artifact per matrix entry containing the source-built `Microsoft.NETCore.App.Runtime.<rid>` runtime pack. | `DotNet-Runtime-<rid>` artifacts containing the source-built runtime packs. |
 
 All workflows are manual and can be started from the GitHub Actions **Run workflow** button.
 
@@ -66,6 +66,8 @@ Manual inputs:
 | `dry-run` | Simulates publishing. This defaults to `true`; non-production environments are forced to dry-run when publishing is requested. |
 | `sign-dry-run` | Signs the package during a dry-run when code signing secrets are available. This defaults to `false` so dry-runs can exercise packaging and release flow without requiring signing credentials. |
 | `ready_to_run` | Applies ReadyToRun optimization to CLI archives. When SDK code signing is enabled, the release workflow signs and verifies the final post-R2R CLI archive payloads before checksums and release creation. |
+| `use_custom_dotnet_runtime` | Optional. When enabled, repackages the CLI archives against a source-built .NET runtime instead of the stock `Microsoft.NETCore.App.Runtime.<rid>` pack from NuGet.org. If `dotnet_runtime_run_id` is blank, the release workflow builds `.github/workflows/dotnet-runtime.yml` first; set it to a specific run ID or `latest` to reuse a prior successful runtime run. Defaults to `false`, so releases use the stock runtime unless this is explicitly turned on. |
+| `dotnet_runtime_run_id` | Optional. Reuse a prior successful `.NET runtime` workflow run instead of building one in the current release chain. Leave blank to build in the current workflow, or pass a specific run ID or `latest` to select the newest successful runtime run. |
 
 The standalone CLI workflow also has an opt-in `ready_to_run` input that runs a targeted crossgen2 pass over packaged PowerShell managed assemblies after the self-contained layout is assembled. It is disabled by default because ReadyToRun rewrites managed PE files and invalidates existing Authenticode signatures. For signed releases, use `.github/workflows/release.yml` with both signing and `ready_to_run` enabled so the CLI archives are signed after the R2R pass.
 
@@ -82,7 +84,17 @@ Before validation and CLI packaging, the SDK workflow runs a signing stage that 
 
 Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The release workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation only in the publishing job. A real publish pushes the validated `.nupkg` containing signed Windows payloads to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the SDK package asset, every CLI archive, and a SHA256 checksum file covering all release assets.
 
-## Branching model
+## Source-built .NET runtime option
+
+By default, `powershell-cli.yml` repackages the `Devolutions.PowerShell.SDK` nupkg into self-contained archives using the stock `Microsoft.NETCore.App.Runtime.<rid>` pack restored from NuGet.org. For a fully from-source PowerShell distribution, the CLI workflow can instead consume the .NET runtime produced by `dotnet-runtime.yml`.
+
+This is **off by default** and does not change existing behavior when unused. To enable it:
+
+- In `powershell-cli.yml` (manual or reusable), set `use_custom_dotnet_runtime` to `true` and provide `dotnet_runtime_run_id` pointing at a completed `dotnet-runtime.yml` run, or set it to `latest` to auto-pick the newest successful `.NET runtime` run. The CLI job for each RID downloads the matching `DotNet-Runtime-<rid>` artifact, stages it as a local NuGet folder feed, and repoints the self-contained restore/publish at that feed with `/p:RuntimeFrameworkVersion=<version>`.
+- In `release.yml`, set `use_custom_dotnet_runtime` to `true`. If `dotnet_runtime_run_id` is blank, the release workflow runs `dotnet-runtime.yml` first; otherwise it skips the build and forwards the supplied run ID (including `latest`) to the reusable CLI job so the whole chain produces CLI archives built from the custom runtime.
+
+`eng/New-PowerShellDistroArchive.ps1` accepts optional `-CustomRuntimeSource` and `-CustomRuntimePackageVersion` parameters that inject the local runtime feed (with `packageSourceMapping` patterns for `Microsoft.NETCore.App.*`) ahead of NuGet.org and pin the runtime pack version during restore and publish. When the parameters are omitted, the generated `nuget.config` and publish command are identical to the stock path.
+
 
 This repository follows a downstream patch branch model inspired by `Devolutions/gsudo-distro`: `master` stays downstream-only, upstream PowerShell refs are mirrored under `upstream/*`, and source patches live on `downstream/vX.Y.Z` branches based on upstream release tags. The patched source is exposed on `master` as a same-repo submodule at `pwsh-src/` pinned to a commit on `downstream/vX.Y.Z`, so workflows build the exact reviewed source tree with a single `actions/checkout` using `submodules: true`. See [BRANCHING.md](BRANCHING.md) for the full branch, tag, submodule, and worktree flow.
 
