@@ -1,16 +1,23 @@
 name: .NET runtime
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      workflow-run-id:
+        description: The workflow run id that produced the DotNet-Runtime-<rid> artifacts
+        value: ${{ jobs.build.outputs.workflow-run-id }}
 env:
   DOTNET_RUNTIME_VERSION: "10.0.5"
   DOTNET_RUNTIME_REF: "v10.0.5"
   CLANG_LLVM_VERSION: "22.1.4"
   CLANG_LLVM_RELEASE: "v2026.1.1"
-  VSDEVSHELL_VERSION: "2026.1.0"
-  VSDEVSHELL_REF: "9b4518e6c45a2abedbf6a05b77c9912aaef70f1e"
+  VSDEVSHELL_MODULE_NAME: "VsDevShell"
 jobs:
   build:
     name: .NET runtime [${{matrix.arch}}-${{matrix.os}}]
     runs-on: ${{matrix.runner}}
+    outputs:
+      workflow-run-id: ${{ github.run_id }}
     strategy:
       fail-fast: false
       matrix:
@@ -22,6 +29,7 @@ jobs:
             llvm-arch: x86_64
             runner: windows-2025
             llvm-platform: windows
+            rid: win-x64
           - os: windows
             arch: arm64
             runtime-arch: arm64
@@ -29,30 +37,35 @@ jobs:
             llvm-arch: x86_64
             runner: windows-2025
             llvm-platform: windows
+            rid: win-arm64
           - os: macos
             arch: x86_64
             runtime-arch: x64
             llvm-arch: x86_64
             runner: macos-15-intel
             llvm-platform: macos
+            rid: osx-x64
           - os: macos
             arch: arm64
             runtime-arch: arm64
             llvm-arch: aarch64
             runner: macos-15
             llvm-platform: macos
+            rid: osx-arm64
           - os: linux
             arch: x86_64
             runtime-arch: x64
             llvm-arch: x86_64
             runner: ubuntu-24.04
             llvm-platform: ubuntu-24.04
+            rid: linux-x64
           - os: linux
             arch: arm64
             runtime-arch: arm64
             llvm-arch: aarch64
             runner: ubuntu-24.04-arm
             llvm-platform: ubuntu-24.04
+            rid: linux-arm64
   
     steps:
       - name: Configure Windows runner
@@ -132,19 +145,18 @@ jobs:
           ref: ${{env.DOTNET_RUNTIME_REF}}
           path: dotnet-runtime
 
-      - name: Clone VsDevShell ${{env.VSDEVSHELL_VERSION}}
+      - name: Install ${{env.VSDEVSHELL_MODULE_NAME}} from PSGallery
         if: runner.os == 'Windows'
-        uses: actions/checkout@v7.0.0
-        with:
-          repository: awakecoding/VsDevShell
-          ref: ${{env.VSDEVSHELL_REF}}
-          path: VsDevShell
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name $Env:VSDEVSHELL_MODULE_NAME -Repository PSGallery -Scope CurrentUser -Force -AllowClobber
 
       - name: Enable Windows environment
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Import-Module "./VsDevShell/VsDevShell/VsDevShell.psd1" -Force
+          Import-Module $Env:VSDEVSHELL_MODULE_NAME -Force
           $BaselinePath = $Env:PATH
           $VsDevEnv = Get-VsDevEnv -Arch '${{matrix.vs-arch}}' -HostArch x64
 
@@ -210,8 +222,50 @@ jobs:
         working-directory: dotnet-runtime
         shell: pwsh
         run: |
-          if ($IsWindows) {
-            & $Env:BUILD_CMD -arch '${{matrix.runtime-arch}}' -c Release -ninja
-          } else {
-            & $Env:BUILD_CMD -arch '${{matrix.runtime-arch}}' -c Release -ninja
+          & $Env:BUILD_CMD -arch '${{matrix.runtime-arch}}' -c Release -ninja -pack
+
+      - name: Stage runtime pack artifacts
+        working-directory: dotnet-runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Rid = '${{matrix.rid}}'
+          $ShippingDir = Join-Path $PWD 'artifacts/packages/Release/Shipping'
+          if (-not (Test-Path -LiteralPath $ShippingDir -PathType Container)) {
+            throw "Runtime pack output directory was not found: $ShippingDir"
           }
+
+          $StageDir = Join-Path $Env:RUNNER_TEMP "dotnet-runtime-pack-$Rid"
+          Remove-Item -LiteralPath $StageDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -Path $StageDir -ItemType Directory -Force | Out-Null
+
+          # The runtime pack for this RID and the matching ref pack are the artifacts the
+          # CLI workflow restores to override the stock Microsoft.NETCore.App packages.
+          $Packs = @(Get-ChildItem -LiteralPath $ShippingDir -Recurse -File -Filter '*.nupkg' |
+            Where-Object {
+              $_.Name -match '^Microsoft\.NETCore\.App\.(Runtime\.' + [regex]::Escape($Rid) + '|Ref)\.' -or
+              $_.Name -match '^Microsoft\.NETCore\.App\.Runtime\.' + [regex]::Escape($Rid) + '\.'
+            })
+
+          if ($Packs.Count -eq 0) {
+            throw "No Microsoft.NETCore.App runtime/ref packs for RID '$Rid' were found under $ShippingDir"
+          }
+
+          foreach ($Pack in $Packs) {
+            Copy-Item -LiteralPath $Pack.FullName -Destination $StageDir -Force
+            Write-Host "Staged runtime pack: $($Pack.Name)"
+          }
+
+          $ManifestPath = Join-Path $StageDir 'runtime-pack-rid.txt'
+          Set-Content -LiteralPath $ManifestPath -Value $Rid -Encoding ASCII
+
+          Write-Host "##[group]Staged runtime packs"
+          Get-ChildItem -LiteralPath $StageDir -File | ForEach-Object { Write-Host "  $($_.Name)" }
+          Write-Host "##[endgroup]"
+
+      - name: Upload runtime pack
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: DotNet-Runtime-${{matrix.rid}}
+          path: ${{ runner.temp }}/dotnet-runtime-pack-${{matrix.rid}}/*.nupkg
+          if-no-files-found: error
