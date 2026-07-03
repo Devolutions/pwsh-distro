@@ -1,5 +1,12 @@
 name: PowerShell Release
 on:
+  push:
+    branches:
+      - refactor-release-workflows
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/workflows/powershell-sdk.yml"
+      - ".github/workflows/powershell-cli.yml"
   workflow_dispatch:
     inputs:
       sdk_package_revision:
@@ -47,11 +54,11 @@ jobs:
       actions: read
       contents: read
     with:
-      sdk_package_revision: ${{ inputs.sdk_package_revision }}
-      github-env: ${{ inputs.github-env }}
-      skip-publish: ${{ inputs.skip-publish }}
-      dry-run: ${{ inputs.dry-run }}
-      sign-dry-run: ${{ inputs.sign-dry-run }}
+      sdk_package_revision: ${{ github.event_name == 'workflow_dispatch' && inputs.sdk_package_revision || '' }}
+      github-env: ${{ github.event_name == 'workflow_dispatch' && inputs.github-env || 'auto' }}
+      skip-publish: ${{ github.event_name == 'workflow_dispatch' && inputs.skip-publish }}
+      dry-run: ${{ github.event_name != 'workflow_dispatch' || inputs.dry-run }}
+      sign-dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.sign-dry-run }}
     secrets: inherit
 
   cli:
