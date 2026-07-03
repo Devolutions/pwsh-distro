@@ -35,7 +35,7 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 | PowerShell SDK package source | `https://api.nuget.org/v3/index.json` |
 | multi-pwsh apphost package | `Devolutions.MultiPwsh.Cli` / `0.14.0` |
 | multi-pwsh apphost package source | `https://api.nuget.org/v3/index.json` |
-| psign code signing tool | `latest release (un-pinned)` |
+| psign code signing tool | `Devolutions.Psign.Tool` / `latest (un-pinned)` |
 | .NET runtime workflow | `v10.0.5` |
 | llvm-prebuilt | `v2026.1.1` |
 | clang+llvm | `22.1.4` |
@@ -69,7 +69,7 @@ Manual inputs:
 
 The standalone CLI workflow also has an opt-in `ready_to_run` input that runs a targeted crossgen2 pass over packaged PowerShell managed assemblies after the self-contained layout is assembled. It is disabled by default because ReadyToRun rewrites managed PE files and invalidates existing Authenticode signatures. For signed releases, use `.github/workflows/release.yml` with both signing and `ready_to_run` enabled so the CLI archives are signed after the R2R pass.
 
-Before validation and CLI packaging, the SDK workflow runs a signing stage that downloads the built `.nupkg`, installs the latest `Devolutions/psign` `psign-tool-linux-x64.zip`, extracts the package, signs the source-built payloads inside it with Azure Key Vault, and repacks the `.nupkg` without adding a NuGet package signature. The signing pass covers the built PowerShell assemblies in `ref/` and `runtimes/*/lib/`, the apphost payloads in `tools/apphost/*` and `runtimes/*/native`, the Windows desktop payload, and the built-in module manifests/format/script files in `contentFiles/any/any/runtimes/**/Modules/**`. CLI archives are built from this release-ready SDK package, so their Windows executable and module payloads come from the signed `.nupkg`. A non-dry-run publish requires these environment secrets and variables:
+Before validation and CLI packaging, the SDK workflow runs a signing stage that downloads the built `.nupkg`, installs the latest `Devolutions.Psign.Tool` .NET tool, extracts the package, signs the source-built payloads inside it with Azure Key Vault, and repacks the `.nupkg` without adding a NuGet package signature. The signing pass covers the built PowerShell assemblies in `ref/` and `runtimes/*/lib/`, the apphost payloads in `tools/apphost/*` and `runtimes/*/native`, the Windows desktop payload, and the built-in module manifests/format/script files in `contentFiles/any/any/runtimes/**/Modules/**`. CLI archives are built from this release-ready SDK package, so their Windows executable and module payloads come from the signed `.nupkg`. A non-dry-run publish requires these environment secrets and variables:
 
 | Name | Type |
 | --- | --- |
