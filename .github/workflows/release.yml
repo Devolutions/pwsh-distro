@@ -30,6 +30,11 @@ on:
         required: true
         type: boolean
         default: false
+      ready_to_run:
+        description: Apply ReadyToRun optimization to CLI archives and sign final R2R payloads when signing is enabled
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -38,6 +43,7 @@ permissions:
 env:
   SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
   SDK_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
+  PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
 
 jobs:
   sdk:
@@ -64,6 +70,7 @@ jobs:
     with:
       sdk_package_version: ${{ needs.sdk.outputs.sdk-package-version }}
       sdk_artifact_name: ${{ needs.sdk.outputs.release-sdk-package-artifact }}
+      ready_to_run: ${{ inputs.ready_to_run }}
     secrets: inherit
 
   publish:
@@ -78,6 +85,11 @@ jobs:
       id-token: write
 
     steps:
+      - name: Clone project
+        uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 1
+
       - name: Download PowerShell SDK package
         uses: actions/download-artifact@v8.0.1
         with:
@@ -90,6 +102,54 @@ jobs:
           pattern: PowerShell-${{ needs.sdk.outputs.powershell-version }}-*
           path: release-assets
           merge-multiple: true
+
+      - name: Install latest psign tool
+        if: ${{ fromJSON(needs.sdk.outputs.code-signed) && inputs.ready_to_run }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $ToolRoot = Join-Path $Env:RUNNER_TEMP "psign-tool"
+          Remove-Item -LiteralPath $ToolRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $ToolRoot | Out-Null
+
+          dotnet tool install --tool-path $ToolRoot $Env:PSIGN_TOOL_PACKAGE_ID
+          if ($LASTEXITCODE -ne 0) {
+            throw "dotnet tool install failed for $Env:PSIGN_TOOL_PACKAGE_ID with exit code $LASTEXITCODE"
+          }
+
+          $Env:PATH = "$ToolRoot$([System.IO.Path]::PathSeparator)$Env:PATH"
+          $ToolRoot >> $Env:GITHUB_PATH
+          $ToolCommand = Get-Command psign-tool -ErrorAction Stop
+          $ToolPath = $ToolCommand.Source
+          $VersionOutput = & $ToolPath --version 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            throw "psign-tool --version failed with exit code $LASTEXITCODE"
+          }
+          Write-Host "Installed psign-tool version: $(($VersionOutput | Out-String).Trim())"
+
+      - name: Code sign ReadyToRun PowerShell CLI archives
+        if: ${{ fromJSON(needs.sdk.outputs.code-signed) && inputs.ready_to_run }}
+        shell: pwsh
+        env:
+          CODE_SIGNING_KEYVAULT_URL: ${{ secrets.CODE_SIGNING_KEYVAULT_URL }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          CODE_SIGNING_CLIENT_ID: ${{ secrets.CODE_SIGNING_CLIENT_ID }}
+          CODE_SIGNING_CLIENT_SECRET: ${{ secrets.CODE_SIGNING_CLIENT_SECRET }}
+          CODE_SIGNING_CERTIFICATE_NAME: ${{ secrets.CODE_SIGNING_CERTIFICATE_NAME }}
+          CODE_SIGNING_TIMESTAMP_SERVER: ${{ vars.CODE_SIGNING_TIMESTAMP_SERVER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $SigningScript = Join-Path (Join-Path $PWD 'eng') 'Sign-PowerShellDistroArchive.ps1'
+          $CliArchives = @(Get-ChildItem -LiteralPath ./release-assets -File | Where-Object { $_.Name -like 'PowerShell-*.tar.gz' } | Sort-Object Name)
+          if ($CliArchives.Count -ne 6) {
+            throw "Expected exactly six PowerShell CLI archives for signing, found $($CliArchives.Count)."
+          }
+
+          foreach ($CliArchive in $CliArchives) {
+            & $SigningScript -ArchivePath $CliArchive.FullName
+          }
 
       - name: NuGet login (OIDC)
         if: ${{ fromJSON(needs.sdk.outputs.dry-run) == false }}
@@ -200,3 +260,11 @@ jobs:
               throw "gh release create failed for $ReleaseTag with exit code $LASTEXITCODE"
             }
           }
+
+      - name: Upload dry-run release assets
+        if: ${{ fromJSON(needs.sdk.outputs.dry-run) }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: PowerShell-Release-DryRun-${{ needs.sdk.outputs.sdk-package-version }}
+          path: release-assets/**
+          if-no-files-found: error

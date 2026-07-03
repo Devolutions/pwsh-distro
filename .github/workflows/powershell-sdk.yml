@@ -114,7 +114,7 @@ env:
   MULTI_PWSH_APPHOST_PACKAGE_ID: "Devolutions.MultiPwsh.Cli"
   MULTI_PWSH_APPHOST_PACKAGE_VERSION: "0.14.0"
   MULTI_PWSH_APPHOST_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
-  PSIGN_TOOL_LINUX_X64_URL: "https://github.com/Devolutions/psign/releases/latest/download/psign-tool-linux-x64.zip"
+  PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
 jobs:
   preflight:
     name: Preflight
@@ -1313,17 +1313,15 @@ jobs:
           Remove-Item -LiteralPath $ToolRoot -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $ToolRoot | Out-Null
 
-          $ArchivePath = Join-Path $ToolRoot "psign-tool-linux-x64.zip"
-          Invoke-WebRequest -Uri $Env:PSIGN_TOOL_LINUX_X64_URL -OutFile $ArchivePath
-
-          Expand-Archive -Path $ArchivePath -DestinationPath $ToolRoot -Force
-          $ToolPath = Join-Path $ToolRoot "psign-tool"
-          if (-not (Test-Path -LiteralPath $ToolPath -PathType Leaf)) {
-            throw "psign-tool was not found after extracting $ArchivePath"
+          dotnet tool install --tool-path $ToolRoot $Env:PSIGN_TOOL_PACKAGE_ID
+          if ($LASTEXITCODE -ne 0) {
+            throw "dotnet tool install failed for $Env:PSIGN_TOOL_PACKAGE_ID with exit code $LASTEXITCODE"
           }
 
-          chmod +x $ToolPath
+          $Env:PATH = "$ToolRoot$([System.IO.Path]::PathSeparator)$Env:PATH"
           $ToolRoot >> $Env:GITHUB_PATH
+          $ToolCommand = Get-Command psign-tool -ErrorAction Stop
+          $ToolPath = $ToolCommand.Source
           $VersionOutput = & $ToolPath --version 2>&1
           if ($LASTEXITCODE -ne 0) {
             throw "psign-tool --version failed with exit code $LASTEXITCODE"
