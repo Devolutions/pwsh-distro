@@ -262,3 +262,11 @@ jobs:
               throw "gh release create failed for $ReleaseTag with exit code $LASTEXITCODE"
             }
           }
+
+      - name: Upload dry-run release assets
+        if: ${{ fromJSON(needs.sdk.outputs.dry-run) }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: PowerShell-Release-DryRun-${{ needs.sdk.outputs.sdk-package-version }}
+          path: release-assets/**
+          if-no-files-found: error
