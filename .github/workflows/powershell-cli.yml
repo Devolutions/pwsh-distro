@@ -14,6 +14,11 @@ on:
         description: Optional SDK nupkg artifact name to repackage instead of SDK_PACKAGE_SOURCE
         default: ""
         required: false
+      ready_to_run:
+        description: Apply ReadyToRun optimization to packaged PowerShell managed assemblies
+        required: true
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       sdk_package_version:
@@ -31,6 +36,11 @@ on:
         default: ""
         required: false
         type: string
+      ready_to_run:
+        description: Apply ReadyToRun optimization to packaged PowerShell managed assemblies
+        required: false
+        type: boolean
+        default: false
 permissions:
   actions: read
   contents: read
@@ -211,14 +221,27 @@ jobs:
             Write-Host "Using SDK package source: $PackageSource"
           }
 
-          & $PackageScript `
-            -PackageId $Env:SDK_PACKAGE_ID `
-            -PackageVersion $SdkPackageVersion `
-            -PackageSource $PackageSource `
-            -PowerShellVersion $Env:POWERSHELL_VERSION `
-            -RuntimeIdentifier '${{matrix.rid}}' `
-            -OutputDirectory $OutputPath `
-            -ArchivePath $ArchivePath
+          $PackageArguments = @(
+            '-PackageId',
+            $Env:SDK_PACKAGE_ID,
+            '-PackageVersion',
+            $SdkPackageVersion,
+            '-PackageSource',
+            $PackageSource,
+            '-PowerShellVersion',
+            $Env:POWERSHELL_VERSION,
+            '-RuntimeIdentifier',
+            '${{matrix.rid}}',
+            '-OutputDirectory',
+            $OutputPath,
+            '-ArchivePath',
+            $ArchivePath
+          )
+          if ('${{ inputs.ready_to_run }}' -eq 'true') {
+            $PackageArguments += '-ReadyToRun'
+          }
+
+          & $PackageScript @PackageArguments
 
       - name: Upload PowerShell package
         uses: actions/upload-artifact@v7.0.1

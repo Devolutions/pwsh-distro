@@ -18,7 +18,15 @@ param(
 
   [string] $ArchivePath,
 
-  [string] $RepositoryRoot
+  [string] $RepositoryRoot,
+
+  [switch] $ReadyToRun,
+
+  [string[]] $ReadyToRunIncludeFilter,
+
+  [switch] $ReadyToRunUseCache,
+
+  [string] $ReadyToRunCachePath
 )
 
 Set-StrictMode -Version 3.0
@@ -234,6 +242,48 @@ function Remove-UnneededDistroFiles {
   if ($RemainingDiaSymReaderFiles.Count -gt 0) {
     throw "Unneeded DIA symbol reader file was not removed from the PowerShell distro: $($RemainingDiaSymReaderFiles[0].FullName)"
   }
+}
+
+function Optimize-PowerShellDistroReadyToRun {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Root,
+
+    [Parameter(Mandatory)]
+    [string] $Rid,
+
+    [Parameter(Mandatory)]
+    [string] $TargetFramework,
+
+    [AllowEmptyCollection()]
+    [string[]] $IncludeFilter,
+
+    [switch] $UseCache,
+
+    [string] $CachePath
+  )
+
+  $ReadyToRunScript = Join-Path $PSScriptRoot 'Optimize-PowerShellDistroReadyToRun.ps1'
+  if (-not (Test-Path -LiteralPath $ReadyToRunScript -PathType Leaf)) {
+    throw "ReadyToRun script was not found: $ReadyToRunScript"
+  }
+
+  $ReadyToRunArguments = @{
+    InputPath = $Root
+    RuntimeIdentifier = $Rid
+    TargetFramework = $TargetFramework
+  }
+  if ($IncludeFilter) {
+    $ReadyToRunArguments.IncludeFilter = $IncludeFilter
+  }
+  if ($UseCache) {
+    $ReadyToRunArguments.UseCache = $true
+  }
+  if (-not [string]::IsNullOrWhiteSpace($CachePath)) {
+    $ReadyToRunArguments.CachePath = $CachePath
+  }
+
+  & $ReadyToRunScript @ReadyToRunArguments
 }
 
 function Copy-FileIfPresent {
@@ -815,6 +865,15 @@ Console.WriteLine(typeof(PowerShell).Assembly.GetName().Name);
 
   Remove-DisposableHostFiles -Root $OutputDirectoryPath -HostBaseName $HostBaseName
   Remove-UnneededDistroFiles -Root $OutputDirectoryPath
+  if ($ReadyToRun) {
+    Optimize-PowerShellDistroReadyToRun `
+      -Root $OutputDirectoryPath `
+      -Rid $RuntimeIdentifier `
+      -TargetFramework $TargetFramework `
+      -IncludeFilter $ReadyToRunIncludeFilter `
+      -UseCache:$ReadyToRunUseCache `
+      -CachePath $ReadyToRunCachePath
+  }
   Test-PowerShellDistroLayout -Root $OutputDirectoryPath -Rid $RuntimeIdentifier -ExpectedVersion $PowerShellVersion
 
   Remove-Item -LiteralPath $ArchiveFullPath -Force -ErrorAction SilentlyContinue
