@@ -141,6 +141,7 @@
   <PropertyGroup>
     <Product>PowerShell</Product>
     <Company>Microsoft Corporation</Company>
+    <PowerShellVendor Condition="'$(PowerShellVendor)' == ''">Microsoft</PowerShellVendor>
     <Copyright>(c) Microsoft Corporation.</Copyright>
     <AssemblyTitle>PowerShell 7</AssemblyTitle>
 
