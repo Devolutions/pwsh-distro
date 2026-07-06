@@ -182,10 +182,8 @@
            Text="PowerShellSDKConfigOverwriteExisting must be true or false." />
     <Error Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(PowerShellSDKLocalizedResources)', '^(?i:None|Copy)$')) != 'True'"
            Text="PowerShellSDKLocalizedResources must be None or Copy." />
-    <Error Condition="'$(_PowerShellSDKRootAppHostEnabled)' == 'true' and '$(_PowerShellSDKAppHostImplementationValue)' == 'dotnet'"
-           Text="PowerShellSDKAppHostImplementation=DotNet is not available for the Root apphost layout in this SDK package." />
-    <Error Condition="'$(_PowerShellSDKRuntimeNativeAppHostEnabled)' == 'true' and '$(_PowerShellSDKAppHostImplementationValue)' == 'multipwsh'"
-           Text="PowerShellSDKAppHostImplementation=MultiPwsh is not available for the RuntimeNative apphost layout in this SDK package. Use Auto or DotNet until the package includes runtime-native multi-pwsh apphost assets." />
+    <Error Condition="'$(_PowerShellSDKAppHostEnabled)' == 'true' and '$(_PowerShellSDKAppHostImplementationValue)' == 'dotnet'"
+           Text="PowerShellSDKAppHostImplementation=DotNet is not available in this SDK package. Use Auto or MultiPwsh." />
   </Target>
 
   <Target Name="_PowerShellSDKValidateImportedOptions"

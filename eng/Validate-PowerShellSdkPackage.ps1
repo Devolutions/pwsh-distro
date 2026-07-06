@@ -1162,6 +1162,7 @@ foreach (PSObject result in ps.Invoke())
   }
   Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'RuntimeIdentifier' -Value $RuntimeIdentifier
   Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'PowerShellSDKAppHostLayout' -Value 'RuntimeNative'
+  Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'PowerShellSDKAppHostImplementation' -Value 'MultiPwsh'
   Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'PowerShellSDKRuntimeNativeAppHostRuntimeIdentifiers' -Value ($RuntimeNativeValidationRids -join ';')
   Add-RuntimeNativePublishDuplicateProbeTarget -Project $Project -PackageId $PackageId -PackageVersion $NormalizedPackageVersion -RuntimeIdentifiers $RuntimeNativeValidationRids
   if ($RuntimeAssetGroup -eq 'win') {

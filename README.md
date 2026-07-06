@@ -33,7 +33,7 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 | PowerShell target framework | `net10.0` |
 | PowerShell SDK package | `Devolutions.PowerShell.SDK` / `7.6.3.0` |
 | PowerShell SDK package source | `https://api.nuget.org/v3/index.json` |
-| multi-pwsh apphost package | `Devolutions.MultiPwsh.Cli` / `0.14.0` |
+| multi-pwsh apphost package | `Devolutions.MultiPwsh.Cli` / `0.14.1` |
 | multi-pwsh apphost package source | `https://api.nuget.org/v3/index.json` |
 | psign code signing tool | `Devolutions.Psign.Tool` / `latest (un-pinned)` |
 | .NET runtime workflow | `v10.0.5` |
@@ -152,7 +152,7 @@ Use `PowerShellSDKCopyPhases` to decide where opted-in payloads are copied. The 
 | Property | Default | Values | Effect |
 | --- | --- | --- | --- |
 | `PowerShellSDKAppHostLayout` | `None` | `None`, `Root`, `RuntimeNative`, `Both` | Selects the apphost file layout. |
-| `PowerShellSDKAppHostImplementation` | `Auto` | `Auto`, `MultiPwsh`, `DotNet` | Selects the apphost executable implementation when the requested layout/package assets support it. Current package assets support `MultiPwsh` for `Root` and `DotNet` for `RuntimeNative`. |
+| `PowerShellSDKAppHostImplementation` | `Auto` | `Auto`, `MultiPwsh`, `DotNet` | Selects the apphost executable implementation when the requested layout/package assets support it. Current package assets support `MultiPwsh` for `Root` and `RuntimeNative`. |
 | `PowerShellSDKAppHostRuntimeIdentifier` | empty | RID | Overrides root apphost RID selection; otherwise `$(RuntimeIdentifier)` then `$(NETCoreSdkRuntimeIdentifier)` are used. |
 | `PowerShellSDKRuntimeNativeAppHostRuntimeIdentifiers` | empty | RID list | Semicolon-delimited runtime-native launcher RIDs; empty selects all packaged RIDs. |
 | `PowerShellSDKRuntimeNativeSharedPayloadRuntimeIdentifier` | empty | RID | Overrides the shared app-root PowerShell payload RID. Otherwise it follows `$(RuntimeIdentifier)`, `$(NETCoreSdkRuntimeIdentifier)`, then `PowerShellSDKAppHostRuntimeIdentifier`. |
