@@ -562,7 +562,10 @@ namespace System.Management.Automation.Remoting.Client
 
         #region Overrides
 
-        internal override void ConnectAsync()
+        /// <summary>
+        /// Connects a disconnected transport manager.
+        /// </summary>
+        protected internal override void ConnectAsync()
         {
             throw new NotImplementedException(RemotingErrorIdStrings.IPCTransportConnectError);
         }
@@ -1969,7 +1972,7 @@ namespace System.Management.Automation.Remoting.Client
 
             _connectionInfo = connectionInfo;
             _threadName = threadName;
-            Fragmentor.FragmentSize = RemoteSessionNamedPipeServer.NamedPipeBufferSizeForRemoting;
+            FragmentSize = RemoteSessionNamedPipeServer.NamedPipeBufferSizeForRemoting;
         }
 
         #endregion
@@ -2216,7 +2219,7 @@ namespace System.Management.Automation.Remoting.Client
 
         #region Overrides
 
-        internal override void ConnectAsync()
+        protected internal override void ConnectAsync()
         {
             throw new NotImplementedException(RemotingErrorIdStrings.IPCTransportConnectError);
         }
@@ -2268,7 +2271,7 @@ namespace System.Management.Automation.Remoting.Client
             }
         }
 
-        internal override void SendStopSignal()
+        protected internal override void SendStopSignal()
         {
             PSEtwLog.LogAnalyticInformational(PSEventId.WSManSignal,
                 PSOpcode.Disconnect, PSTask.None,
