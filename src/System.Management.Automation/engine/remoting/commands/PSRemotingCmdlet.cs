@@ -4341,6 +4341,11 @@ namespace System.Management.Automation.Remoting
         }
 
         /// <summary>
+        /// Gets client-only options used by custom remoting transports.
+        /// </summary>
+        public IDictionary<string, object> ClientTransportOptions { get; } = new Dictionary<string, object>(StringComparer.Ordinal);
+
+        /// <summary>
         /// The MaximumConnectionRedirectionCount parameter enables the implicit redirection functionality.
         /// -1 = no limit
         ///  0 = no redirection.
