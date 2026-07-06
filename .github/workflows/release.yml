@@ -33,6 +33,8 @@ on:
       ready_to_run:
         description: Apply ReadyToRun optimization to CLI archives and sign final R2R payloads when signing is enabled
         required: true
+        type: boolean
+        default: true
       use_custom_dotnet_runtime:
         description: Build the CLI against a source-built .NET runtime (runs dotnet-runtime.yml first unless dotnet_runtime_run_id is provided)
         required: false
