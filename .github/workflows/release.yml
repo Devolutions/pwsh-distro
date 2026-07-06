@@ -107,7 +107,67 @@ jobs:
       - name: Clone project
         uses: actions/checkout@v7.0.0
         with:
-          fetch-depth: 1
+          submodules: true
+          fetch-depth: 0
+
+      - name: Export downstream PowerShell patch
+        shell: pwsh
+        env:
+          POWERSHELL_SOURCE_REF: ${{ needs.sdk.outputs.powershell-source-ref }}
+          POWERSHELL_RELEASE_TAG: ${{ needs.sdk.outputs.powershell-release-tag }}
+          SDK_PACKAGE_VERSION: ${{ needs.sdk.outputs.sdk-package-version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace($Env:POWERSHELL_SOURCE_REF)) {
+            throw 'POWERSHELL_SOURCE_REF is empty.'
+          }
+          if ([string]::IsNullOrWhiteSpace($Env:POWERSHELL_RELEASE_TAG)) {
+            throw 'POWERSHELL_RELEASE_TAG is empty.'
+          }
+          if ([string]::IsNullOrWhiteSpace($Env:SDK_PACKAGE_VERSION)) {
+            throw 'SDK_PACKAGE_VERSION is empty.'
+          }
+
+          $ReleaseAssetsDir = Join-Path $PWD 'release-assets'
+          New-Item -ItemType Directory -Path $ReleaseAssetsDir -Force | Out-Null
+
+          $PwshSourcePath = Join-Path $PWD 'pwsh-src'
+          if (-not (Test-Path $PwshSourcePath -PathType Container)) {
+            throw "PowerShell source checkout not found at $PwshSourcePath."
+          }
+
+          git -C $PwshSourcePath fetch --tags --force origin
+          git -C $PwshSourcePath fetch --force origin "refs/heads/$Env:POWERSHELL_SOURCE_REF:refs/remotes/origin/$Env:POWERSHELL_SOURCE_REF"
+
+          $RemoteBranchRef = "origin/$Env:POWERSHELL_SOURCE_REF"
+          $SourceBranch = $Env:POWERSHELL_SOURCE_REF
+
+          & git -C $PwshSourcePath rev-parse --verify "$RemoteBranchRef^{commit}" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to resolve remote branch '$RemoteBranchRef' in pwsh-src."
+          }
+
+          & git -C $PwshSourcePath rev-parse --verify "$Env:POWERSHELL_RELEASE_TAG^{commit}" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to resolve base tag '$Env:POWERSHELL_RELEASE_TAG' in pwsh-src."
+          }
+
+          git -C $PwshSourcePath branch --force $SourceBranch $RemoteBranchRef | Out-Null
+          git -C $PwshSourcePath checkout $SourceBranch | Out-Null
+
+          $PatchScript = Join-Path $PWD 'scripts/Export-PowerShellPatch.ps1'
+          & $PatchScript -RepoPath $PwshSourcePath -Branch $SourceBranch -BaseTag $Env:POWERSHELL_RELEASE_TAG -ReleaseVersion $Env:SDK_PACKAGE_VERSION -OutputDir $ReleaseAssetsDir
+          if ($LASTEXITCODE -ne 0) {
+            throw "Patch export failed with exit code $LASTEXITCODE."
+          }
+
+          $PatchFiles = @(Get-ChildItem -LiteralPath $ReleaseAssetsDir -Filter 'powershell-patch-*.patch' -File | Sort-Object Name)
+          if ($PatchFiles.Count -ne 1) {
+            throw "Expected exactly one generated patch file in $ReleaseAssetsDir, found $($PatchFiles.Count)."
+          }
+
+          Write-Host "Exported patch file: $($PatchFiles[0].FullName)"
 
       - name: Download PowerShell SDK package
         uses: actions/download-artifact@v8.0.1
@@ -240,7 +300,12 @@ jobs:
             throw "Expected exactly six PowerShell CLI archives in the release package directory, found $($CliArchives.Count)."
           }
 
-          $ReleaseAssetFiles = @($NugetPackages) + @($CliArchives)
+          $PatchFiles = @(Get-ChildItem -File | Where-Object { $_.Name -like 'powershell-patch-*.patch' } | Sort-Object Name)
+          if ($PatchFiles.Count -ne 1) {
+            throw "Expected exactly one generated patch file in the release package directory, found $($PatchFiles.Count)."
+          }
+
+          $ReleaseAssetFiles = @($NugetPackages) + @($CliArchives) + @($PatchFiles)
           $ReleaseAssetFiles = @($ReleaseAssetFiles | Sort-Object Name)
 
           $HashPath = 'checksums'
@@ -266,7 +331,8 @@ jobs:
             "| PowerShell downstream source ref | ${{ needs.sdk.outputs.powershell-source-ref }} |",
             "| PowerShell source commit | $SourceCommit |",
             "| Code signed | $CodeSigned |",
-            "| CLI archives | $($CliArchives.Count) |"
+            "| CLI archives | $($CliArchives.Count) |",
+            "| Patch file | $($PatchFiles[0].Name) |"
           )
           Set-Content -Path $NotesPath -Value $ReleaseNotes -Encoding utf8
 
