@@ -144,13 +144,36 @@ namespace System.Management.Automation.Remoting
     /// <summary>
     /// Robust Connection notifications.
     /// </summary>
-    internal enum ConnectionStatus
+    public enum ConnectionStatus
     {
+        /// <summary>
+        /// Network failure was detected.
+        /// </summary>
         NetworkFailureDetected = 1,
+
+        /// <summary>
+        /// The transport is retrying after a network failure.
+        /// </summary>
         ConnectionRetryAttempt = 2,
+
+        /// <summary>
+        /// The transport reconnected after a network failure.
+        /// </summary>
         ConnectionRetrySucceeded = 3,
+
+        /// <summary>
+        /// The remote endpoint is starting automatic disconnect.
+        /// </summary>
         AutoDisconnectStarting = 4,
+
+        /// <summary>
+        /// The remote endpoint completed automatic disconnect.
+        /// </summary>
         AutoDisconnectSucceeded = 5,
+
+        /// <summary>
+        /// Retry was aborted because of an internal transport error.
+        /// </summary>
         InternalErrorAbort = 6
     }
 
@@ -372,6 +395,15 @@ namespace System.Management.Automation.Remoting
                 s_baseTracer.WriteLine("{0} is not a valid stream", stream);
             }
             // process data
+            ProcessRawData(data, dataPriority, dataAvailableCallback);
+        }
+
+        internal void ProcessRawData(byte[] data,
+            DataPriorityType dataPriority,
+            ReceiveDataCollection.OnDataAvailableCallback dataAvailableCallback)
+        {
+            Dbg.Assert(data != null, "Cannot process null data");
+
             ReceivedDataCollection.ProcessRawData(data, dataPriority, dataAvailableCallback);
         }
 
@@ -426,7 +458,7 @@ namespace System.Management.Automation.Remoting
         /// Crypto handler to be used for encrypting/decrypting
         /// secure strings.
         /// </summary>
-        internal PSRemotingCryptoHelper CryptoHelper { get; set; }
+        protected internal PSRemotingCryptoHelper CryptoHelper { get; set; }
 
         /// <summary>
         /// A data buffer used to store data received from remote machine.
@@ -497,12 +529,19 @@ namespace System.Management.Automation.Remoting.Client
 
         #region Constructors
 
-        internal BaseClientTransportManager(Guid runspaceId, PSRemotingCryptoHelper cryptoHelper)
+        /// <summary>
+        /// Initializes a new instance of the <see cref="BaseClientTransportManager"/> class.
+        /// </summary>
+        /// <param name="runspaceId">The runspace pool instance identifier.</param>
+        /// <param name="cryptoHelper">The remoting crypto helper.</param>
+        protected BaseClientTransportManager(Guid runspaceId, PSRemotingCryptoHelper cryptoHelper)
             : base(cryptoHelper)
         {
             RunspacePoolInstanceId = runspaceId;
             dataToBeSent = new PrioritySendDataCollection();
+            dataToBeSent.Fragmentor = Fragmentor;
             _onDataAvailableCallback = new ReceiveDataCollection.OnDataAvailableCallback(OnDataAvailableHandler);
+            _onDataToSendAvailableCallback = new PrioritySendDataCollection.OnDataAvailableCallback(OnDataToSendAvailableHandler);
             _callbackNotificationQueue = new Queue<CallbackNotificationInformation>();
         }
 
@@ -581,6 +620,8 @@ namespace System.Management.Automation.Remoting.Client
 
         #endregion
 
+        private readonly PrioritySendDataCollection.OnDataAvailableCallback _onDataToSendAvailableCallback;
+
         #region Properties
 
         /// <summary>
@@ -595,7 +636,25 @@ namespace System.Management.Automation.Remoting.Client
         /// <summary>
         /// Used to log crimson messages.
         /// </summary>
-        internal Guid RunspacePoolInstanceId { get; }
+        protected internal Guid RunspacePoolInstanceId { get; }
+
+        /// <summary>
+        /// Gets or sets the fragment size used by this transport manager.
+        /// </summary>
+        protected int FragmentSize
+        {
+            get
+            {
+                return Fragmentor.FragmentSize;
+            }
+
+            set
+            {
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(value);
+
+                dataToBeSent.SetFragmentSize(value);
+            }
+        }
 
         /// <summary>
         /// Raise the Connect completed handler.
@@ -605,9 +664,27 @@ namespace System.Management.Automation.Remoting.Client
             CreateCompleted.SafeInvoke(this, eventArgs);
         }
 
+        /// <summary>
+        /// Reports that the transport open operation completed successfully.
+        /// </summary>
+        protected void CompleteOpen(RunspaceConnectionInfo connectionInfo)
+        {
+            ArgumentNullException.ThrowIfNull(connectionInfo);
+
+            RaiseCreateCompleted(new CreateCompleteEventArgs(connectionInfo));
+        }
+
         internal void RaiseConnectCompleted()
         {
             ConnectCompleted.SafeInvoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// Reports that the transport connect operation completed successfully.
+        /// </summary>
+        protected void CompleteConnect()
+        {
+            RaiseConnectCompleted();
         }
 
         internal void RaiseDisconnectCompleted()
@@ -615,9 +692,25 @@ namespace System.Management.Automation.Remoting.Client
             DisconnectCompleted.SafeInvoke(this, EventArgs.Empty);
         }
 
+        /// <summary>
+        /// Reports that the transport disconnect operation completed successfully.
+        /// </summary>
+        protected void CompleteDisconnect()
+        {
+            RaiseDisconnectCompleted();
+        }
+
         internal void RaiseReconnectCompleted()
         {
             ReconnectCompleted.SafeInvoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// Reports that the transport reconnect operation completed successfully.
+        /// </summary>
+        protected void CompleteReconnect()
+        {
+            RaiseReconnectCompleted();
         }
 
         /// <summary>
@@ -629,11 +722,27 @@ namespace System.Management.Automation.Remoting.Client
         }
 
         /// <summary>
+        /// Reports that the transport close operation completed successfully.
+        /// </summary>
+        protected void CompleteClose()
+        {
+            RaiseCloseCompleted();
+        }
+
+        /// <summary>
         /// Raise the ReadyForDisconnect event.
         /// </summary>
         internal void RaiseReadyForDisconnect()
         {
             ReadyForDisconnect.SafeInvoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// Reports that the transport is ready for a disconnect operation.
+        /// </summary>
+        protected void CompleteReadyForDisconnect()
+        {
+            RaiseReadyForDisconnect();
         }
 
         /// <summary>
@@ -670,9 +779,35 @@ namespace System.Management.Automation.Remoting.Client
                     break;
             }
 
+            if (args != null)
+            {
+                ReportRobustConnectionNotification(args.Notification);
+            }
+        }
+
+        /// <summary>
+        /// Reports a robust connection status notification.
+        /// </summary>
+        /// <param name="notification">The robust connection notification.</param>
+        protected void ReportRobustConnectionNotification(ConnectionStatus notification)
+        {
+            switch (notification)
+            {
+                case ConnectionStatus.NetworkFailureDetected:
+                case ConnectionStatus.ConnectionRetryAttempt:
+                case ConnectionStatus.ConnectionRetrySucceeded:
+                case ConnectionStatus.AutoDisconnectStarting:
+                case ConnectionStatus.AutoDisconnectSucceeded:
+                case ConnectionStatus.InternalErrorAbort:
+                    break;
+
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(notification));
+            }
+
             // Queue worker item to raise the event so that all robust connection
             // events are raised in the same order as received.
-            EnqueueAndStartProcessingThread(null, null, args);
+            EnqueueAndStartProcessingThread(null, null, new ConnectionStatusEventArgs(notification));
         }
 
         /// <summary>
@@ -687,6 +822,89 @@ namespace System.Management.Automation.Remoting.Client
         internal void RaiseDelayStreamProcessedEvent()
         {
             DelayStreamRequestProcessed.SafeInvoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// Reports that the delay-stream request was processed.
+        /// </summary>
+        protected void CompleteDelayStreamProcessed()
+        {
+            RaiseDelayStreamProcessedEvent();
+        }
+
+        /// <summary>
+        /// Reads a pending outbound remoting data fragment, optionally registering for a future callback.
+        /// </summary>
+        protected byte[] ReadDataToSend(
+            bool registerCallbackIfNoDataAvailable,
+            out ClientRemotingDataPriority priority)
+        {
+            DataPriorityType dataPriority;
+            byte[] data = dataToBeSent.ReadOrRegisterCallback(
+                registerCallbackIfNoDataAvailable ? _onDataToSendAvailableCallback : null,
+                out dataPriority);
+
+            priority = dataPriority == DataPriorityType.PromptResponse
+                ? ClientRemotingDataPriority.PromptResponse
+                : ClientRemotingDataPriority.Default;
+
+            return data;
+        }
+
+        /// <summary>
+        /// Called when outbound data is available after <see cref="ReadDataToSend"/> registered for notification.
+        /// </summary>
+        protected virtual void OnDataToSendAvailable(
+            ReadOnlyMemory<byte> data,
+            ClientRemotingDataPriority priority)
+        {
+        }
+
+        private void OnDataToSendAvailableHandler(byte[] data, DataPriorityType priorityType)
+        {
+            ClientRemotingDataPriority priority = priorityType == DataPriorityType.PromptResponse
+                ? ClientRemotingDataPriority.PromptResponse
+                : ClientRemotingDataPriority.Default;
+
+            OnDataToSendAvailable(data, priority);
+        }
+
+        /// <summary>
+        /// Processes a received remoting data fragment.
+        /// </summary>
+        /// <param name="data">The received remoting data fragment.</param>
+        /// <param name="priority">The priority stream for the received data.</param>
+        protected void ProcessReceivedData(byte[] data, ClientRemotingDataPriority priority)
+        {
+            ArgumentNullException.ThrowIfNull(data);
+
+            ProcessRawData(data, ToDataPriorityType(priority));
+        }
+
+        /// <summary>
+        /// Reports a transport error through the remoting transport error pipeline.
+        /// </summary>
+        protected void ReportTransportError(Exception exception, TransportMethodEnum method)
+        {
+            ArgumentNullException.ThrowIfNull(exception);
+
+            PSRemotingTransportException transportException = exception as PSRemotingTransportException
+                ?? new PSRemotingTransportException(exception.Message, exception);
+
+            EnqueueAndStartProcessingThread(
+                null,
+                new TransportErrorOccuredEventArgs(transportException, method),
+                null);
+        }
+
+        private static DataPriorityType ToDataPriorityType(ClientRemotingDataPriority priority)
+        {
+            return priority switch
+            {
+                ClientRemotingDataPriority.Default => DataPriorityType.Default,
+                ClientRemotingDataPriority.PromptResponse => DataPriorityType.PromptResponse,
+                _ => throw new ArgumentOutOfRangeException(nameof(priority)),
+            };
         }
 
         #endregion
@@ -719,6 +937,38 @@ namespace System.Management.Automation.Remoting.Client
                 // Enqueue an Exception to process in a thread-pool thread. Processing
                 // Exception in a thread pool thread is important as calling
                 // WSManCloseShell/Command from a Receive callback results in a deadlock.
+                tracer.WriteLine("Exception processing data. {0}", exception.Message);
+
+                PSRemotingTransportException e = new PSRemotingTransportException(exception.Message);
+                TransportErrorOccuredEventArgs eventargs = new TransportErrorOccuredEventArgs(e,
+                                    TransportMethodEnum.ReceiveShellOutputEx);
+                EnqueueAndStartProcessingThread(null, eventargs, null);
+                return;
+            }
+        }
+
+        internal virtual void ProcessRawData(byte[] data, DataPriorityType priority)
+        {
+            if (isClosed)
+            {
+                return;
+            }
+
+            try
+            {
+                base.ProcessRawData(data, priority, _onDataAvailableCallback);
+            }
+            catch (PSRemotingTransportException pte)
+            {
+                tracer.WriteLine("Exception processing data. {0}", pte.Message);
+                TransportErrorOccuredEventArgs eventargs = new TransportErrorOccuredEventArgs(pte,
+                                    TransportMethodEnum.ReceiveShellOutputEx);
+                EnqueueAndStartProcessingThread(null, eventargs, null);
+
+                return;
+            }
+            catch (Exception exception)
+            {
                 tracer.WriteLine("Exception processing data. {0}", exception.Message);
 
                 PSRemotingTransportException e = new PSRemotingTransportException(exception.Message);
@@ -978,6 +1228,10 @@ namespace System.Management.Automation.Remoting.Client
         /// </param>
         internal virtual void ProcessPrivateData(object privateData)
         {
+            if (privateData is ConnectionStatusEventArgs connectionStatus)
+            {
+                RaiseRobustConnectionNotification(connectionStatus);
+            }
         }
 
         internal class CallbackNotificationInformation
@@ -1000,7 +1254,10 @@ namespace System.Management.Automation.Remoting.Client
         /// </summary>
         public abstract void CreateAsync();
 
-        internal abstract void ConnectAsync();
+        /// <summary>
+        /// Connects a disconnected transport manager.
+        /// </summary>
+        protected internal abstract void ConnectAsync();
 
         /// <summary>
         /// The caller should make sure the call is synchronized.
@@ -1011,15 +1268,17 @@ namespace System.Management.Automation.Remoting.Client
             dataToBeSent.Clear();
         }
 
-        internal virtual void StartReceivingData()
+        /// <summary>
+        /// Starts receiving transport data after the remoting protocol is established.
+        /// </summary>
+        protected internal virtual void StartReceivingData()
         {
-            throw new NotImplementedException();
         }
 
         /// <summary>
         /// Method to have transport prepare for a disconnect operation.
         /// </summary>
-        internal virtual void PrepareForDisconnect()
+        protected internal virtual void PrepareForDisconnect()
         {
             throw new NotImplementedException();
         }
@@ -1027,7 +1286,7 @@ namespace System.Management.Automation.Remoting.Client
         /// <summary>
         /// Method to resume post disconnect operations.
         /// </summary>
-        internal virtual void PrepareForConnect()
+        protected internal virtual void PrepareForConnect()
         {
             throw new NotImplementedException();
         }
@@ -1089,9 +1348,29 @@ namespace System.Management.Automation.Remoting.Client
     {
         #region Constructors
 
-        internal BaseClientSessionTransportManager(Guid runspaceId, PSRemotingCryptoHelper cryptoHelper)
+        /// <summary>
+        /// Initializes a new instance of the <see cref="BaseClientSessionTransportManager"/> class.
+        /// </summary>
+        /// <param name="runspaceId">The runspace pool instance identifier.</param>
+        /// <param name="cryptoHelper">The remoting crypto helper.</param>
+        protected BaseClientSessionTransportManager(Guid runspaceId, PSRemotingCryptoHelper cryptoHelper)
             : base(runspaceId, cryptoHelper)
         {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="BaseClientSessionTransportManager"/> class.
+        /// </summary>
+        protected BaseClientSessionTransportManager(ClientRemotingTransportCreationContext context)
+            : this(ValidateContext(context).RunspacePoolInstanceId, ValidateContext(context).CryptoHelper)
+        {
+            TransportConnectionInfo = context.ConnectionInfo;
+        }
+
+        private static ClientRemotingTransportCreationContext ValidateContext(ClientRemotingTransportCreationContext context)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            return context;
         }
 
         #endregion
@@ -1112,8 +1391,25 @@ namespace System.Management.Automation.Remoting.Client
         /// true if the command has input.
         /// </param>
         /// <returns></returns>
-        internal virtual BaseClientCommandTransportManager CreateClientCommandTransportManager(RunspaceConnectionInfo connectionInfo,
-                    ClientRemotePowerShell cmd, bool noInput)
+        internal virtual BaseClientCommandTransportManager CreateClientCommandTransportManager(
+            RunspaceConnectionInfo connectionInfo,
+            ClientRemotePowerShell cmd,
+            bool noInput)
+        {
+            return CreateClientCommandTransportManager(
+                new ClientCommandTransportCreationContext(
+                    connectionInfo,
+                    cmd,
+                    noInput,
+                    this,
+                    CryptoHelper));
+        }
+
+        /// <summary>
+        /// Creates a command transport manager.
+        /// </summary>
+        protected virtual BaseClientCommandTransportManager CreateClientCommandTransportManager(
+            ClientCommandTransportCreationContext context)
         {
             throw new NotImplementedException();
         }
@@ -1130,7 +1426,7 @@ namespace System.Management.Automation.Remoting.Client
         /// <summary>
         /// Temporarily disconnect an active session.
         /// </summary>
-        internal virtual void DisconnectAsync()
+        protected internal virtual void DisconnectAsync()
         {
             throw new NotImplementedException();
         }
@@ -1138,7 +1434,7 @@ namespace System.Management.Automation.Remoting.Client
         /// <summary>
         /// Reconnect back a temporarily disconnected session.
         /// </summary>
-        internal virtual void ReconnectAsync()
+        protected internal virtual void ReconnectAsync()
         {
             throw new NotImplementedException();
         }
@@ -1152,7 +1448,7 @@ namespace System.Management.Automation.Remoting.Client
         /// <param name="connectionInfo">
         /// Connection info object used for retrieving credential, auth. mechanism etc.
         /// </param>
-        internal virtual void Redirect(Uri newUri, RunspaceConnectionInfo connectionInfo)
+        protected internal virtual void Redirect(Uri newUri, RunspaceConnectionInfo connectionInfo)
         {
             throw new NotImplementedException();
         }
@@ -1162,27 +1458,67 @@ namespace System.Management.Automation.Remoting.Client
         /// This must be called only after Create callback (or Error form create) is received.
         /// Callers must catch the close completed event and call Redirect to perform the redirection.
         /// </summary>
-        internal virtual void PrepareForRedirection()
+        protected internal virtual void PrepareForRedirection()
         {
             throw new NotImplementedException();
         }
 
         #endregion
+
+        /// <summary>
+        /// Gets a value indicating whether the transport supports disconnect/connect semantics.
+        /// </summary>
+        protected internal virtual bool SupportsDisconnect => false;
+
+        /// <summary>
+        /// Gets the robust connection maximum retry time in milliseconds.
+        /// </summary>
+        protected internal virtual int MaxRetryConnectionTime => 0;
+
+        /// <summary>
+        /// Adjusts transport behavior after protocol negotiation.
+        /// </summary>
+        /// <param name="serverProtocolVersion">The negotiated server protocol version.</param>
+        protected internal virtual void AdjustForProtocolVariations(Version serverProtocolVersion)
+        {
+        }
+
+        /// <summary>
+        /// Gets the connection information used to create this transport, if it was created with a context.
+        /// </summary>
+        protected RunspaceConnectionInfo TransportConnectionInfo { get; }
     }
 
-    internal abstract class BaseClientCommandTransportManager : BaseClientTransportManager, IDisposable
+    /// <summary>
+    /// Remoting base client command transport manager.
+    /// </summary>
+    public abstract class BaseClientCommandTransportManager : BaseClientTransportManager, IDisposable
     {
         #region Private / Protected Data
 
         // pipeline in the form cmd1 | cmd2.. this is used by authz module for early validation.
-        protected StringBuilder cmdText;
-        protected SerializedDataStream serializedPipeline;
-        protected Guid powershellInstanceId;
+        internal StringBuilder cmdText;
+        internal SerializedDataStream serializedPipeline;
+        internal Guid powershellInstanceId;
+        private readonly SerializedDataStream.OnDataAvailableCallback _onInitialCommandDataAvailableCallback;
 
-        protected Guid PowershellInstanceId
+        internal Guid PowershellInstanceId
         {
             get { return powershellInstanceId; }
         }
+
+        /// <summary>
+        /// Gets the PowerShell instance identifier.
+        /// </summary>
+        protected Guid PowerShellInstanceId
+        {
+            get { return powershellInstanceId; }
+        }
+
+        /// <summary>
+        /// Gets the command text used by the transport protocol for audit and authorization.
+        /// </summary>
+        protected string CommandText { get; private set; }
 
         #endregion
 
@@ -1190,15 +1526,17 @@ namespace System.Management.Automation.Remoting.Client
 
         #region Constructors
 
-        protected BaseClientCommandTransportManager(ClientRemotePowerShell shell,
+        internal BaseClientCommandTransportManager(ClientRemotePowerShell shell,
             PSRemotingCryptoHelper cryptoHelper,
             BaseClientSessionTransportManager sessnTM) : base(sessnTM.RunspacePoolInstanceId, cryptoHelper)
         {
+            _onInitialCommandDataAvailableCallback = new SerializedDataStream.OnDataAvailableCallback(OnInitialCommandDataAvailable);
             Fragmentor.FragmentSize = sessnTM.Fragmentor.FragmentSize;
             Fragmentor.TypeTable = sessnTM.Fragmentor.TypeTable;
             dataToBeSent.Fragmentor = base.Fragmentor;
             // used for Crimson logging.
             powershellInstanceId = shell.PowerShell.InstanceId;
+            CommandText = shell.PowerShell.Commands.Commands.GetCommandStringForHistory();
 
             cmdText = new StringBuilder();
             foreach (System.Management.Automation.Runspaces.Command cmd in shell.PowerShell.Commands.Commands)
@@ -1223,6 +1561,20 @@ namespace System.Management.Automation.Remoting.Client
             Fragmentor.Fragment<object>(message, serializedPipeline);
         }
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="BaseClientCommandTransportManager"/> class.
+        /// </summary>
+        protected BaseClientCommandTransportManager(ClientCommandTransportCreationContext context)
+            : this(ValidateContext(context).RemotePowerShell, ValidateContext(context).CryptoHelper, ValidateContext(context).SessionTransportManager)
+        {
+        }
+
+        private static ClientCommandTransportCreationContext ValidateContext(ClientCommandTransportCreationContext context)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            return context;
+        }
+
         #endregion
 
         #region Events
@@ -1234,10 +1586,22 @@ namespace System.Management.Automation.Remoting.Client
             SignalCompleted.SafeInvoke(this, EventArgs.Empty);
         }
 
+        /// <summary>
+        /// Reports that the command signal operation completed successfully.
+        /// </summary>
+        protected void CompleteSignal()
+        {
+            RaiseSignalCompleted();
+        }
+
         #endregion
 
         #region Overrides
 
+        /// <summary>
+        /// Releases resources used by the transport manager.
+        /// </summary>
+        /// <param name="isDisposing">True when called from <see cref="IDisposable.Dispose"/>.</param>
         protected override void Dispose(bool isDisposing)
         {
             base.Dispose(isDisposing);
@@ -1259,7 +1623,7 @@ namespace System.Management.Automation.Remoting.Client
         /// when disconnect is called on sessionTM . The TM's also dont maintain specific connection state
         /// This is done by DSHandlers.
         /// </summary>
-        internal virtual void ReconnectAsync()
+        protected internal virtual void ReconnectAsync()
         {
             throw new NotImplementedException();
         }
@@ -1267,9 +1631,23 @@ namespace System.Management.Automation.Remoting.Client
         /// <summary>
         /// Used by powershell/pipeline to send a stop message to the server command.
         /// </summary>
-        internal virtual void SendStopSignal()
+        protected internal virtual void SendStopSignal()
         {
             throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Reads the initial command data generated by the SDK.
+        /// </summary>
+        protected byte[] ReadInitialCommandData(bool registerCallbackIfNoDataAvailable)
+        {
+            return serializedPipeline.ReadOrRegisterCallback(
+                registerCallbackIfNoDataAvailable ? _onInitialCommandDataAvailableCallback : null);
+        }
+
+        private void OnInitialCommandDataAvailable(byte[] data, bool isEndFragment)
+        {
+            OnDataToSendAvailable(data, ClientRemotingDataPriority.Default);
         }
 
         #endregion
