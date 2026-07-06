@@ -3,6 +3,7 @@
 
 using System;
 using System.Globalization;
+using System.Text;
 using Microsoft.CodeAnalysis;
 
 namespace SMA
@@ -25,6 +26,7 @@ namespace SMA
                     provider.GlobalOptions.TryGetValue("build_property.ProductVersion", out var productVersion);
                     provider.GlobalOptions.TryGetValue("build_property.PSCoreBuildVersion", out var mainVersion);
                     provider.GlobalOptions.TryGetValue("build_property.PowerShellVersion", out var gitDescribe);
+                    provider.GlobalOptions.TryGetValue("build_property.PowerShellVendor", out var vendor);
                     provider.GlobalOptions.TryGetValue("build_property.ReleaseTag", out var releaseTag);
 
                     BuildOptions options = new()
@@ -32,6 +34,7 @@ namespace SMA
                         ProductVersion = productVersion ?? string.Empty,
                         MainVersion = mainVersion ?? string.Empty,
                         GitDescribe = gitDescribe ?? string.Empty,
+                        Vendor = vendor ?? string.Empty,
                         ReleaseTag = releaseTag ?? string.Empty
                     };
 
@@ -52,12 +55,13 @@ namespace SMA
                     string result = string.Format(
                         CultureInfo.InvariantCulture,
                         SourceTemplate,
-                        buildOptions.ProductVersion,
-                        gitCommitId,
+                        EscapeStringLiteral(buildOptions.ProductVersion),
+                        EscapeStringLiteral(gitCommitId),
                         versions.major,
                         versions.minor,
                         versions.patch,
-                        versions.preReleaseLabel);
+                        EscapeStringLiteral(versions.preReleaseLabel),
+                        EscapeStringLiteral(buildOptions.Vendor));
 
                     // We must use specific file name suffix (*.g.cs,*.g, *.i.cs, *.generated.cs, *.designer.cs)
                     // so that Roslyn analyzers skip the file.
@@ -70,6 +74,7 @@ namespace SMA
             public string ProductVersion;
             public string MainVersion;
             public string GitDescribe;
+            public string Vendor;
             public string ReleaseTag;
         }
 
@@ -97,6 +102,10 @@ namespace System.Management.Automation
         //  - when built from a preview release tag: GitCommitId = '7.3.0-preview.8'
         //  - when built from a stable release tag:  GitCommitId = '7.3.0'
         internal const string GitCommitId = ""{1}"";
+
+        // The vendor of this PowerShell distribution.
+        // Defined in 'PowerShell.Common.props' as 'PowerShellVendor'.
+        internal const string Vendor = ""{6}"";
 
         // The PowerShell version components.
         // The version string is defined in 'PowerShell.Common.props' as 'PSCoreBuildVersion',
@@ -131,6 +140,62 @@ namespace System.Management.Automation
             int patch = int.Parse(mainVersion.Substring(minorEnd + 1), NumberStyles.Integer, CultureInfo.InvariantCulture);
 
             return (major, minor, patch, preReleaseLabel);
+        }
+
+        private static string EscapeStringLiteral(string value)
+        {
+            var builder = new StringBuilder(value.Length);
+
+            foreach (char c in value)
+            {
+                switch (c)
+                {
+                    case '\"':
+                        builder.Append("\\\"");
+                        break;
+                    case '\\':
+                        builder.Append("\\\\");
+                        break;
+                    case '\0':
+                        builder.Append("\\0");
+                        break;
+                    case '\a':
+                        builder.Append("\\a");
+                        break;
+                    case '\b':
+                        builder.Append("\\b");
+                        break;
+                    case '\f':
+                        builder.Append("\\f");
+                        break;
+                    case '\n':
+                        builder.Append("\\n");
+                        break;
+                    case '\r':
+                        builder.Append("\\r");
+                        break;
+                    case '\t':
+                        builder.Append("\\t");
+                        break;
+                    case '\v':
+                        builder.Append("\\v");
+                        break;
+                    default:
+                        if (char.IsControl(c))
+                        {
+                            builder.Append("\\u");
+                            builder.Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                        }
+                        else
+                        {
+                            builder.Append(c);
+                        }
+
+                        break;
+                }
+            }
+
+            return builder.ToString();
         }
     }
 }
