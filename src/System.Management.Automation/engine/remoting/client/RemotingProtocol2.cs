@@ -921,13 +921,7 @@ namespace System.Management.Automation.Internal
         {
             get
             {
-                if (_transportManager != null &&
-                    _transportManager is WSManClientSessionTransportManager)
-                {
-                    return ((WSManClientSessionTransportManager)(_transportManager)).MaxRetryConnectionTime;
-                }
-
-                return 0;
+                return _transportManager?.MaxRetryConnectionTime ?? 0;
             }
         }
 
@@ -939,8 +933,7 @@ namespace System.Management.Automation.Internal
         {
             get
             {
-                WSManClientSessionTransportManager wsmanTransportManager = _transportManager as WSManClientSessionTransportManager;
-                return wsmanTransportManager != null && wsmanTransportManager.SupportsDisconnect;
+                return _transportManager?.SupportsDisconnect ?? false;
             }
         }
 

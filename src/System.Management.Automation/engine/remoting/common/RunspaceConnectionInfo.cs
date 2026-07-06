@@ -158,6 +158,11 @@ namespace System.Management.Automation.Runspaces
         public abstract string CertificateThumbprint { get; set; }
 
         /// <summary>
+        /// Gets client-only options used by custom remoting transports.
+        /// </summary>
+        public IDictionary<string, object> ClientTransportOptions { get; } = new Dictionary<string, object>(StringComparer.Ordinal);
+
+        /// <summary>
         /// Culture that the remote session should use.
         /// </summary>
         public CultureInfo Culture
@@ -294,6 +299,7 @@ namespace System.Management.Automation.Runspaces
             _openTimeout = TimeSpanToTimeOutMs(options.OpenTimeout);
             CancelTimeout = TimeSpanToTimeOutMs(options.CancelTimeout);
             OperationTimeout = TimeSpanToTimeOutMs(options.OperationTimeout);
+            CopyClientTransportOptionsFrom(options.ClientTransportOptions);
 
             // Special case for idle timeout.  A value of milliseconds == -1
             // (BaseTransportManager.UseServerDefaultIdleTimeout) is allowed for
@@ -340,6 +346,11 @@ namespace System.Management.Automation.Runspaces
         #region Public methods
 
         /// <summary>
+        /// Gets a value indicating whether this connection info can create a custom client remoting transport.
+        /// </summary>
+        protected internal virtual bool CanCreateClientRemotingTransport => false;
+
+        /// <summary>
         /// Creates the appropriate client session transportmanager.
         /// </summary>
         /// <param name="instanceId">Runspace/Pool instance Id.</param>
@@ -354,12 +365,53 @@ namespace System.Management.Automation.Runspaces
         }
 
         /// <summary>
+        /// Creates the appropriate client session transportmanager.
+        /// </summary>
+        /// <param name="context">The transport creation context.</param>
+        public virtual BaseClientSessionTransportManager CreateClientSessionTransportManager(
+            ClientRemotingTransportCreationContext context)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+
+            return CreateClientSessionTransportManager(
+                context.RunspacePoolInstanceId,
+                context.SessionName,
+                context.CryptoHelper);
+        }
+
+        /// <summary>
         /// Create a copy of the connection info object.
         /// </summary>
         /// <returns>Copy of the connection info object.</returns>
         public virtual RunspaceConnectionInfo Clone()
         {
             throw new PSNotImplementedException();
+        }
+
+        /// <summary>
+        /// Copies client transport options to another connection info.
+        /// </summary>
+        /// <param name="target">The target connection info.</param>
+        protected void CopyClientTransportOptionsTo(RunspaceConnectionInfo target)
+        {
+            ArgumentNullException.ThrowIfNull(target);
+
+            target.CopyClientTransportOptionsFrom(ClientTransportOptions);
+        }
+
+        private void CopyClientTransportOptionsFrom(IDictionary<string, object> options)
+        {
+            ClientTransportOptions.Clear();
+
+            if (options == null)
+            {
+                return;
+            }
+
+            foreach (KeyValuePair<string, object> option in options)
+            {
+                ClientTransportOptions.Add(option.Key, option.Value);
+            }
         }
 
         #endregion
@@ -1110,6 +1162,7 @@ namespace System.Management.Automation.Runspaces
             result.DisconnectedOn = this.DisconnectedOn;
             result.ExpiresOn = this.ExpiresOn;
             result.MaxConnectionRetryCount = this.MaxConnectionRetryCount;
+            CopyClientTransportOptionsTo(result);
 
             return result;
         }
@@ -1652,6 +1705,7 @@ namespace System.Management.Automation.Runspaces
             result.RunAs32 = this.RunAs32;
             result.PSVersion = this.PSVersion;
             result.Process = Process;
+            CopyClientTransportOptionsTo(result);
             return result;
         }
 
@@ -1898,6 +1952,7 @@ namespace System.Management.Automation.Runspaces
             newCopy._appDomainName = _appDomainName;
             newCopy.OpenTimeout = this.OpenTimeout;
             newCopy.CustomPipeName = this.CustomPipeName;
+            CopyClientTransportOptionsTo(newCopy);
 
             return newCopy;
         }
@@ -2167,6 +2222,7 @@ namespace System.Management.Automation.Runspaces
             newCopy.Subsystem = Subsystem;
             newCopy.ConnectingTimeout = ConnectingTimeout;
             newCopy.Options = Options;
+            CopyClientTransportOptionsTo(newCopy);
 
             return newCopy;
         }
@@ -3037,6 +3093,7 @@ namespace System.Management.Automation.Runspaces
         public override RunspaceConnectionInfo Clone()
         {
             VMConnectionInfo result = new VMConnectionInfo(Credential, VMGuid, ComputerName, ConfigurationName);
+            CopyClientTransportOptionsTo(result);
             return result;
         }
 
@@ -3181,6 +3238,7 @@ namespace System.Management.Automation.Runspaces
         public override RunspaceConnectionInfo Clone()
         {
             ContainerConnectionInfo newCopy = new ContainerConnectionInfo(ContainerProc);
+            CopyClientTransportOptionsTo(newCopy);
             return newCopy;
         }
 
