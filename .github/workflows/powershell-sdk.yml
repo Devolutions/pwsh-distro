@@ -67,6 +67,9 @@ on:
       powershell-release-tag:
         description: PowerShell upstream release tag
         value: ${{ jobs.preflight.outputs.powershell-release-tag }}
+      powershell-upstream-tag:
+        description: Mirrored upstream PowerShell source ref
+        value: ${{ jobs.preflight.outputs.powershell-upstream-tag }}
       powershell-source-ref:
         description: Downstream PowerShell source ref
         value: ${{ jobs.preflight.outputs.powershell-source-ref }}
@@ -124,6 +127,7 @@ jobs:
       package-env: ${{ steps.info.outputs.package-env }}
       powershell-version: ${{ steps.info.outputs.powershell-version }}
       powershell-release-tag: ${{ steps.info.outputs.powershell-release-tag }}
+      powershell-upstream-tag: ${{ steps.info.outputs.powershell-upstream-tag }}
       powershell-source-ref: ${{ steps.info.outputs.powershell-source-ref }}
       sdk-package-revision: ${{ steps.info.outputs.sdk-package-revision }}
       sdk-package-version: ${{ steps.info.outputs.sdk-package-version }}
@@ -271,6 +275,7 @@ jobs:
           echo "package-env=$PackageEnv" >> $Env:GITHUB_OUTPUT
           echo "powershell-version=$Env:POWERSHELL_VERSION" >> $Env:GITHUB_OUTPUT
           echo "powershell-release-tag=$Env:POWERSHELL_RELEASE_TAG" >> $Env:GITHUB_OUTPUT
+          echo "powershell-upstream-tag=$Env:POWERSHELL_UPSTREAM_TAG" >> $Env:GITHUB_OUTPUT
           echo "powershell-source-ref=$Env:POWERSHELL_SOURCE_REF" >> $Env:GITHUB_OUTPUT
           echo "sdk-package-revision=$SdkPackageRevision" >> $Env:GITHUB_OUTPUT
           echo "sdk-package-version=$SdkPackageVersion" >> $Env:GITHUB_OUTPUT

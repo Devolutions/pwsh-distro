@@ -7,7 +7,7 @@ param(
   [string] $SourceRef,
 
   [Parameter(Mandatory)]
-  [string] $ReleaseTag,
+  [string] $UpstreamRef,
 
   [Parameter(Mandatory)]
   [string] $ReleaseVersion,
@@ -38,26 +38,92 @@ if (-not (Test-Path $PatchScript -PathType Leaf)) {
   throw "Patch export helper not found at $PatchScript."
 }
 
-$RemoteBranchRef = "origin/$SourceRef"
-$SourceBranch = $SourceRef
+function ConvertTo-RemoteHeadRef {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Ref,
+
+    [Parameter(Mandatory)]
+    [string] $Description
+  )
+
+  $TrimmedRef = $Ref.Trim()
+  if ([string]::IsNullOrWhiteSpace($TrimmedRef)) {
+    throw "Expected $Description to be a non-empty branch ref."
+  }
+
+  if ($TrimmedRef -match '^refs/heads/(.+)$') {
+    $HeadName = $Matches[1]
+  } elseif ($TrimmedRef -match '^origin/(.+)$') {
+    $HeadName = $Matches[1]
+  } elseif ($TrimmedRef -notmatch '^refs/') {
+    $HeadName = $TrimmedRef
+  } else {
+    throw "Expected $Description to be a branch ref, got '$Ref'."
+  }
+
+  [pscustomobject]@{
+    HeadName = $HeadName
+    FetchSpec = "refs/heads/${HeadName}:refs/remotes/origin/${HeadName}"
+    RemoteRef = "origin/$HeadName"
+  }
+}
+
+function ConvertTo-LocalTagRef {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Ref,
+
+    [Parameter(Mandatory)]
+    [string] $Description
+  )
+
+  $TrimmedRef = $Ref.Trim()
+  if ([string]::IsNullOrWhiteSpace($TrimmedRef)) {
+    throw "Expected $Description to be a non-empty tag ref."
+  }
+
+  if ($TrimmedRef -match '^refs/tags/(.+)$') {
+    $TagName = $Matches[1]
+  } elseif ($TrimmedRef -notmatch '^refs/' -and $TrimmedRef -notmatch '^origin/') {
+    $TagName = $TrimmedRef
+  } else {
+    throw "Expected $Description to be a tag ref, got '$Ref'."
+  }
+
+  [pscustomobject]@{
+    TagName = $TagName
+    FetchSpec = "refs/tags/${TagName}:refs/tags/${TagName}"
+    LocalRef = "refs/tags/$TagName"
+  }
+}
+
+$SourceHead = ConvertTo-RemoteHeadRef -Ref $SourceRef -Description 'source ref'
+$UpstreamTag = ConvertTo-LocalTagRef -Ref $UpstreamRef -Description 'upstream ref'
+$SourceFetchSpec = $SourceHead.FetchSpec
+$UpstreamFetchSpec = $UpstreamTag.FetchSpec
+$RemoteSourceRef = $SourceHead.RemoteRef
+$LocalUpstreamRef = $UpstreamTag.LocalRef
 
 try {
   Push-Location $PwshSourcePath
 
-  git fetch --tags --force origin | Out-Null
-  git fetch --force origin "refs/heads/${SourceRef}:refs/remotes/origin/${SourceRef}" | Out-Null
-
-  & git rev-parse --verify "$RemoteBranchRef^{commit}" *> $null
+  & git fetch --force origin $UpstreamFetchSpec $SourceFetchSpec | Out-Null
   if ($LASTEXITCODE -ne 0) {
-    throw "Unable to resolve remote branch '$RemoteBranchRef' in pwsh-src."
+    throw "Unable to fetch mirrored PowerShell refs '$($UpstreamTag.TagName)' and '$($SourceHead.HeadName)' in pwsh-src."
   }
 
-  & git rev-parse --verify "$ReleaseTag^{commit}" *> $null
+  & git rev-parse --verify "${LocalUpstreamRef}^{commit}" *> $null
   if ($LASTEXITCODE -ne 0) {
-    throw "Unable to resolve base tag '$ReleaseTag' in pwsh-src."
+    throw "Unable to resolve upstream ref '$LocalUpstreamRef' in pwsh-src."
   }
 
-  & $PatchScript -RepoPath $PwshSourcePath -Branch $SourceBranch -BaseTag $ReleaseTag -ReleaseVersion $ReleaseVersion -OutputDir $ResolvedOutputDir
+  & git rev-parse --verify "${RemoteSourceRef}^{commit}" *> $null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to resolve source ref '$RemoteSourceRef' in pwsh-src."
+  }
+
+  & $PatchScript -RepoPath $PwshSourcePath -Branch $RemoteSourceRef -BaseTag $LocalUpstreamRef -ReleaseVersion $ReleaseVersion -OutputDir $ResolvedOutputDir
   if ($LASTEXITCODE -ne 0) {
     throw "Patch export failed with exit code $LASTEXITCODE."
   }

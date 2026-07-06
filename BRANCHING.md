@@ -54,7 +54,7 @@ PowerShell workflows keep source checkout refs separate from release metadata:
 
 - `POWERSHELL_VERSION`: package and artifact version, for example `7.6.3`.
 - `POWERSHELL_RELEASE_TAG`: upstream release tag passed to PowerShell build metadata, for example `v7.6.3`.
-- `POWERSHELL_UPSTREAM_TAG`: mirrored upstream tag used for ancestry checks, for example `upstream/v7.6.3`.
+- `POWERSHELL_UPSTREAM_TAG`: mirrored upstream source ref used for ancestry checks and release patch export, for example `upstream/v7.6.3`.
 - `POWERSHELL_SOURCE_REPOSITORY`: repository containing the source branch, normally this repository.
 - `POWERSHELL_SOURCE_REF`: downstream source branch to build, for example `downstream/v7.6.3`.
 

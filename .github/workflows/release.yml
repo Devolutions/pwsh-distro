@@ -117,6 +117,7 @@ jobs:
         env:
           POWERSHELL_SOURCE_REF: ${{ needs.sdk.outputs.powershell-source-ref }}
           POWERSHELL_RELEASE_TAG: ${{ needs.sdk.outputs.powershell-release-tag }}
+          POWERSHELL_UPSTREAM_TAG: ${{ needs.sdk.outputs.powershell-upstream-tag }}
           SDK_PACKAGE_VERSION: ${{ needs.sdk.outputs.sdk-package-version }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -127,13 +128,16 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($Env:POWERSHELL_RELEASE_TAG)) {
             throw 'POWERSHELL_RELEASE_TAG is empty.'
           }
+          if ([string]::IsNullOrWhiteSpace($Env:POWERSHELL_UPSTREAM_TAG)) {
+            throw 'POWERSHELL_UPSTREAM_TAG is empty.'
+          }
           if ([string]::IsNullOrWhiteSpace($Env:SDK_PACKAGE_VERSION)) {
             throw 'SDK_PACKAGE_VERSION is empty.'
           }
 
           $ReleaseAssetsDir = Join-Path $PWD 'release-assets'
           $PatchScript = Join-Path $PWD 'scripts/Export-ReleasePowerShellPatch.ps1'
-          & $PatchScript -RepositoryRoot $PWD -SourceRef $Env:POWERSHELL_SOURCE_REF -ReleaseTag $Env:POWERSHELL_RELEASE_TAG -ReleaseVersion $Env:SDK_PACKAGE_VERSION -OutputDir $ReleaseAssetsDir
+          & $PatchScript -RepositoryRoot $PWD -SourceRef $Env:POWERSHELL_SOURCE_REF -UpstreamRef $Env:POWERSHELL_UPSTREAM_TAG -ReleaseVersion $Env:SDK_PACKAGE_VERSION -OutputDir $ReleaseAssetsDir
           if ($LASTEXITCODE -ne 0) {
             throw "Patch export failed with exit code $LASTEXITCODE."
           }
@@ -297,6 +301,7 @@ jobs:
             "| Package ID | $Env:SDK_PACKAGE_ID |",
             "| Package version | $PackageVersion |",
             "| PowerShell upstream release | ${{ needs.sdk.outputs.powershell-release-tag }} |",
+            "| PowerShell upstream source ref | ${{ needs.sdk.outputs.powershell-upstream-tag }} |",
             "| PowerShell downstream source ref | ${{ needs.sdk.outputs.powershell-source-ref }} |",
             "| PowerShell source commit | $SourceCommit |",
             "| Code signed | $CodeSigned |",
