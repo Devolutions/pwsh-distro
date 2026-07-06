@@ -4,6 +4,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Management.Automation.Host;
+using System.Management.Automation.Remoting.Client;
 using System.Management.Automation.Tracing;
 
 using Microsoft.PowerShell;
@@ -454,16 +455,13 @@ namespace System.Management.Automation.Runspaces
         public static RunspacePool CreateRunspacePool(int minRunspaces,
             int maxRunspaces, RunspaceConnectionInfo connectionInfo, PSHost host, TypeTable typeTable, PSPrimitiveDictionary applicationArguments)
         {
-            if (connectionInfo is not WSManConnectionInfo &&
-                connectionInfo is not NewProcessConnectionInfo &&
-                connectionInfo is not NamedPipeConnectionInfo &&
-                connectionInfo is not VMConnectionInfo &&
-                connectionInfo is not ContainerConnectionInfo)
+            if (!ClientRemotingTransportProviderRegistry.CanCreateRunspacePoolTransport(connectionInfo))
             {
                 throw new NotSupportedException();
             }
 
-            if (connectionInfo is WSManConnectionInfo)
+            if (connectionInfo is WSManConnectionInfo &&
+                !ClientRemotingTransportProviderRegistry.WillUseRegisteredProvider(connectionInfo))
             {
                 RemotingCommandUtil.CheckHostRemotingPrerequisites();
             }
@@ -545,7 +543,8 @@ namespace System.Management.Automation.Runspaces
         /// <returns>A remote Runspace.</returns>
         public static Runspace CreateRunspace(RunspaceConnectionInfo connectionInfo, PSHost host, TypeTable typeTable, PSPrimitiveDictionary applicationArguments, string name)
         {
-            if (connectionInfo is WSManConnectionInfo)
+            if (connectionInfo is WSManConnectionInfo &&
+                !ClientRemotingTransportProviderRegistry.WillUseRegisteredProvider(connectionInfo))
             {
                 RemotingCommandUtil.CheckHostRemotingPrerequisites();
             }

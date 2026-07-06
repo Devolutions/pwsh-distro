@@ -822,9 +822,14 @@ namespace System.Management.Automation.Remoting.Client
 
         internal WSManAPIDataCommon WSManAPIData { get; private set; }
 
-        internal bool SupportsDisconnect { get; private set; }
+        private bool _supportsDisconnect;
 
-        internal override void DisconnectAsync()
+        /// <summary>
+        /// Gets a value indicating whether the transport supports disconnect/connect semantics.
+        /// </summary>
+        protected internal override bool SupportsDisconnect => _supportsDisconnect;
+
+        protected internal override void DisconnectAsync()
         {
             Dbg.Assert(!isClosed, "object already disposed");
 
@@ -870,7 +875,7 @@ namespace System.Management.Automation.Remoting.Client
             }
         }
 
-        internal override void ReconnectAsync()
+        protected internal override void ReconnectAsync()
         {
             Dbg.Assert(!isClosed, "object already disposed");
             ReceivedDataCollection.PrepareForStreamConnect();
@@ -908,7 +913,7 @@ namespace System.Management.Automation.Remoting.Client
         /// <exception cref="PSRemotingTransportException">
         /// WSManConnectShellEx failed.
         /// </exception>
-        internal override void ConnectAsync()
+        protected internal override void ConnectAsync()
         {
             Dbg.Assert(!isClosed, "object already disposed");
             Dbg.Assert(!string.IsNullOrEmpty(ConnectionInfo.ShellUri), "shell uri cannot be null or empty.");
@@ -951,7 +956,7 @@ namespace System.Management.Automation.Remoting.Client
             AddSessionTransportManager(_sessionContextID, this);
 
             // session is implicitly assumed to support disconnect
-            SupportsDisconnect = true;
+            _supportsDisconnect = true;
 
             // Create Callback
             _connectSessionCallback = new WSManNativeApi.WSManShellAsync(new IntPtr(_sessionContextID), s_sessionConnectCallback);
@@ -995,7 +1000,7 @@ namespace System.Management.Automation.Remoting.Client
             }
         }
 
-        internal override void StartReceivingData()
+        protected internal override void StartReceivingData()
         {
             lock (syncObject)
             {
@@ -1256,7 +1261,7 @@ namespace System.Management.Automation.Remoting.Client
         ///   So if server version is known to be V2, we'll downgrade the max env size to 150KB (V2's default) if the current value is 500KB (V3 default)
         /// </summary>
         /// <param name="serverProtocolVersion">Server negotiated protocol version.</param>
-        internal void AdjustForProtocolVariations(Version serverProtocolVersion)
+        protected internal override void AdjustForProtocolVariations(Version serverProtocolVersion)
         {
             if (serverProtocolVersion <= RemotingConstants.ProtocolVersion_2_1)
             {
@@ -1286,6 +1291,9 @@ namespace System.Management.Automation.Remoting.Client
                         WSManNativeApi.WSManSessionOption.WSMAN_OPTION_SHELL_MAX_DATA_SIZE_PER_MESSAGE_KB,
                         out packetSize);
                     // packet size returned is in KB. Convert this into bytes
+                    // Startup data can still be queued when protocol negotiation completes.
+                    // Preserve existing WSMan behavior by using the downgraded size for future
+                    // command transports without rebuilding the active session send queue.
                     Fragmentor.FragmentSize = packetSize << 10;
                 }
             }
@@ -1297,7 +1305,7 @@ namespace System.Management.Automation.Remoting.Client
         /// This will close the internal WSMan Session handle. Callers must catch the close
         /// completed event and call Redirect to perform the redirection.
         /// </summary>
-        internal override void PrepareForRedirection()
+        protected internal override void PrepareForRedirection()
         {
             Dbg.Assert(!isClosed, "Transport manager must not be closed while preparing for redirection.");
 
@@ -1317,7 +1325,7 @@ namespace System.Management.Automation.Remoting.Client
         /// <exception cref="PSInvalidOperationException">
         /// 1. Create Session failed with a non-zero error code.
         /// </exception>
-        internal override void Redirect(Uri newUri, RunspaceConnectionInfo connectionInfo)
+        protected internal override void Redirect(Uri newUri, RunspaceConnectionInfo connectionInfo)
         {
             CloseSessionAndClearResources();
             tracer.WriteLine("Redirecting to URI: {0}", newUri);
@@ -1517,14 +1525,13 @@ namespace System.Management.Automation.Remoting.Client
                 WSManNativeApi.WSManSessionOption.WSMAN_OPTION_SHELL_MAX_DATA_SIZE_PER_MESSAGE_KB,
                 out packetSize);
             // packet size returned is in KB. Convert this into bytes..
-            Fragmentor.FragmentSize = packetSize << 10;
+            FragmentSize = packetSize << 10;
 
             // Get robust connections maximum retries time.
             WSManNativeApi.WSManGetSessionOptionAsDword(_wsManSessionHandle,
                 WSManNativeApi.WSManSessionOption.WSMAN_OPTION_MAX_RETRY_TIME,
                 out _maxRetryTime);
 
-            this.dataToBeSent.Fragmentor = base.Fragmentor;
             _noCompression = !connectionInfo.UseCompression;
             _noMachineProfile = connectionInfo.NoMachineProfile;
 
@@ -1756,7 +1763,10 @@ namespace System.Management.Automation.Remoting.Client
         /// <summary>
         /// Robust connection maximum retry time in milliseconds.
         /// </summary>
-        internal int MaxRetryConnectionTime
+        /// <summary>
+        /// Gets the robust connection maximum retry time in milliseconds.
+        /// </summary>
+        protected internal override int MaxRetryConnectionTime
         {
             get { return _maxRetryTime; }
         }
@@ -1925,7 +1935,7 @@ namespace System.Management.Automation.Remoting.Client
             }
 
             // check if the session supports disconnect
-            sessionTM.SupportsDisconnect = (flags & (int)WSManNativeApi.WSManCallbackFlags.WSMAN_FLAG_CALLBACK_SHELL_SUPPORTS_DISCONNECT) != 0;
+            sessionTM._supportsDisconnect = (flags & (int)WSManNativeApi.WSManCallbackFlags.WSMAN_FLAG_CALLBACK_SHELL_SUPPORTS_DISCONNECT) != 0;
 
             // openContent is used by redirection ie., while redirecting to
             // a new machine.. this is not needed anymore as the connection
@@ -2934,7 +2944,7 @@ namespace System.Management.Automation.Remoting.Client
             // Apply quota limits.. allow for data to be unlimited..
             ReceivedDataCollection.MaximumReceivedDataSize = connectionInfo.MaximumReceivedDataSizePerCommand;
             ReceivedDataCollection.MaximumReceivedObjectSize = connectionInfo.MaximumReceivedObjectSize;
-            _cmdLine = shell.PowerShell.Commands.Commands.GetCommandStringForHistory();
+            _cmdLine = CommandText;
             _onDataAvailableToSendCallback =
                 new PrioritySendDataCollection.OnDataAvailableCallback(OnDataAvailableCallback);
             _sessnTm = sessnTM;
@@ -2970,7 +2980,7 @@ namespace System.Management.Automation.Remoting.Client
         /// <exception cref="PSRemotingTransportException">
         /// WSManConnectShellCommandEx failed.
         /// </exception>
-        internal override void ConnectAsync()
+        protected internal override void ConnectAsync()
         {
             Dbg.Assert(!isClosed, "object already disposed");
             ReceivedDataCollection.PrepareForStreamConnect();
@@ -3095,7 +3105,7 @@ namespace System.Management.Automation.Remoting.Client
         /// <summary>
         /// Restores connection on a disconnected command.
         /// </summary>
-        internal override void ReconnectAsync()
+        protected internal override void ReconnectAsync()
         {
             ReceivedDataCollection.PrepareForStreamConnect();
             lock (syncObject)
@@ -3111,7 +3121,7 @@ namespace System.Management.Automation.Remoting.Client
         /// <summary>
         /// Used by powershell/pipeline to send a stop message to the server command.
         /// </summary>
-        internal override void SendStopSignal()
+        protected internal override void SendStopSignal()
         {
             lock (syncObject)
             {
@@ -3324,7 +3334,7 @@ namespace System.Management.Automation.Remoting.Client
         /// <summary>
         /// Method to have transport prepare for a disconnect operation.
         /// </summary>
-        internal override void PrepareForDisconnect()
+        protected internal override void PrepareForDisconnect()
         {
             _isDisconnectPending = true;
 
@@ -3343,7 +3353,7 @@ namespace System.Management.Automation.Remoting.Client
         /// <summary>
         /// Method to resume post disconnect operations.
         /// </summary>
-        internal override void PrepareForConnect()
+        protected internal override void PrepareForConnect()
         {
             _isDisconnectPending = false;
         }
@@ -4052,7 +4062,7 @@ namespace System.Management.Automation.Remoting.Client
             }
         }
 
-        internal override void StartReceivingData()
+        protected internal override void StartReceivingData()
         {
             PSEtwLog.LogAnalyticInformational(
                 PSEventId.WSManReceiveShellOutputEx,
