@@ -80,10 +80,12 @@ namespace System.Management.Automation.Remoting
 
             // Create transport manager
             _cryptoHelper = cryptoHelper;
-            _transportManager = _connectionInfo.CreateClientSessionTransportManager(
+            _transportManager = ClientRemotingTransportProviderRegistry.CreateSessionTransport(
+                new ClientRemotingTransportCreationContext(
                 _session.RemoteRunspacePoolInternal.InstanceId,
                 _session.RemoteRunspacePoolInternal.Name,
-                cryptoHelper);
+                    _connectionInfo,
+                    cryptoHelper));
 
             _transportManager.DataReceived += DispatchInputQueueData;
             _transportManager.WSManTransportErrorOccured += HandleTransportError;
@@ -300,12 +302,8 @@ namespace System.Management.Automation.Remoting
             // once session is established.. start receiving data (if not already done and only apples to wsmanclientsessionTM)
             if (arg.SessionStateInfo.State == RemoteSessionState.Established)
             {
-                WSManClientSessionTransportManager tm = _transportManager as WSManClientSessionTransportManager;
-                if (tm != null)
-                {
-                    tm.AdjustForProtocolVariations(_session.ServerProtocolVersion);
-                    tm.StartReceivingData();
-                }
+                _transportManager.AdjustForProtocolVariations(_session.ServerProtocolVersion);
+                _transportManager.StartReceivingData();
             }
 
             // Close the transport manager only after powershell's close their transports
