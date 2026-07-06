@@ -26,12 +26,13 @@ Describe "PSVersionTable" -Tags "CI" {
     }
 
     It "Should have version table entries" {
-       $PSVersionTable.Count | Should -Be 9
+       $PSVersionTable.Count | Should -Be 10
     }
 
     It "Should have the right version table entries" {
        $PSVersionTable.ContainsKey("PSVersion")                 | Should -BeTrue
        $PSVersionTable.ContainsKey("PSEdition")                 | Should -BeTrue
+       $PSVersionTable.ContainsKey("Vendor")                    | Should -BeTrue
        $PSVersionTable.ContainsKey("WSManStackVersion")         | Should -BeTrue
        $PSVersionTable.ContainsKey("SerializationVersion")      | Should -BeTrue
        $PSVersionTable.ContainsKey("PSCompatibleVersions")      | Should -BeTrue
@@ -54,6 +55,11 @@ Describe "PSVersionTable" -Tags "CI" {
        $PSVersionTable.GitCommitId | Should -Match $expectedGitCommitIdPattern
        $PSVersionTable.GitCommitId | Should -Not -Match $unexpectectGitCommitIdPattern
        $PSVersionTable.GitCommitId | Should -BeExactly $rawGitCommitId
+    }
+
+    It "Vendor property" {
+       $PSVersionTable.Vendor | Should -BeOfType System.String
+       $PSVersionTable.Vendor | Should -Not -BeNullOrEmpty
     }
 
     It "Should have the correct platform info" {
