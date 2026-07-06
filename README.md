@@ -7,7 +7,7 @@ GitHub Actions workflows for building redistributable PowerShell artifacts from 
 This repository builds PowerShell from source. The full PowerShell source tree is pulled in as a git submodule at `pwsh-src/`, so the checkout must initialize submodules, and on Windows it requires long-path support enabled in git.
 
 ```powershell
-git clone https://github.com/awakecoding/pwsh-distro.git
+git clone https://github.com/Devolutions/pwsh-distro.git
 cd pwsh-distro
 .\scripts\Initialize-Repository.ps1
 ```
@@ -22,7 +22,7 @@ To build a local, current-RID SDK package for smoke testing outside Actions:
 .\scripts\Build-LocalPowerShellSdk.ps1 -Validate
 ```
 
-The local script writes under `output\local-sdk\<rid>\` and produces a single-RID validation package. The GitHub Actions SDK workflow remains the authoritative multi-RID package build. Pass `-SdkPackageVersion 7.6.3.1` to smoke-test a downstream package revision for the same upstream PowerShell release.
+The local script writes under `output\local-sdk\<rid>\` and produces a single-RID validation package. The GitHub Actions SDK workflow remains the authoritative multi-RID package build. Pass `-SdkPackageVersion 7.6.3.2` to smoke-test the latest downstream package revision for the same upstream PowerShell release.
 
 ## Current pins
 
@@ -31,7 +31,9 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 | PowerShell upstream release | `7.6.3` / `v7.6.3` |
 | PowerShell downstream source ref | `downstream/v7.6.3` based on `upstream/v7.6.3` |
 | PowerShell target framework | `net10.0` |
-| PowerShell SDK package | `Devolutions.PowerShell.SDK` / `7.6.3.0` |
+| PowerShell SDK package | `Devolutions.PowerShell.SDK` / `7.6.3.0` workflow default; `7.6.3.2` latest published package |
+| Latest downstream release tag | `v7.6.3.2` |
+| Latest PowerShell CLI release assets | `PowerShell-7.6.3-<os>-<arch>.tar.gz` for Windows, macOS, and Linux on x64 and arm64 |
 | PowerShell SDK package source | `https://api.nuget.org/v3/index.json` |
 | multi-pwsh apphost package | `Devolutions.MultiPwsh.Cli` / `0.14.1` |
 | multi-pwsh apphost package source | `https://api.nuget.org/v3/index.json` |
@@ -41,20 +43,85 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 | clang+llvm | `22.1.4` |
 | VsDevShell | `latest from PSGallery` |
 
+## Getting started with release artifacts
+
+### Devolutions PowerShell SDK
+
+Use `Devolutions.PowerShell.SDK` when a .NET application needs the source-built Devolutions PowerShell assemblies and, optionally, a bundled `pwsh` apphost payload.
+
+```powershell
+dotnet new console -n PwshSdkSample -f net10.0
+cd PwshSdkSample
+dotnet add package Devolutions.PowerShell.SDK --version 7.6.3.2
+```
+
+For in-process PowerShell hosting, reference `System.Management.Automation` from the package and use the normal PowerShell SDK APIs:
+
+```csharp
+using System.Management.Automation;
+
+using PowerShell powerShell = PowerShell.Create();
+powerShell.AddScript("$PSVersionTable.PSVersion.ToString()");
+
+foreach (PSObject result in powerShell.Invoke())
+{
+    Console.WriteLine(result);
+}
+```
+
+To also copy a runnable PowerShell apphost beside your app, opt in from the project file:
+
+```xml
+<PropertyGroup>
+  <PowerShellSDKAppHostLayout>Root</PowerShellSDKAppHostLayout>
+  <PowerShellSDKLocalizedResources>Copy</PowerShellSDKLocalizedResources>
+  <PowerShellSDKPSGalleryModules>Microsoft.PowerShell.Archive;Microsoft.PowerShell.ThreadJob</PowerShellSDKPSGalleryModules>
+</PropertyGroup>
+```
+
+Then publish for the target RID:
+
+```powershell
+dotnet publish -c Release -r win-x64 --self-contained true
+.\bin\Release\net10.0\win-x64\publish\pwsh.exe -NoLogo -NoProfile -Command '$PSVersionTable'
+```
+
+Use `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`, `win-x64`, or `win-arm64` as the runtime identifier. If you only need the SDK assemblies and do not want an apphost copied to the output, leave `PowerShellSDKAppHostLayout` unset.
+
+### PowerShell CLI
+
+Use the PowerShell CLI archives when you want a ready-to-run, self-contained PowerShell layout without creating a .NET project. Download the archive for the target platform from the latest GitHub release:
+
+```powershell
+gh release download v7.6.3.2 --repo Devolutions/pwsh-distro --pattern PowerShell-7.6.3-windows-x64.tar.gz --dir pwsh-cli
+tar -xzf .\pwsh-cli\PowerShell-7.6.3-windows-x64.tar.gz -C .\pwsh-cli
+.\pwsh-cli\pwsh.exe -NoLogo -NoProfile -Command '$PSVersionTable'
+```
+
+On Linux or macOS, use the matching `PowerShell-7.6.3-linux-<arch>.tar.gz` or `PowerShell-7.6.3-macos-<arch>.tar.gz` asset, then run `./pwsh-cli/pwsh`. The release currently publishes CLI archives for:
+
+| Platform | Assets |
+| --- | --- |
+| Windows | `PowerShell-7.6.3-windows-x64.tar.gz`, `PowerShell-7.6.3-windows-arm64.tar.gz` |
+| macOS | `PowerShell-7.6.3-macos-x64.tar.gz`, `PowerShell-7.6.3-macos-arm64.tar.gz` |
+| Linux | `PowerShell-7.6.3-linux-x64.tar.gz`, `PowerShell-7.6.3-linux-arm64.tar.gz` |
+
+The CLI archives are produced from the release-ready `Devolutions.PowerShell.SDK` package, so they include the same source-built PowerShell payloads. Windows archives also include the matching Windows Desktop runtime payload needed for WPF/WinForms assemblies under `$PSHOME`.
+
 ## Workflows
 
 | Workflow | Purpose | Output |
 | --- | --- | --- |
-| `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors the source-built PowerShell SDK assemblies into one `Devolutions.PowerShell.SDK` package, signs the source-built payloads, and validates it in a sample .NET app with opt-in apphost import. It can run manually or as a reusable workflow. | `PowerShell-SDK-Release-7.6.3.0` artifact containing one `.nupkg`. |
-| `.github/workflows/powershell-cli.yml` | Restores a pinned or workflow-built `Devolutions.PowerShell.SDK` package, imports its apphost and module payload through MSBuild, publishes a self-contained PowerShell layout, and repackages it for Windows, macOS, and Linux on x64 and arm64. It can run manually or as a reusable workflow. | `PowerShell-7.6.3-<os>-<arch>` `.tar.gz` artifacts. |
-| `.github/workflows/release.yml` | Orchestrates the reusable SDK workflow first, repackages that signed SDK artifact through the reusable CLI workflow, publishes the SDK package, and creates the GitHub release. | NuGet.org publish plus GitHub release `v7.6.3.0` containing the SDK `.nupkg`, all CLI `.tar.gz` archives, the downstream PowerShell patch file, and checksums. |
+| `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors the source-built PowerShell SDK assemblies into one `Devolutions.PowerShell.SDK` package, signs the source-built payloads, and validates it in a sample .NET app with opt-in apphost import. It can run manually or as a reusable workflow. | `PowerShell-SDK-Release-X.Y.Z.R` artifact containing one `.nupkg`; the latest release publishes `Devolutions.PowerShell.SDK.7.6.3.2.nupkg`. |
+| `.github/workflows/powershell-cli.yml` | Restores a pinned or workflow-built `Devolutions.PowerShell.SDK` package, imports its apphost and module payload through MSBuild, publishes a self-contained PowerShell layout, and repackages it for Windows, macOS, and Linux on x64 and arm64. It can run manually or as a reusable workflow. | `PowerShell-7.6.3-<os>-<arch>` `.tar.gz` artifacts; the latest release includes Windows, macOS, and Linux archives for x64 and arm64. |
+| `.github/workflows/release.yml` | Orchestrates the reusable SDK workflow first, repackages that signed SDK artifact through the reusable CLI workflow, publishes the SDK package, and creates the GitHub release. | NuGet.org publish plus GitHub release `vX.Y.Z.R`; the latest published release is `v7.6.3.2` and contains the SDK `.nupkg`, all CLI `.tar.gz` archives, the downstream PowerShell patch file, and checksums. |
 | `.github/workflows/dotnet-runtime.yml` | Builds the .NET runtime tag used by this PowerShell release for Windows, macOS, and Linux on x86_64 and arm64 with prebuilt clang+llvm from `awakecoding/llvm-prebuilt`. It can run manually or as a reusable workflow and uploads a `DotNet-Runtime-<rid>` artifact per matrix entry containing the source-built `Microsoft.NETCore.App.Runtime.<rid>` runtime pack. | `DotNet-Runtime-<rid>` artifacts containing the source-built runtime packs. |
 
 All workflows are manual and can be started from the GitHub Actions **Run workflow** button.
 
 ## Publishing PowerShell releases
 
-The release workflow publishes only after the SDK package has been built, had its source-built payloads signed for release, been validated on every RID in the validation matrix, and been repackaged into every CLI archive. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`.
+The release workflow publishes only after the SDK package has been built, had its source-built payloads signed for release, been validated on every RID in the validation matrix, and been repackaged into every CLI archive. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`; the latest published release is `v7.6.3.2`, which carries downstream SDK package revision `2` for upstream PowerShell `7.6.3`.
 
 Manual inputs:
 
