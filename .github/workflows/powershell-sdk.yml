@@ -108,6 +108,7 @@ env:
   POWERSHELL_UPSTREAM_TAG: "upstream/v7.6.3"
   POWERSHELL_SOURCE_REPOSITORY: ${{ github.repository }}
   POWERSHELL_SOURCE_REF: "downstream/v7.6.3"
+  POWERSHELL_VENDOR_NAME: "Devolutions"
   SDK_VENDOR_NAME: "Devolutions"
   SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
   SDK_PACKAGE_REVISION: "0"
@@ -622,6 +623,7 @@ jobs:
 
           $Rid = "${{matrix.rid}}"
           $OutputPath = Join-Path $PWD "PowerShell-AppHost-$Rid"
+          $env:PowerShellVendor = $Env:POWERSHELL_VENDOR_NAME
           $PSBuildParams = @{
             Configuration = "Release";
             Runtime = "${{matrix.psbuild-runtime}}";
@@ -644,6 +646,7 @@ jobs:
             default { $null }
           }
           if ($PackageRuntimeGroup) {
+            $env:PowerShellVendor = $Env:POWERSHELL_VENDOR_NAME
             dotnet build ./src/Microsoft.PowerShell.SDK/Microsoft.PowerShell.SDK.csproj -c Release /p:ReleaseTag=$Env:POWERSHELL_VERSION
             if ($LASTEXITCODE -ne 0) {
               throw "Building Microsoft.PowerShell.SDK failed with exit code $LASTEXITCODE"
@@ -855,6 +858,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Import-Module .\build.psm1 -Force
           Import-Module (Join-Path $PWD '../eng/PowerShellSdkPackaging.psm1') -Force
+          $env:PowerShellVendor = $Env:POWERSHELL_VENDOR_NAME
           Start-PSBootstrap -Scenario DotNet
           Start-PSBuild -Clean -PSModuleRestore -Configuration Release -ReleaseTag $Env:POWERSHELL_RELEASE_TAG -UseNuGetOrg
 
@@ -869,6 +873,7 @@ jobs:
           "POWERSHELL_TARGET_FRAMEWORK=$TargetFramework" >> $Env:GITHUB_ENV
 
           $SdkBinPath = "./src/Microsoft.PowerShell.SDK/bin/Release/$TargetFramework"
+          $env:PowerShellVendor = $Env:POWERSHELL_VENDOR_NAME
           dotnet build ./src/Microsoft.PowerShell.SDK/Microsoft.PowerShell.SDK.csproj -c Release /p:ReleaseTag=$Env:POWERSHELL_VERSION
           if ($LASTEXITCODE -ne 0) {
             throw "Building Microsoft.PowerShell.SDK failed with exit code $LASTEXITCODE"

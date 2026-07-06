@@ -486,6 +486,7 @@ try {
     $AppHostAssets[$AppHostRuntimeIdentifier] = Resolve-MultiPwshAppHostAsset -TargetFramework $TargetFramework -Rid $AppHostRuntimeIdentifier
   }
 
+  $env:PowerShellVendor = $VendorName
   $PSBuildParams = @{
     Configuration = 'Release'
     Runtime = Get-PSBuildRuntime -Rid $RuntimeIdentifier
@@ -500,6 +501,7 @@ try {
   }
   Start-PSBuild @PSBuildParams
 
+  $env:PowerShellVendor = $VendorName
   Invoke-Native dotnet @('build', '.\src\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj', '-c', 'Release', "/p:ReleaseTag=$PowerShellVersion")
 
   $SourceBuiltAssemblyDirectories = @(Get-PowerShellSdkSourceBuiltAssemblyDirectory -SourceRoot $PwshSourceRoot -TargetFramework $TargetFramework)
