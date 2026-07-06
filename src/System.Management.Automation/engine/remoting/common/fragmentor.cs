@@ -645,6 +645,17 @@ namespace System.Management.Automation.Remoting
             }
         }
 
+        internal bool HasData
+        {
+            get
+            {
+                lock (_syncObject)
+                {
+                    return _length > 0;
+                }
+            }
+        }
+
         /// <summary>
         /// Read the currently accumulated data in queued memory streams.
         /// </summary>

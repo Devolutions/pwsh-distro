@@ -50,6 +50,7 @@ namespace System.Management.Automation.Remoting
 
         // fragmentor used to serialize & fragment objects added to this collection.
         private Fragmentor _fragmentor;
+        private int _streamFragmentSize;
 
         // callbacks used if no data is available at any time.
         // these callbacks are used to notify when data becomes available under
@@ -58,6 +59,7 @@ namespace System.Management.Automation.Remoting
         private readonly SerializedDataStream.OnDataAvailableCallback _onSendCollectionDataAvailable;
         private bool _isHandlingCallback;
         private readonly object _readSyncObject = new object();
+        private readonly object _writeSyncObject = new object();
 
         /// <summary>
         /// Callback that is called once a fragmented data is available to send.
@@ -96,17 +98,139 @@ namespace System.Management.Automation.Remoting
             set
             {
                 Dbg.Assert(value != null, "Fragmentor cannot be null.");
-                _fragmentor = value;
-                // create serialized streams using fragment size.
-                string[] names = Enum.GetNames<DataPriorityType>();
-                _dataToBeSent = new SerializedDataStream[names.Length];
-                _dataSyncObjects = new object[names.Length];
-                for (int i = 0; i < names.Length; i++)
+
+                OnDataAvailableCallback callbackToRestore = null;
+                lock (_writeSyncObject)
                 {
-                    _dataToBeSent[i] = new SerializedDataStream(_fragmentor.FragmentSize);
-                    _dataSyncObjects[i] = new object();
+                    lock (_readSyncObject)
+                    {
+                        if (_fragmentor != null && HasPendingDataNoLock())
+                        {
+                            throw new InvalidOperationException("Fragmentor cannot be reset while outbound remoting data is pending.");
+                        }
+
+                        if (ReferenceEquals(_fragmentor, value) &&
+                            _dataToBeSent != null &&
+                            _streamFragmentSize == value.FragmentSize)
+                        {
+                            return;
+                        }
+
+                        callbackToRestore = _onDataAvailableCallback;
+                        _onDataAvailableCallback = null;
+                        ResetFragmentorNoLock(value);
+                    }
+                }
+
+                RestoreCallback(callbackToRestore);
+            }
+        }
+
+        internal bool CanResetFragmentor
+        {
+            get
+            {
+                lock (_writeSyncObject)
+                {
+                    lock (_readSyncObject)
+                    {
+                        return !HasPendingDataNoLock();
+                    }
                 }
             }
+        }
+
+        internal void SetFragmentSize(int fragmentSize)
+        {
+            OnDataAvailableCallback callbackToRestore = null;
+            lock (_writeSyncObject)
+            {
+                lock (_readSyncObject)
+                {
+                    Dbg.Assert(_fragmentor != null, "Fragmentor cannot be null while setting fragment size.");
+
+                    if (_fragmentor.FragmentSize == fragmentSize &&
+                        _dataToBeSent != null &&
+                        _streamFragmentSize == fragmentSize)
+                    {
+                        return;
+                    }
+
+                    if (HasPendingDataNoLock())
+                    {
+                        throw new InvalidOperationException("Fragmentor cannot be reset while outbound remoting data is pending.");
+                    }
+
+                    callbackToRestore = _onDataAvailableCallback;
+                    _onDataAvailableCallback = null;
+                    _fragmentor.FragmentSize = fragmentSize;
+                    ResetFragmentorNoLock(_fragmentor);
+                }
+            }
+
+            RestoreCallback(callbackToRestore);
+        }
+
+        internal bool HasPendingData
+        {
+            get
+            {
+                lock (_writeSyncObject)
+                {
+                    lock (_readSyncObject)
+                    {
+                        if (_dataToBeSent == null)
+                        {
+                            return false;
+                        }
+
+                        return HasPendingDataNoLock();
+                    }
+                }
+            }
+        }
+
+        private void ResetFragmentorNoLock(Fragmentor fragmentor)
+        {
+            _fragmentor = fragmentor;
+            _streamFragmentSize = _fragmentor.FragmentSize;
+
+            // Create serialized streams using the current fragment size.
+            string[] names = Enum.GetNames<DataPriorityType>();
+            _dataToBeSent = new SerializedDataStream[names.Length];
+            _dataSyncObjects = new object[names.Length];
+            for (int i = 0; i < names.Length; i++)
+            {
+                _dataToBeSent[i] = new SerializedDataStream(_fragmentor.FragmentSize);
+                _dataSyncObjects[i] = new object();
+            }
+        }
+
+        private void RestoreCallback(OnDataAvailableCallback callbackToRestore)
+        {
+            if (callbackToRestore == null)
+            {
+                return;
+            }
+
+            byte[] data = ReadOrRegisterCallback(callbackToRestore, out DataPriorityType priorityType);
+            if (data != null)
+            {
+                callbackToRestore(data, priorityType);
+            }
+        }
+
+        private bool HasPendingDataNoLock()
+        {
+            foreach (SerializedDataStream stream in _dataToBeSent)
+            {
+                if (stream?.HasData == true)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -125,15 +249,19 @@ namespace System.Management.Automation.Remoting
         internal void Add<T>(RemoteDataObject<T> data, DataPriorityType priority)
         {
             Dbg.Assert(data != null, "Cannot send null data object");
-            Dbg.Assert(_fragmentor != null, "Fragmentor cannot be null while adding objects");
-            Dbg.Assert(_dataToBeSent != null, "Serialized streams are not initialized");
 
-            // make sure the only one object is fragmented and added to the collection
-            // at any give time. This way the order of fragment is maintained
-            // in the SendDataCollection(s).
-            lock (_dataSyncObjects[(int)priority])
+            lock (_writeSyncObject)
             {
-                _fragmentor.Fragment<T>(data, _dataToBeSent[(int)priority]);
+                Dbg.Assert(_fragmentor != null, "Fragmentor cannot be null while adding objects");
+                Dbg.Assert(_dataToBeSent != null, "Serialized streams are not initialized");
+
+                // make sure the only one object is fragmented and added to the collection
+                // at any give time. This way the order of fragment is maintained
+                // in the SendDataCollection(s).
+                lock (_dataSyncObjects[(int)priority])
+                {
+                    _fragmentor.Fragment<T>(data, _dataToBeSent[(int)priority]);
+                }
             }
         }
 
@@ -159,31 +287,37 @@ namespace System.Management.Automation.Remoting
         /// </summary>
         internal void Clear()
         {
-            /*
-                NOTE: Error paths during initialization can cause _dataSyncObjects to be null
-                causing an unhandled exception in finalize and a process crash.
-                Verify arrays and dataToBeSent objects before referencing.
-            */
-            if (_dataSyncObjects != null && _dataToBeSent != null)
+            lock (_writeSyncObject)
             {
-                const int promptResponseIndex = (int)DataPriorityType.PromptResponse;
-                const int defaultIndex = (int)DataPriorityType.Default;
-
-                lock (_dataSyncObjects[promptResponseIndex])
+                lock (_readSyncObject)
                 {
-                    if (_dataToBeSent[promptResponseIndex] != null)
+                    /*
+                        NOTE: Error paths during initialization can cause _dataSyncObjects to be null
+                        causing an unhandled exception in finalize and a process crash.
+                        Verify arrays and dataToBeSent objects before referencing.
+                    */
+                    if (_dataSyncObjects != null && _dataToBeSent != null)
                     {
-                        _dataToBeSent[promptResponseIndex].Dispose();
-                        _dataToBeSent[promptResponseIndex] = null;
-                    }
-                }
+                        const int promptResponseIndex = (int)DataPriorityType.PromptResponse;
+                        const int defaultIndex = (int)DataPriorityType.Default;
 
-                lock (_dataSyncObjects[defaultIndex])
-                {
-                    if (_dataToBeSent[defaultIndex] != null)
-                    {
-                        _dataToBeSent[defaultIndex].Dispose();
-                        _dataToBeSent[defaultIndex] = null;
+                        lock (_dataSyncObjects[promptResponseIndex])
+                        {
+                            if (_dataToBeSent[promptResponseIndex] != null)
+                            {
+                                _dataToBeSent[promptResponseIndex].Dispose();
+                                _dataToBeSent[promptResponseIndex] = null;
+                            }
+                        }
+
+                        lock (_dataSyncObjects[defaultIndex])
+                        {
+                            if (_dataToBeSent[defaultIndex] != null)
+                            {
+                                _dataToBeSent[defaultIndex].Dispose();
+                                _dataToBeSent[defaultIndex] = null;
+                            }
+                        }
                     }
                 }
             }
