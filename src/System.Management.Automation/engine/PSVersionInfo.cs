@@ -32,6 +32,7 @@ namespace System.Management.Automation
         internal const string PSRemotingProtocolVersionName = "PSRemotingProtocolVersion";
         internal const string PSVersionName = "PSVersion";
         internal const string PSEditionName = "PSEdition";
+        internal const string PSVendorName = "Vendor";
         internal const string PSGitCommitIdName = "GitCommitId";
         internal const string PSCompatibleVersionsName = "PSCompatibleVersions";
         internal const string PSPlatformName = "Platform";
@@ -46,6 +47,7 @@ namespace System.Management.Automation
 
                 internal const string ProductVersion;
                 internal const string GitCommitId;
+                internal const string Vendor;
 
                 private const int Version_Major
                 private const int Version_Minor;
@@ -92,6 +94,7 @@ namespace System.Management.Automation
 
             s_psVersionTable[PSVersionName] = s_psSemVersion;
             s_psVersionTable[PSEditionName] = PSEditionValue;
+            s_psVersionTable[PSVendorName] = Vendor;
             s_psVersionTable[PSGitCommitIdName] = GitCommitId;
             s_psVersionTable[PSCompatibleVersionsName] = new Version[] { s_psV1Version, s_psV2Version, s_psV3Version, s_psV4Version, s_psV5Version, s_psV51Version, s_psV6Version, s_psV7Version };
             s_psVersionTable[SerializationVersionName] = new Version(InternalSerializer.DefaultVersion);
