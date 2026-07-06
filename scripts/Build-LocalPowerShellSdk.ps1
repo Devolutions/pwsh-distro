@@ -12,7 +12,7 @@ param(
 
   [string] $MultiPwshPackageId = 'Devolutions.MultiPwsh.Cli',
 
-  [string] $MultiPwshPackageVersion = '0.14.0',
+  [string] $MultiPwshPackageVersion = '0.14.1',
 
   [string] $MultiPwshPackageSource = 'https://api.nuget.org/v3/index.json',
 
@@ -141,78 +141,6 @@ function Get-NormalizedNuGetPackageVersion {
   }
 
   return $PackageVersion
-}
-
-function Get-DotNetSdkBasePath {
-  $DotNetInfo = & dotnet --info
-  if ($LASTEXITCODE -ne 0) {
-    throw "dotnet --info failed with exit code $LASTEXITCODE"
-  }
-
-  $BasePathLine = $DotNetInfo | Where-Object { $_ -match '^\s*Base Path:\s*(.+)$' } | Select-Object -First 1
-  if (-not $BasePathLine -or $BasePathLine -notmatch '^\s*Base Path:\s*(.+)$') {
-    throw 'Unable to determine .NET SDK base path from dotnet --info.'
-  }
-
-  return $Matches[1].Trim()
-}
-
-function Get-DotNetAppHostTemplate {
-  param(
-    [Parameter(Mandatory)]
-    [string] $Rid
-  )
-
-  $SdkBasePath = Get-DotNetSdkBasePath
-  $DotNetRoot = Split-Path (Split-Path $SdkBasePath -Parent) -Parent
-  $HostPackRoot = Join-Path $DotNetRoot "packs\Microsoft.NETCore.App.Host.$Rid"
-  if (-not (Test-Path $HostPackRoot -PathType Container)) {
-    throw "The .NET SDK host pack for '$Rid' was not found at $HostPackRoot"
-  }
-
-  $TemplateName = if ($Rid -like 'win-*') { 'apphost.exe' } else { 'apphost' }
-  $Template = Get-ChildItem -LiteralPath $HostPackRoot -Recurse -Filter $TemplateName |
-    Sort-Object FullName |
-    Select-Object -Last 1
-  if (-not $Template) {
-    throw "The .NET SDK host pack for '$Rid' does not contain $TemplateName"
-  }
-
-  return $Template.FullName
-}
-
-function New-SharedPayloadAppHost {
-  param(
-    [Parameter(Mandatory)]
-    [string] $Rid,
-
-    [Parameter(Mandatory)]
-    [string] $DestinationPath,
-
-    [Parameter(Mandatory)]
-    [string] $ResourceAssemblyPath
-  )
-
-  $SdkBasePath = Get-DotNetSdkBasePath
-  $HostModelPath = Join-Path $SdkBasePath 'Microsoft.NET.HostModel.dll'
-  if (-not (Test-Path $HostModelPath -PathType Leaf)) {
-    throw "Microsoft.NET.HostModel.dll was not found in the .NET SDK: $HostModelPath"
-  }
-
-  if (-not ([System.Management.Automation.PSTypeName]'Microsoft.NET.HostModel.AppHost.HostWriter').Type) {
-    Add-Type -Path $HostModelPath
-  }
-  $TemplatePath = Get-DotNetAppHostTemplate -Rid $Rid
-  New-Item (Split-Path $DestinationPath -Parent) -ItemType Directory -Force | Out-Null
-  [Microsoft.NET.HostModel.AppHost.HostWriter]::CreateAppHost(
-    $TemplatePath,
-    $DestinationPath,
-    '../../../pwsh.dll',
-    $false,
-    $ResourceAssemblyPath,
-    $false,
-    $false,
-    $null)
 }
 
 function ConvertTo-XmlAttributeValue {
@@ -646,7 +574,7 @@ try {
     $NativeAppHostPackageRoot = Join-Path $SdkStagePath "runtimes\$AppHostRuntimeIdentifier\native"
     New-Item $NativeAppHostPackageRoot -ItemType Directory -Force | Out-Null
     $SharedPayloadAppHostPath = Join-Path $NativeAppHostPackageRoot $AppHostAsset.AppHostFileName
-    New-SharedPayloadAppHost -Rid $AppHostRuntimeIdentifier -DestinationPath $SharedPayloadAppHostPath -ResourceAssemblyPath (Join-Path $AppHostOutputPath 'pwsh.dll')
+    Copy-Item -LiteralPath $AppHostAsset.SourcePath -Destination $SharedPayloadAppHostPath -Force
 
     foreach ($AppHostFile in @(
         @{ Name = 'pwsh.dll'; Required = $true },
