@@ -196,35 +196,6 @@
     <ItemGroup>
       <NativeCopyLocalItems Remove="@(NativeCopyLocalItems)"
                             Condition="'%(NativeCopyLocalItems.NuGetPackageId)' == 'Devolutions.PowerShell.SDK' and $([System.String]::Copy('%(NativeCopyLocalItems.PathInPackage)').Contains('/native/'))" />
-      <RuntimeCopyLocalItems Condition="'$(_PowerShellSDKRuntimeNativeCopyToOutputEnabled)' == 'true' and '%(RuntimeCopyLocalItems.NuGetPackageId)' == 'Devolutions.PowerShell.SDK' and ($([System.String]::Copy('%(RuntimeCopyLocalItems.PathInPackage)').Contains('/lib/')) or $([System.String]::Copy('%(RuntimeCopyLocalItems.DestinationSubDirectory)').Contains('\lib\')) or $([System.String]::Copy('%(RuntimeCopyLocalItems.DestinationSubDirectory)').Contains('/lib/')))">
-        <DestinationSubDirectory></DestinationSubDirectory>
-      </RuntimeCopyLocalItems>
-      <RuntimeTargetsCopyLocalItems Condition="'$(_PowerShellSDKRuntimeNativeCopyToOutputEnabled)' == 'true' and '%(RuntimeTargetsCopyLocalItems.NuGetPackageId)' == 'Devolutions.PowerShell.SDK' and ($([System.String]::Copy('%(RuntimeTargetsCopyLocalItems.PathInPackage)').Contains('/lib/')) or $([System.String]::Copy('%(RuntimeTargetsCopyLocalItems.DestinationSubDirectory)').Contains('\lib\')) or $([System.String]::Copy('%(RuntimeTargetsCopyLocalItems.DestinationSubDirectory)').Contains('/lib/')))">
-        <DestinationSubDirectory></DestinationSubDirectory>
-      </RuntimeTargetsCopyLocalItems>
-      <_ContentFilesToPreprocess Remove="@(_ContentFilesToPreprocess)"
-                                 Condition="'$(_PowerShellSDKRuntimeNativeCopyToOutputEnabled)' == 'true' and '%(_ContentFilesToPreprocess.NuGetPackageId)' == 'Devolutions.PowerShell.SDK' and ($([System.String]::Copy('%(_ContentFilesToPreprocess.PathInPackage)').Contains('/runtimes/')) or $([System.String]::Copy('%(_ContentFilesToPreprocess.OutputPath)').Contains('runtimes\')) or $([System.String]::Copy('%(_ContentFilesToPreprocess.OutputPath)').Contains('runtimes/')))" />
-    </ItemGroup>
-  </Target>
-
-  <Target Name="_PowerShellSDKRemoveAutomaticSharedPayloadContentCopyItems"
-          AfterTargets="RunProduceContentAssets"
-          BeforeTargets="ResolveLockFileCopyLocalFiles"
-          Condition="'$(_PowerShellSDKRuntimeNativeCopyToOutputEnabled)' == 'true'">
-    <ItemGroup>
-      <_ContentCopyLocalItems Remove="@(_ContentCopyLocalItems)"
-                              Condition="'%(_ContentCopyLocalItems.NuGetPackageId)' == 'Devolutions.PowerShell.SDK' and ($([System.String]::Copy('%(_ContentCopyLocalItems.PathInPackage)').Contains('/runtimes/')) or $([System.String]::Copy('%(_ContentCopyLocalItems.TargetPath)').Contains('runtimes\')) or $([System.String]::Copy('%(_ContentCopyLocalItems.TargetPath)').Contains('runtimes/')))" />
-    </ItemGroup>
-  </Target>
-
-  <Target Name="_PowerShellSDKRemoveAutomaticSharedPayloadContentItems"
-          BeforeTargets="GetCopyToOutputDirectoryItems;_GetCopyToOutputDirectoryItemsFromThisProject;GetCopyToPublishDirectoryItems"
-          Condition="'$(_PowerShellSDKRuntimeNativeCopyToOutputEnabled)' == 'true' or '$(_PowerShellSDKRuntimeNativeCopyToPublishEnabled)' == 'true'">
-    <ItemGroup>
-      <None Remove="@(None)"
-            Condition="'%(None.NuGetPackageId)' == 'Devolutions.PowerShell.SDK' and ($([System.String]::Copy('%(None.TargetPath)').Contains('runtimes\')) or $([System.String]::Copy('%(None.TargetPath)').Contains('runtimes/'))) and ($([System.String]::Copy('%(None.TargetPath)').Contains('\Modules\')) or $([System.String]::Copy('%(None.TargetPath)').Contains('/Modules/')))" />
-      <Content Remove="@(Content)"
-               Condition="'%(Content.NuGetPackageId)' == 'Devolutions.PowerShell.SDK' and ($([System.String]::Copy('%(Content.TargetPath)').Contains('runtimes\')) or $([System.String]::Copy('%(Content.TargetPath)').Contains('runtimes/'))) and ($([System.String]::Copy('%(Content.TargetPath)').Contains('\Modules\')) or $([System.String]::Copy('%(Content.TargetPath)').Contains('/Modules/')))" />
     </ItemGroup>
   </Target>
 
@@ -256,20 +227,24 @@
            Text="PowerShellSDKAppHostLayout includes Root, but no runtime identifier is available. Set RuntimeIdentifier or PowerShellSDKAppHostRuntimeIdentifier." />
 
     <PropertyGroup>
+      <_PowerShellSDKAppHostTargetFramework Condition="'$(PowerShellSDKAppHostTargetFramework)' != ''">$(PowerShellSDKAppHostTargetFramework)</_PowerShellSDKAppHostTargetFramework>
+      <_PowerShellSDKAppHostTargetFramework Condition="'$(_PowerShellSDKAppHostTargetFramework)' == '' and '$(TargetFrameworkIdentifier)' == '.NETCoreApp' and '$(TargetFrameworkVersion)' != ''">net$([System.Text.RegularExpressions.Regex]::Replace('$(TargetFrameworkVersion)', '^v', ''))</_PowerShellSDKAppHostTargetFramework>
+      <_PowerShellSDKAppHostTargetFramework Condition="'$(_PowerShellSDKAppHostTargetFramework)' == ''">$(TargetFramework)</_PowerShellSDKAppHostTargetFramework>
       <_PowerShellSDKAppHostSourceDir>$(MSBuildThisFileDirectory)../tools/apphost/$(_PowerShellSDKAppHostRid)/</_PowerShellSDKAppHostSourceDir>
-      <_PowerShellSDKModuleSourceDir>$(MSBuildThisFileDirectory)../contentFiles/any/any/runtimes/$(_PowerShellSDKAppHostRuntimeGroup)/lib/$(TargetFramework)/Modules/</_PowerShellSDKModuleSourceDir>
-      <_PowerShellSDKAppHostRuntimeSourceDir>$(MSBuildThisFileDirectory)../runtimes/$(_PowerShellSDKAppHostRuntimeGroup)/lib/$(TargetFramework)/</_PowerShellSDKAppHostRuntimeSourceDir>
-      <_PowerShellSDKAppHostLocalizedResourceSourceDir>$(MSBuildThisFileDirectory)localized-resources/$(_PowerShellSDKAppHostRuntimeGroup)/lib/$(TargetFramework)/</_PowerShellSDKAppHostLocalizedResourceSourceDir>
+      <_PowerShellSDKModuleSourceDir>$(MSBuildThisFileDirectory)../contentFiles/any/any/runtimes/$(_PowerShellSDKAppHostRuntimeGroup)/lib/$(_PowerShellSDKAppHostTargetFramework)/Modules/</_PowerShellSDKModuleSourceDir>
+      <_PowerShellSDKAppHostRuntimeSourceDir>$(MSBuildThisFileDirectory)../runtimes/$(_PowerShellSDKAppHostRuntimeGroup)/lib/$(_PowerShellSDKAppHostTargetFramework)/</_PowerShellSDKAppHostRuntimeSourceDir>
+      <_PowerShellSDKAppHostLocalizedResourceSourceDir>$(MSBuildThisFileDirectory)localized-resources/$(_PowerShellSDKAppHostRuntimeGroup)/lib/$(_PowerShellSDKAppHostTargetFramework)/</_PowerShellSDKAppHostLocalizedResourceSourceDir>
     </PropertyGroup>
 
     <Error Condition="!Exists('$(_PowerShellSDKAppHostSourceDir)')"
            Text="PowerShellSDKAppHostLayout includes Root, but this PowerShell SDK package does not include apphost files for '$(_PowerShellSDKAppHostRid)'. Set PowerShellSDKAppHostRuntimeIdentifier to a supported runtime identifier." />
     <Error Condition="!Exists('$(_PowerShellSDKModuleSourceDir)')"
-           Text="PowerShellSDKAppHostLayout includes Root, but this PowerShell SDK package does not include module files for runtime group '$(_PowerShellSDKAppHostRuntimeGroup)' and target framework '$(TargetFramework)'." />
+           Text="PowerShellSDKAppHostLayout includes Root, but this PowerShell SDK package does not include module files for runtime group '$(_PowerShellSDKAppHostRuntimeGroup)' and apphost target framework '$(_PowerShellSDKAppHostTargetFramework)'." />
 
     <ItemGroup>
       <_PowerShellSDKAppHostFile Include="$(_PowerShellSDKAppHostSourceDir)**/*" />
       <_PowerShellSDKModuleFile Include="$(_PowerShellSDKModuleSourceDir)**/*" />
+      <_PowerShellSDKAppHostRuntimeFile Include="$(_PowerShellSDKAppHostRuntimeSourceDir)*.dll;$(_PowerShellSDKAppHostRuntimeSourceDir)*.xml" />
       <_PowerShellSDKAppHostCompanionFile Include="$(_PowerShellSDKAppHostRuntimeSourceDir)*.config" />
       <_PowerShellSDKAppHostLocalizedResourceFile Include="$(_PowerShellSDKAppHostLocalizedResourceSourceDir)**/*"
                                                   Condition="Exists('$(_PowerShellSDKAppHostLocalizedResourceSourceDir)')" />
@@ -432,9 +407,21 @@
     <Copy SourceFiles="@(_PowerShellSDKAppHostFile)"
           DestinationFiles="@(_PowerShellSDKAppHostFile->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_PowerShellSDKAppHostRuntimeFile)"
+          DestinationFiles="@(_PowerShellSDKAppHostRuntimeFile->'$(OutDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(_PowerShellSDKModuleFile)"
           DestinationFiles="@(_PowerShellSDKModuleFile->'$(OutDir)Modules/%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
+    <ItemGroup>
+      <_PowerShellSDKAppHostDependencySourceFile Include="$(OutDir)runtimes/$(_PowerShellSDKAppHostRid)/lib/**/*.dll" />
+      <_PowerShellSDKAppHostDependencyFile Include="@(_PowerShellSDKAppHostDependencySourceFile)"
+                                           Condition="!Exists('$(OutDir)%(_PowerShellSDKAppHostDependencySourceFile.Filename)%(_PowerShellSDKAppHostDependencySourceFile.Extension)')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_PowerShellSDKAppHostDependencyFile)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true"
+          Condition="'@(_PowerShellSDKAppHostDependencyFile)' != ''" />
     <Exec Command="chmod +x &quot;$(OutDir)pwsh&quot;"
           Condition="'$(OS)' != 'Windows_NT' and Exists('$(OutDir)pwsh')" />
   </Target>
@@ -464,13 +451,6 @@
           DependsOnTargets="_PowerShellSDKResolveRuntimeNativeAppHosts"
           AfterTargets="CopyFilesToOutputDirectory"
           Condition="'$(_PowerShellSDKRuntimeNativeCopyToOutputEnabled)' == 'true'">
-    <ItemGroup>
-      <_PowerShellSDKAutomaticSharedOutputPayloadFile Include="$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)/lib/$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)/*.dll;$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)/lib/$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)/*.xml;$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)/lib/$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)/*.config" />
-    </ItemGroup>
-    <Delete Files="@(_PowerShellSDKAutomaticSharedOutputPayloadFile)"
-            Condition="'@(_PowerShellSDKAutomaticSharedOutputPayloadFile)' != ''" />
-    <RemoveDir Directories="$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)/lib/$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)/Modules"
-               Condition="Exists('$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)/lib/$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)/Modules')" />
     <Copy SourceFiles="@(_PowerShellSDKRuntimeNativeSharedRuntimeFile)"
           DestinationFiles="@(_PowerShellSDKRuntimeNativeSharedRuntimeFile->'$(OutDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
@@ -479,6 +459,16 @@
           SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(_PowerShellSDKRuntimeNativeSharedModuleFile)"
           DestinationFiles="@(_PowerShellSDKRuntimeNativeSharedModuleFile->'$(OutDir)Modules/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_PowerShellSDKRuntimeNativeSharedRuntimeFile)"
+          DestinationFiles="@(_PowerShellSDKRuntimeNativeSharedRuntimeFile->'$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)/lib/$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)/%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_PowerShellSDKRuntimeNativeSharedCompanionFile)"
+          DestinationFiles="@(_PowerShellSDKRuntimeNativeSharedCompanionFile->'$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)/lib/$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)/%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_PowerShellSDKRuntimeNativeSharedCompanionFile)' != ''" />
+    <Copy SourceFiles="@(_PowerShellSDKRuntimeNativeSharedModuleFile)"
+          DestinationFiles="@(_PowerShellSDKRuntimeNativeSharedModuleFile->'$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)/lib/$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)/Modules/%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(_PowerShellSDKRuntimeNativeAppHostFile)"
           DestinationFiles="@(_PowerShellSDKRuntimeNativeAppHostFile->'$(OutDir)%(RelativeDirectory)/%(Filename)%(Extension)')"
@@ -601,6 +591,22 @@
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
         <PowerShellSDKRuntimeNativeSharedPayload>true</PowerShellSDKRuntimeNativeSharedPayload>
       </ResolvedFileToPublish>
+      <ResolvedFileToPublish Include="@(_PowerShellSDKRuntimeNativeSharedRuntimeFile)">
+        <RelativePath>runtimes\$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)\lib\$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)\%(_PowerShellSDKRuntimeNativeSharedRuntimeFile.Filename)%(_PowerShellSDKRuntimeNativeSharedRuntimeFile.Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <PowerShellSDKRuntimeNativeSharedPayload>true</PowerShellSDKRuntimeNativeSharedPayload>
+      </ResolvedFileToPublish>
+      <ResolvedFileToPublish Include="@(_PowerShellSDKRuntimeNativeSharedCompanionFile)"
+                             Condition="'@(_PowerShellSDKRuntimeNativeSharedCompanionFile)' != ''">
+        <RelativePath>runtimes\$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)\lib\$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)\%(_PowerShellSDKRuntimeNativeSharedCompanionFile.Filename)%(_PowerShellSDKRuntimeNativeSharedCompanionFile.Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <PowerShellSDKRuntimeNativeSharedPayload>true</PowerShellSDKRuntimeNativeSharedPayload>
+      </ResolvedFileToPublish>
+      <ResolvedFileToPublish Include="@(_PowerShellSDKRuntimeNativeSharedModuleFile)">
+        <RelativePath>runtimes\$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)\lib\$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)\Modules\%(_PowerShellSDKRuntimeNativeSharedModuleFile.RecursiveDir)%(_PowerShellSDKRuntimeNativeSharedModuleFile.Filename)%(_PowerShellSDKRuntimeNativeSharedModuleFile.Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <PowerShellSDKRuntimeNativeSharedPayload>true</PowerShellSDKRuntimeNativeSharedPayload>
+      </ResolvedFileToPublish>
       <ResolvedFileToPublish Include="@(_PowerShellSDKRuntimeNativeAppHostFile)">
         <RelativePath>%(_PowerShellSDKRuntimeNativeAppHostFile.RelativeDirectory)\%(_PowerShellSDKRuntimeNativeAppHostFile.Filename)%(_PowerShellSDKRuntimeNativeAppHostFile.Extension)</RelativePath>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
@@ -668,15 +674,10 @@
           AfterTargets="Publish"
           Condition="'$(_PowerShellSDKRuntimeNativeCopyToPublishEnabled)' == 'true'">
     <ItemGroup>
-      <_PowerShellSDKAutomaticSharedPublishPayloadFile Include="$(PublishDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)/lib/$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)/*.dll;$(PublishDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)/lib/$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)/*.xml;$(PublishDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)/lib/$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)/*.config" />
       <_PowerShellSDKRuntimeNativeSharedPublishDependencySourceFile Include="$(PublishDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadRid)/lib/**/*.dll" />
       <_PowerShellSDKRuntimeNativeSharedPublishDependencyFile Include="@(_PowerShellSDKRuntimeNativeSharedPublishDependencySourceFile)"
                                                               Condition="!Exists('$(PublishDir)%(_PowerShellSDKRuntimeNativeSharedPublishDependencySourceFile.Filename)%(_PowerShellSDKRuntimeNativeSharedPublishDependencySourceFile.Extension)')" />
     </ItemGroup>
-    <Delete Files="@(_PowerShellSDKAutomaticSharedPublishPayloadFile)"
-            Condition="'@(_PowerShellSDKAutomaticSharedPublishPayloadFile)' != ''" />
-    <RemoveDir Directories="$(PublishDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)/lib/$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)/Modules"
-               Condition="Exists('$(PublishDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)/lib/$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)/Modules')" />
     <Copy SourceFiles="@(_PowerShellSDKRuntimeNativeSharedPublishDependencyFile)"
           DestinationFolder="$(PublishDir)"
           SkipUnchangedFiles="true"

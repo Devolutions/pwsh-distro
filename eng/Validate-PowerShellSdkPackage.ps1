@@ -200,7 +200,7 @@ function Assert-AppHostOutput {
     [string] $Description
   )
 
-  foreach ($FileName in @($ExecutableName, 'pwsh.dll', 'pwsh.runtimeconfig.json', 'Microsoft.PowerShell.ConsoleHost.dll', 'System.Management.Automation.dll')) {
+  foreach ($FileName in @($ExecutableName, 'pwsh.dll', 'pwsh.runtimeconfig.json')) {
     $OutputPath = Join-Path $Directory $FileName
     if (-not (Test-Path $OutputPath -PathType Leaf)) {
       throw "$Description is missing expected apphost file: $OutputPath"
@@ -334,8 +334,34 @@ function Get-SourceBuiltRuntimePackageAsset {
   )
 }
 
-function Assert-NoSharedPowerShellRuntimeLibDuplicate {
+function Get-SourceBuiltRuntimePackagePayload {
   param(
+    [Parameter(Mandatory)]
+    [string[]] $SourceBuiltPackageAssetEntries,
+
+    [Parameter(Mandatory)]
+    [string] $RuntimeAssetGroup,
+
+    [Parameter(Mandatory)]
+    [string] $TargetFramework
+  )
+
+  $RuntimeAssetPrefix = "runtimes/$RuntimeAssetGroup/lib/$TargetFramework/"
+  return @(
+    $SourceBuiltPackageAssetEntries |
+      Where-Object {
+        $_.StartsWith($RuntimeAssetPrefix, [System.StringComparison]::OrdinalIgnoreCase) -and
+        $_.EndsWith('.dll', [System.StringComparison]::OrdinalIgnoreCase)
+      } |
+      Sort-Object -Unique
+  )
+}
+
+function Assert-SharedPowerShellRuntimeLibPreserved {
+  param(
+    [Parameter(Mandatory)]
+    [string] $RestoredSdkPath,
+
     [Parameter(Mandatory)]
     [string] $Directory,
 
@@ -352,16 +378,20 @@ function Assert-NoSharedPowerShellRuntimeLibDuplicate {
     [string] $Description
   )
 
-  foreach ($RelativePayloadPath in Get-SourceBuiltRuntimePackageAsset -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework) {
-    $PayloadPath = Join-Path $Directory ($RelativePayloadPath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
-    if (Test-Path $PayloadPath) {
-      throw "$Description unexpectedly duplicated shared PowerShell payload under runtime lib asset directory: $PayloadPath"
-    }
+  foreach ($RelativePayloadPath in Get-SourceBuiltRuntimePackagePayload -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework) {
+    $ExpectedPath = Join-Path $RestoredSdkPath ($RelativePayloadPath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+    $ActualPath = Join-Path $Directory ($RelativePayloadPath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+    Assert-FileContentMatches -ExpectedPath $ExpectedPath -ActualPath $ActualPath -Description "$Description runtime lib $RelativePayloadPath"
   }
 
-  $ModulePayloadPath = Join-Path $Directory ("runtimes/$RuntimeAssetGroup/lib/$TargetFramework/Modules/Microsoft.PowerShell.Management/Microsoft.PowerShell.Management.psd1" -replace '/', [System.IO.Path]::DirectorySeparatorChar)
-  if (Test-Path $ModulePayloadPath) {
-    throw "$Description unexpectedly duplicated shared PowerShell module payload under runtime lib asset directory: $ModulePayloadPath"
+  foreach ($RelativeModulePath in @(
+      "runtimes/$RuntimeAssetGroup/lib/$TargetFramework/Modules/Microsoft.PowerShell.Management/Microsoft.PowerShell.Management.psd1",
+      "runtimes/$RuntimeAssetGroup/lib/$TargetFramework/Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1",
+      "runtimes/$RuntimeAssetGroup/lib/$TargetFramework/Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1")) {
+    $ModulePayloadPath = Join-Path $Directory ($RelativeModulePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+    if (-not (Test-Path $ModulePayloadPath -PathType Leaf)) {
+      throw "$Description is missing shared PowerShell module payload under runtime lib asset directory: $ModulePayloadPath"
+    }
   }
 }
 
@@ -469,6 +499,68 @@ function Assert-FileContentMatches {
   $ActualHash = (Get-FileHash -LiteralPath $ActualPath -Algorithm SHA256).Hash
   if ($ActualHash -ne $ExpectedHash) {
     throw "$Description file content mismatch. Expected '$ExpectedPath' ($ExpectedHash), got '$ActualPath' ($ActualHash)."
+  }
+}
+
+function Assert-OutputContainsPath {
+  param(
+    [Parameter(Mandatory)]
+    [object[]] $Output,
+
+    [Parameter(Mandatory)]
+    [string] $ExpectedPath,
+
+    [Parameter(Mandatory)]
+    [string] $Description
+  )
+
+  $ResolvedExpectedPath = (Resolve-Path -LiteralPath $ExpectedPath).Path.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+  foreach ($Line in @($Output)) {
+    $NormalizedLine = ([string] $Line).Trim().TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    if ([System.String]::Equals($NormalizedLine, $ResolvedExpectedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+      return
+    }
+  }
+
+  throw "$Description output did not contain expected path '$ResolvedExpectedPath'. Output: $($Output -join [Environment]::NewLine)"
+}
+
+function Assert-AppDepsRuntimeTargetsPreserved {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Directory,
+
+    [Parameter(Mandatory)]
+    [string] $AssemblyName,
+
+    [Parameter(Mandatory)]
+    [string] $RuntimeAssetGroup,
+
+    [Parameter(Mandatory)]
+    [string] $TargetFramework,
+
+    [Parameter(Mandatory)]
+    [string] $Description
+  )
+
+  $DepsPath = Join-Path $Directory "$AssemblyName.deps.json"
+  if (-not (Test-Path $DepsPath -PathType Leaf)) {
+    throw "$Description is missing application deps file: $DepsPath"
+  }
+
+  $DepsText = Get-Content -LiteralPath $DepsPath -Raw
+  foreach ($RelativeRuntimePath in @(
+      "runtimes/$RuntimeAssetGroup/lib/$TargetFramework/System.Management.Automation.dll",
+      "runtimes/$RuntimeAssetGroup/lib/$TargetFramework/Microsoft.PowerShell.Security.dll",
+      "runtimes/$RuntimeAssetGroup/lib/$TargetFramework/Microsoft.PowerShell.Commands.Management.dll")) {
+    if ($DepsText -notmatch [regex]::Escape($RelativeRuntimePath)) {
+      throw "$Description deps file does not reference expected runtime target '$RelativeRuntimePath': $DepsPath"
+    }
+
+    $PhysicalPath = Join-Path $Directory ($RelativeRuntimePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+    if (-not (Test-Path $PhysicalPath -PathType Leaf)) {
+      throw "$Description deps file references '$RelativeRuntimePath', but the copied file is missing: $PhysicalPath"
+    }
   }
 }
 
@@ -635,6 +727,371 @@ function Invoke-RuntimeNativeOverwriteProbe {
   }
 }
 
+function Invoke-RuntimeNativeNoRuntimeIdentifierInProcessProbe {
+  param(
+    [Parameter(Mandatory)]
+    [string] $ValidationRoot,
+
+    [Parameter(Mandatory)]
+    [string] $PackageDirectoryPath,
+
+    [Parameter(Mandatory)]
+    [string] $PackageId,
+
+    [Parameter(Mandatory)]
+    [string] $PackageVersion,
+
+    [Parameter(Mandatory)]
+    [string] $SampleTargetFramework,
+
+    [Parameter(Mandatory)]
+    [string] $TargetFramework,
+
+    [Parameter(Mandatory)]
+    [string] $RuntimeAssetGroup,
+
+    [Parameter(Mandatory)]
+    [string[]] $RuntimeNativeValidationRids,
+
+    [Parameter(Mandatory)]
+    [string] $RestoredSdkPath,
+
+    [Parameter(Mandatory)]
+    [string[]] $SourceBuiltPackageAssetEntries,
+
+    [Parameter(Mandatory)]
+    [string[]] $PSGalleryProbeModuleNames
+  )
+
+  $ProbeDirectory = Join-Path $ValidationRoot 'sample-runtime-native-no-rid'
+  New-Item $ProbeDirectory -ItemType Directory -Force | Out-Null
+
+  $PreviousLocation = Get-Location
+  try {
+    Push-Location $ProbeDirectory
+
+    Invoke-DotNet @('new', 'console', '--framework', $TargetFramework, '--no-restore')
+    $ProjectPath = (Get-ChildItem -LiteralPath $ProbeDirectory -Filter '*.csproj' | Select-Object -First 1).FullName
+    if (-not $ProjectPath) {
+      throw "No no-RID RuntimeNative sample project was generated in $ProbeDirectory"
+    }
+
+    $EscapedPackageDirectoryPath = [System.Security.SecurityElement]::Escape($PackageDirectoryPath)
+    $NuGetConfig = @"
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="ci-nupkg" value="$EscapedPackageDirectoryPath" />
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+  </packageSources>
+  <packageSourceMapping>
+    <packageSource key="ci-nupkg">
+      <package pattern="$PackageId" />
+    </packageSource>
+    <packageSource key="nuget.org">
+      <package pattern="*" />
+    </packageSource>
+  </packageSourceMapping>
+</configuration>
+"@
+    Set-Content -Path (Join-Path $ProbeDirectory 'nuget.config') -Value $NuGetConfig -Encoding utf8
+
+    $Program = @'
+using System;
+using System.Management.Automation;
+
+using PowerShell ps = PowerShell.Create();
+ps.AddScript(@"
+$ErrorActionPreference = 'Stop'
+    Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
+    [void] (Get-Command Set-ExecutionPolicy -ErrorAction Stop)
+    if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+        Set-ExecutionPolicy Bypass -Scope Process -ErrorAction Stop
+    }
+    Import-Module Microsoft.PowerShell.Management -ErrorAction Stop
+    [void] (Get-Command Get-Process -ErrorAction Stop)
+    $process = Get-Process | Select-Object -First 1
+    if ($null -eq $process) {
+        throw 'Get-Process returned no process'
+    }
+    $securityModulePath = Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1'
+    $managementModulePath = Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Management/Microsoft.PowerShell.Management.psd1'
+    if (-not (Test-Path -LiteralPath $securityModulePath -PathType Leaf)) {
+        throw ('Microsoft.PowerShell.Security module manifest is not under PSHOME: {0}' -f $securityModulePath)
+    }
+    if (-not (Test-Path -LiteralPath $managementModulePath -PathType Leaf)) {
+        throw ('Microsoft.PowerShell.Management module manifest is not under PSHOME: {0}' -f $managementModulePath)
+    }
+    $PSHOME
+    $securityModulePath
+    $managementModulePath
+    ");
+
+foreach (PSObject result in ps.Invoke())
+{
+    Console.WriteLine(result);
+}
+
+foreach (ErrorRecord error in ps.Streams.Error)
+{
+    Console.Error.WriteLine(error.ToString());
+}
+
+if (ps.HadErrors)
+{
+    Environment.Exit(2);
+}
+'@
+    Set-Content -Path (Join-Path $ProbeDirectory 'Program.cs') -Value $Program -Encoding utf8
+
+    [xml] $Project = Get-Content -LiteralPath $ProjectPath
+    $PropertyGroup = @($Project.Project.PropertyGroup)[0]
+    $TargetFrameworkElement = $PropertyGroup.SelectSingleNode('TargetFramework')
+    if ($TargetFrameworkElement) {
+      $TargetFrameworkElement.InnerText = $SampleTargetFramework
+    } else {
+      Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'TargetFramework' -Value $SampleTargetFramework
+    }
+    Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'PowerShellSDKAppHostLayout' -Value 'RuntimeNative'
+    Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'PowerShellSDKAppHostImplementation' -Value 'MultiPwsh'
+    Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'PowerShellSDKRuntimeNativeAppHostRuntimeIdentifiers' -Value ($RuntimeNativeValidationRids -join ';')
+    Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'PowerShellSDKPSGalleryModules' -Value 'All'
+    $Project.Save($ProjectPath)
+
+    Invoke-DotNet @('add', $ProjectPath, 'package', $PackageId, '--version', $PackageVersion, '--no-restore')
+    Invoke-DotNet @('restore', $ProjectPath, '--configfile', (Join-Path $ProbeDirectory 'nuget.config'), '--verbosity', 'minimal')
+    Invoke-DotNet @('build', $ProjectPath, '--no-restore', '--nologo', '--verbosity', 'minimal')
+
+    $ProbeOutputDirectory = Join-Path $ProbeDirectory (Join-Path 'bin' (Join-Path 'Debug' $SampleTargetFramework))
+    Assert-SharedPowerShellOutput -Directory $ProbeOutputDirectory -SelfContained $false -Description 'No-RID RuntimeNative sample output'
+    Assert-PowerShellConfig -Directory $ProbeOutputDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'No-RID RuntimeNative sample output'
+    Assert-SharedPowerShellRuntimeLibPreserved -RestoredSdkPath $RestoredSdkPath -Directory $ProbeOutputDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'No-RID RuntimeNative sample output'
+    Assert-SourceBuiltPackagePayloadPreserved -RestoredSdkPath $RestoredSdkPath -Directory $ProbeOutputDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'No-RID RuntimeNative sample output'
+    Assert-PSGalleryModulesPresent -Directory $ProbeOutputDirectory -ModuleNames $PSGalleryProbeModuleNames -Description 'No-RID RuntimeNative sample output'
+    foreach ($RuntimeNativeRid in $RuntimeNativeValidationRids) {
+      $RuntimeNativeExecutableName = if ($RuntimeNativeRid -like 'win-*') { 'pwsh.exe' } else { 'pwsh' }
+      Assert-NoRootRuntimeNativeAppHostOutput -Directory $ProbeOutputDirectory -ExecutableName $RuntimeNativeExecutableName -Description "No-RID RuntimeNative sample output [$RuntimeNativeRid]"
+      [void] (Assert-RuntimeNativeAppHostOutput -Directory $ProbeOutputDirectory -RuntimeIdentifier $RuntimeNativeRid -ExecutableName $RuntimeNativeExecutableName -SelfContained $false -Description "No-RID RuntimeNative sample output [$RuntimeNativeRid]")
+    }
+
+    $ProbeOutput = & dotnet run --project $ProjectPath --no-build
+    if ($LASTEXITCODE -ne 0) {
+      throw "No-RID RuntimeNative sample failed with exit code $LASTEXITCODE"
+    }
+
+    $ExpectedPSHome = Join-Path $ProbeOutputDirectory "runtimes/$RuntimeAssetGroup/lib/$TargetFramework"
+    Assert-OutputContainsPath -Output $ProbeOutput -ExpectedPath $ExpectedPSHome -Description 'No-RID RuntimeNative sample'
+    Assert-OutputContainsPath -Output $ProbeOutput -ExpectedPath (Join-Path $ExpectedPSHome 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -Description 'No-RID RuntimeNative sample'
+    Assert-OutputContainsPath -Output $ProbeOutput -ExpectedPath (Join-Path $ExpectedPSHome 'Modules/Microsoft.PowerShell.Management/Microsoft.PowerShell.Management.psd1') -Description 'No-RID RuntimeNative sample'
+  } finally {
+    Set-Location $PreviousLocation
+  }
+}
+
+function Invoke-AppHostLayoutMatrixProbe {
+  param(
+    [Parameter(Mandatory)]
+    [string] $ValidationRoot,
+
+    [Parameter(Mandatory)]
+    [string] $PackageDirectoryPath,
+
+    [Parameter(Mandatory)]
+    [string] $PackageId,
+
+    [Parameter(Mandatory)]
+    [string] $PackageVersion,
+
+    [Parameter(Mandatory)]
+    [string] $SampleTargetFramework,
+
+    [Parameter(Mandatory)]
+    [string] $TargetFramework,
+
+    [Parameter(Mandatory)]
+    [string] $RuntimeAssetGroup,
+
+    [Parameter(Mandatory)]
+    [string] $CurrentRuntimeIdentifier,
+
+    [Parameter(Mandatory)]
+    [string[]] $RuntimeNativeValidationRids,
+
+    [Parameter(Mandatory)]
+    [string] $ExecutableName,
+
+    [Parameter(Mandatory)]
+    [string] $PowerShellVersion,
+
+    [Parameter(Mandatory)]
+    [string] $RestoredSdkPath,
+
+    [Parameter(Mandatory)]
+    [string[]] $SourceBuiltPackageAssetEntries,
+
+    [Parameter(Mandatory)]
+    [string[]] $PSGalleryProbeModuleNames
+  )
+
+  $Layouts = @(
+    [pscustomobject]@{ Name = 'None'; AppHostLayout = ''; ExpectRootAppHost = $false; ExpectRuntimeNativeAppHost = $false; CopyPSGalleryModules = $false },
+    [pscustomobject]@{ Name = 'Root'; AppHostLayout = 'Root'; ExpectRootAppHost = $true; ExpectRuntimeNativeAppHost = $false; CopyPSGalleryModules = $false },
+    [pscustomobject]@{ Name = 'RuntimeNative'; AppHostLayout = 'RuntimeNative'; ExpectRootAppHost = $false; ExpectRuntimeNativeAppHost = $true; CopyPSGalleryModules = $true },
+    [pscustomobject]@{ Name = 'Both'; AppHostLayout = 'Both'; ExpectRootAppHost = $true; ExpectRuntimeNativeAppHost = $true; CopyPSGalleryModules = $true }
+  )
+
+  foreach ($Layout in $Layouts) {
+    $ProbeDirectory = Join-Path $ValidationRoot "sample-layout-$($Layout.Name.ToLowerInvariant())"
+    New-Item $ProbeDirectory -ItemType Directory -Force | Out-Null
+
+    $PreviousLocation = Get-Location
+    try {
+      Push-Location $ProbeDirectory
+
+      Invoke-DotNet @('new', 'console', '--framework', $TargetFramework, '--no-restore')
+      $ProjectPath = (Get-ChildItem -LiteralPath $ProbeDirectory -Filter '*.csproj' | Select-Object -First 1).FullName
+      if (-not $ProjectPath) {
+        throw "No $($Layout.Name) layout sample project was generated in $ProbeDirectory"
+      }
+
+      $EscapedPackageDirectoryPath = [System.Security.SecurityElement]::Escape($PackageDirectoryPath)
+      $NuGetConfig = @"
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="ci-nupkg" value="$EscapedPackageDirectoryPath" />
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+  </packageSources>
+  <packageSourceMapping>
+    <packageSource key="ci-nupkg">
+      <package pattern="$PackageId" />
+    </packageSource>
+    <packageSource key="nuget.org">
+      <package pattern="*" />
+    </packageSource>
+  </packageSourceMapping>
+</configuration>
+"@
+      Set-Content -Path (Join-Path $ProbeDirectory 'nuget.config') -Value $NuGetConfig -Encoding utf8
+
+      $Program = @'
+using System;
+using System.Management.Automation;
+
+using PowerShell ps = PowerShell.Create();
+ps.AddScript(@"
+$ErrorActionPreference = 'Stop'
+$env:PSModulePath = ''
+[void] (Get-Command Set-ExecutionPolicy -ErrorAction Stop)
+if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+    Set-ExecutionPolicy Bypass -Scope Process -ErrorAction Stop
+}
+[void] (Get-Command Get-Process -ErrorAction Stop)
+$process = Get-Process | Select-Object -First 1
+if ($null -eq $process) {
+    throw 'Get-Process returned no process'
+}
+$securityModulePath = Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1'
+$managementModulePath = Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Management/Microsoft.PowerShell.Management.psd1'
+if (-not (Test-Path -LiteralPath $securityModulePath -PathType Leaf)) {
+    throw ('Microsoft.PowerShell.Security module manifest is not under PSHOME: {0}' -f $securityModulePath)
+}
+if (-not (Test-Path -LiteralPath $managementModulePath -PathType Leaf)) {
+    throw ('Microsoft.PowerShell.Management module manifest is not under PSHOME: {0}' -f $managementModulePath)
+}
+$PSHOME
+$securityModulePath
+$managementModulePath
+");
+
+foreach (PSObject result in ps.Invoke())
+{
+    Console.WriteLine(result);
+}
+
+foreach (ErrorRecord error in ps.Streams.Error)
+{
+    Console.Error.WriteLine(error.ToString());
+}
+
+if (ps.HadErrors)
+{
+    Environment.Exit(2);
+}
+'@
+      Set-Content -Path (Join-Path $ProbeDirectory 'Program.cs') -Value $Program -Encoding utf8
+
+      [xml] $Project = Get-Content -LiteralPath $ProjectPath
+      $PropertyGroup = @($Project.Project.PropertyGroup)[0]
+      $TargetFrameworkElement = $PropertyGroup.SelectSingleNode('TargetFramework')
+      if ($TargetFrameworkElement) {
+        $TargetFrameworkElement.InnerText = $SampleTargetFramework
+      } else {
+        Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'TargetFramework' -Value $SampleTargetFramework
+      }
+      if ($Layout.AppHostLayout) {
+        Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'PowerShellSDKAppHostLayout' -Value $Layout.AppHostLayout
+        Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'PowerShellSDKAppHostImplementation' -Value 'MultiPwsh'
+      }
+      if ($Layout.ExpectRuntimeNativeAppHost) {
+        Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'PowerShellSDKRuntimeNativeAppHostRuntimeIdentifiers' -Value ($RuntimeNativeValidationRids -join ';')
+      }
+      if ($Layout.CopyPSGalleryModules) {
+        Add-ProjectProperty -Project $Project -PropertyGroup $PropertyGroup -Name 'PowerShellSDKPSGalleryModules' -Value 'All'
+      }
+      $Project.Save($ProjectPath)
+
+      Invoke-DotNet @('add', $ProjectPath, 'package', $PackageId, '--version', $PackageVersion, '--no-restore')
+      Invoke-DotNet @('restore', $ProjectPath, '--configfile', (Join-Path $ProbeDirectory 'nuget.config'), '--verbosity', 'minimal')
+      Invoke-DotNet @('build', $ProjectPath, '--no-restore', '--nologo', '--verbosity', 'minimal')
+
+      $AssemblyName = Split-Path $ProjectPath -LeafBase
+      $ProbeOutputDirectory = Join-Path $ProbeDirectory (Join-Path 'bin' (Join-Path 'Debug' $SampleTargetFramework))
+      $Description = "$($Layout.Name) layout sample output"
+      $ExpectedPSHome = Join-Path $ProbeOutputDirectory "runtimes/$RuntimeAssetGroup/lib/$TargetFramework"
+
+      Assert-SharedPowerShellRuntimeLibPreserved -RestoredSdkPath $RestoredSdkPath -Directory $ProbeOutputDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description $Description
+      Assert-AppDepsRuntimeTargetsPreserved -Directory $ProbeOutputDirectory -AssemblyName $AssemblyName -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description $Description
+
+      if ($Layout.AppHostLayout) {
+        Assert-PowerShellConfig -Directory $ProbeOutputDirectory -ExpectedExecutionPolicy 'Bypass' -Description $Description
+      }
+      if ($Layout.CopyPSGalleryModules) {
+        Assert-PSGalleryModulesPresent -Directory $ProbeOutputDirectory -ModuleNames $PSGalleryProbeModuleNames -Description $Description
+      }
+      if ($Layout.ExpectRootAppHost) {
+        Assert-AppHostOutput -Directory $ProbeOutputDirectory -ExecutableName $ExecutableName -Description $Description
+        $RootPwshPath = Join-Path $ProbeOutputDirectory $ExecutableName
+        [void] (Invoke-PwshVersionCheck -PwshPath $RootPwshPath -ExpectedVersion $PowerShellVersion)
+        Invoke-PwshModuleProbe -PwshPath $RootPwshPath -ModuleRoot (Join-Path $ProbeOutputDirectory 'Modules')
+      }
+      if ($Layout.ExpectRuntimeNativeAppHost) {
+        foreach ($RuntimeNativeRid in $RuntimeNativeValidationRids) {
+          $RuntimeNativeExecutableName = if ($RuntimeNativeRid -like 'win-*') { 'pwsh.exe' } else { 'pwsh' }
+          $RuntimeNativePwshPath = Assert-RuntimeNativeAppHostOutput -Directory $ProbeOutputDirectory -RuntimeIdentifier $RuntimeNativeRid -ExecutableName $RuntimeNativeExecutableName -SelfContained $false -Description "$Description [$RuntimeNativeRid]"
+          if ($RuntimeNativeRid -eq $CurrentRuntimeIdentifier) {
+            [void] (Invoke-PwshVersionCheck -PwshPath $RuntimeNativePwshPath -ExpectedVersion $PowerShellVersion)
+            Invoke-PwshModuleProbe -PwshPath $RuntimeNativePwshPath -ModuleRoot (Join-Path $ProbeOutputDirectory 'Modules')
+          }
+        }
+      }
+
+      $ProbeOutput = & dotnet run --project $ProjectPath --no-build
+      if ($LASTEXITCODE -ne 0) {
+        throw "$($Layout.Name) layout sample failed with exit code $LASTEXITCODE"
+      }
+
+      Assert-OutputContainsPath -Output $ProbeOutput -ExpectedPath $ExpectedPSHome -Description "$($Layout.Name) layout sample"
+      Assert-OutputContainsPath -Output $ProbeOutput -ExpectedPath (Join-Path $ExpectedPSHome 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -Description "$($Layout.Name) layout sample"
+      Assert-OutputContainsPath -Output $ProbeOutput -ExpectedPath (Join-Path $ExpectedPSHome 'Modules/Microsoft.PowerShell.Management/Microsoft.PowerShell.Management.psd1') -Description "$($Layout.Name) layout sample"
+    } finally {
+      Set-Location $PreviousLocation
+    }
+  }
+}
+
 function Assert-RuntimeConfigMode {
   param(
     [Parameter(Mandatory)]
@@ -704,7 +1161,7 @@ function Invoke-PwshModuleProbe {
     $ModuleProbe = @'
 $ErrorActionPreference = 'Stop'
 $expectedModuleRoot = $env:PowerShellSDKExpectedModuleRoot
-foreach ($moduleName in 'Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility') {
+foreach ($moduleName in 'Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security') {
   $module = $null
   foreach ($candidate in Get-Module -ListAvailable $moduleName) {
     $module = $candidate
@@ -727,6 +1184,11 @@ if ($getProcess.Source -ne 'Microsoft.PowerShell.Management') {
 $selectObject = Get-Command Select-Object -ErrorAction Stop
 if ($selectObject.Source -ne 'Microsoft.PowerShell.Utility') {
   throw "Select-Object resolved from '$($selectObject.Source)' instead of Microsoft.PowerShell.Utility"
+}
+
+$setExecutionPolicy = Get-Command Set-ExecutionPolicy -ErrorAction Stop
+if ($setExecutionPolicy.Source -ne 'Microsoft.PowerShell.Security') {
+  throw "Set-ExecutionPolicy resolved from '$($setExecutionPolicy.Source)' instead of Microsoft.PowerShell.Security"
 }
 '@
     $PwshModuleProbeOutput = & $PwshPath -NoLogo -NoProfile -NonInteractive -Command $ModuleProbe
@@ -1204,7 +1666,7 @@ foreach (PSObject result in ps.Invoke())
   Assert-SharedPowerShellOutput -Directory $OutputDirectory -SelfContained $false -Description 'Sample app output'
   Assert-PowerShellConfig -Directory $OutputDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample app output'
   Assert-NoRootRuntimeNativeAppHostOutput -Directory $OutputDirectory -ExecutableName $ExecutableName -Description 'Sample app output'
-  Assert-NoSharedPowerShellRuntimeLibDuplicate -Directory $OutputDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample app output'
+  Assert-SharedPowerShellRuntimeLibPreserved -RestoredSdkPath $RestoredSdkPath -Directory $OutputDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample app output'
   Assert-PSGalleryModulesAbsent -Directory $OutputDirectory -ModuleNames $PSGalleryModulePackageIds -Description 'Sample app output'
   Assert-SourceBuiltPackagePayloadPreserved -RestoredSdkPath $RestoredSdkPath -Directory $OutputDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample app output'
   foreach ($RuntimeNativeRid in $RuntimeNativeValidationRids) {
@@ -1272,13 +1734,15 @@ foreach (PSObject result in ps.Invoke())
     throw "Sample app imported PowerShell SDK version '$AppVersion', expected '$PowerShellVersion'"
   }
 
+  Invoke-AppHostLayoutMatrixProbe -ValidationRoot $ValidationRoot -PackageDirectoryPath $PackageDirectoryPath -PackageId $PackageId -PackageVersion $PackageVersion -SampleTargetFramework $SampleTargetFramework -TargetFramework $TargetFramework -RuntimeAssetGroup $RuntimeAssetGroup -CurrentRuntimeIdentifier $RuntimeIdentifier -RuntimeNativeValidationRids $RuntimeNativeValidationRids -ExecutableName $ExecutableName -PowerShellVersion $PowerShellVersion -RestoredSdkPath $RestoredSdkPath -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -PSGalleryProbeModuleNames $PSGalleryProbeModuleNames
+
   Invoke-DotNet @('publish', $ProjectPath, '--nologo', '--verbosity', 'minimal', '-c', 'Release', '-r', $RuntimeIdentifier, '--self-contained', 'true')
 
   $PublishDirectory = Join-Path $SampleDirectory (Join-Path 'bin' (Join-Path 'Release' (Join-Path $SampleTargetFramework (Join-Path $RuntimeIdentifier 'publish'))))
   Assert-SharedPowerShellOutput -Directory $PublishDirectory -SelfContained $true -Description 'Sample self-contained publish output'
   Assert-PowerShellConfig -Directory $PublishDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample self-contained publish output'
   Assert-NoRootRuntimeNativeAppHostOutput -Directory $PublishDirectory -ExecutableName $ExecutableName -Description 'Sample self-contained publish output'
-  Assert-NoSharedPowerShellRuntimeLibDuplicate -Directory $PublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample self-contained publish output'
+  Assert-SharedPowerShellRuntimeLibPreserved -RestoredSdkPath $RestoredSdkPath -Directory $PublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample self-contained publish output'
   Assert-PSGalleryModulesAbsent -Directory $PublishDirectory -ModuleNames $PSGalleryModulePackageIds -Description 'Sample self-contained publish output'
   Assert-SourceBuiltPackagePayloadPreserved -RestoredSdkPath $RestoredSdkPath -Directory $PublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample self-contained publish output'
   foreach ($RuntimeNativeRid in $RuntimeNativeValidationRids) {
@@ -1297,7 +1761,7 @@ foreach (PSObject result in ps.Invoke())
   Assert-SharedPowerShellOutput -Directory $FrameworkDependentPublishDirectory -SelfContained $false -Description 'Sample framework-dependent publish output'
   Assert-PowerShellConfig -Directory $FrameworkDependentPublishDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample framework-dependent publish output'
   Assert-NoRootRuntimeNativeAppHostOutput -Directory $FrameworkDependentPublishDirectory -ExecutableName $ExecutableName -Description 'Sample framework-dependent publish output'
-  Assert-NoSharedPowerShellRuntimeLibDuplicate -Directory $FrameworkDependentPublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample framework-dependent publish output'
+  Assert-SharedPowerShellRuntimeLibPreserved -RestoredSdkPath $RestoredSdkPath -Directory $FrameworkDependentPublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample framework-dependent publish output'
   Assert-PSGalleryModulesAbsent -Directory $FrameworkDependentPublishDirectory -ModuleNames $PSGalleryModulePackageIds -Description 'Sample framework-dependent publish output'
   Assert-SourceBuiltPackagePayloadPreserved -RestoredSdkPath $RestoredSdkPath -Directory $FrameworkDependentPublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample framework-dependent publish output'
   foreach ($RuntimeNativeRid in $RuntimeNativeValidationRids) {
@@ -1355,7 +1819,7 @@ foreach (PSObject result in ps.Invoke())
   Assert-SharedPowerShellOutput -Directory $PSGalleryPublishDirectory -SelfContained $false -Description 'Sample PSGallery publish output'
   Assert-PowerShellConfig -Directory $PSGalleryPublishDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample PSGallery publish output'
   Assert-NoRootRuntimeNativeAppHostOutput -Directory $PSGalleryPublishDirectory -ExecutableName $ExecutableName -Description 'Sample PSGallery publish output'
-  Assert-NoSharedPowerShellRuntimeLibDuplicate -Directory $PSGalleryPublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample PSGallery publish output'
+  Assert-SharedPowerShellRuntimeLibPreserved -RestoredSdkPath $RestoredSdkPath -Directory $PSGalleryPublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample PSGallery publish output'
   Assert-PSGalleryModulesPresent -Directory $PSGalleryPublishDirectory -ModuleNames $PSGallerySubsetModuleNames -Description 'Sample PSGallery publish output'
   Assert-PSGalleryModulesAbsent -Directory $PSGalleryPublishDirectory -ModuleNames $UnexpectedPSGallerySubsetModuleNames -Description 'Sample PSGallery publish output'
   $PSGalleryPublishRuntimeNativePwshPath = Assert-RuntimeNativeAppHostOutput -Directory $PSGalleryPublishDirectory -RuntimeIdentifier $RuntimeIdentifier -ExecutableName $ExecutableName -SelfContained $false -Description "Sample PSGallery publish output [$RuntimeIdentifier]"
