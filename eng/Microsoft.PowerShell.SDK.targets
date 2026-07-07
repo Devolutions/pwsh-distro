@@ -414,7 +414,7 @@
           DestinationFiles="@(_PowerShellSDKModuleFile->'$(OutDir)Modules/%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
     <ItemGroup>
-      <_PowerShellSDKAppHostDependencySourceFile Include="$(OutDir)runtimes/$(_PowerShellSDKAppHostRid)/lib/**/*.dll" />
+      <_PowerShellSDKAppHostDependencySourceFile Include="$(OutDir)runtimes/$(_PowerShellSDKAppHostRid)/lib/**/*.dll;$(OutDir)runtimes/$(_PowerShellSDKAppHostRid)/lib/**/*.so;$(OutDir)runtimes/$(_PowerShellSDKAppHostRid)/lib/**/*.dylib" />
       <_PowerShellSDKAppHostDependencyFile Include="@(_PowerShellSDKAppHostDependencySourceFile)"
                                            Condition="!Exists('$(OutDir)%(_PowerShellSDKAppHostDependencySourceFile.Filename)%(_PowerShellSDKAppHostDependencySourceFile.Extension)')" />
     </ItemGroup>
@@ -474,7 +474,7 @@
           DestinationFiles="@(_PowerShellSDKRuntimeNativeAppHostFile->'$(OutDir)%(RelativeDirectory)/%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
     <ItemGroup>
-      <_PowerShellSDKRuntimeNativeSharedDependencySourceFile Include="$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadRid)/lib/**/*.dll" />
+      <_PowerShellSDKRuntimeNativeSharedDependencySourceFile Include="$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadRid)/lib/**/*.dll;$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadRid)/lib/**/*.so;$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadRid)/lib/**/*.dylib" />
       <_PowerShellSDKRuntimeNativeSharedDependencyFile Include="@(_PowerShellSDKRuntimeNativeSharedDependencySourceFile)"
                                                        Condition="!Exists('$(OutDir)%(_PowerShellSDKRuntimeNativeSharedDependencySourceFile.Filename)%(_PowerShellSDKRuntimeNativeSharedDependencySourceFile.Extension)')" />
     </ItemGroup>
@@ -674,7 +674,7 @@
           AfterTargets="Publish"
           Condition="'$(_PowerShellSDKRuntimeNativeCopyToPublishEnabled)' == 'true'">
     <ItemGroup>
-      <_PowerShellSDKRuntimeNativeSharedPublishDependencySourceFile Include="$(PublishDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadRid)/lib/**/*.dll" />
+      <_PowerShellSDKRuntimeNativeSharedPublishDependencySourceFile Include="$(PublishDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadRid)/lib/**/*.dll;$(PublishDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadRid)/lib/**/*.so;$(PublishDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadRid)/lib/**/*.dylib" />
       <_PowerShellSDKRuntimeNativeSharedPublishDependencyFile Include="@(_PowerShellSDKRuntimeNativeSharedPublishDependencySourceFile)"
                                                               Condition="!Exists('$(PublishDir)%(_PowerShellSDKRuntimeNativeSharedPublishDependencySourceFile.Filename)%(_PowerShellSDKRuntimeNativeSharedPublishDependencySourceFile.Extension)')" />
     </ItemGroup>
