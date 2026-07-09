@@ -270,6 +270,10 @@
         <ExecutableName>pwsh</ExecutableName>
         <RequiresChmod>true</RequiresChmod>
       </_PowerShellSDKRuntimeNativeSupportedRid>
+      <_PowerShellSDKRuntimeNativeSupportedRid Include="linux-arm">
+        <ExecutableName>pwsh</ExecutableName>
+        <RequiresChmod>true</RequiresChmod>
+      </_PowerShellSDKRuntimeNativeSupportedRid>
       <_PowerShellSDKRuntimeNativeSupportedRid Include="linux-arm64">
         <ExecutableName>pwsh</ExecutableName>
         <RequiresChmod>true</RequiresChmod>
@@ -286,7 +290,7 @@
       <_PowerShellSDKRuntimeNativeRequestedRid Include="$([MSBuild]::Unescape('$(_PowerShellSDKRuntimeNativeRequestedRidList)'))"
                                                Condition="'$(_PowerShellSDKRuntimeNativeRequestedRidList)' != ''" />
       <_PowerShellSDKRuntimeNativeUnsupportedRid Include="@(_PowerShellSDKRuntimeNativeRequestedRid)"
-                                                 Condition="'%(_PowerShellSDKRuntimeNativeRequestedRid.Identity)' != 'win-x64' and '%(_PowerShellSDKRuntimeNativeRequestedRid.Identity)' != 'win-arm64' and '%(_PowerShellSDKRuntimeNativeRequestedRid.Identity)' != 'linux-x64' and '%(_PowerShellSDKRuntimeNativeRequestedRid.Identity)' != 'linux-arm64' and '%(_PowerShellSDKRuntimeNativeRequestedRid.Identity)' != 'osx-x64' and '%(_PowerShellSDKRuntimeNativeRequestedRid.Identity)' != 'osx-arm64'" />
+                                                 Condition="'%(_PowerShellSDKRuntimeNativeRequestedRid.Identity)' != 'win-x64' and '%(_PowerShellSDKRuntimeNativeRequestedRid.Identity)' != 'win-arm64' and '%(_PowerShellSDKRuntimeNativeRequestedRid.Identity)' != 'linux-x64' and '%(_PowerShellSDKRuntimeNativeRequestedRid.Identity)' != 'linux-arm' and '%(_PowerShellSDKRuntimeNativeRequestedRid.Identity)' != 'linux-arm64' and '%(_PowerShellSDKRuntimeNativeRequestedRid.Identity)' != 'osx-x64' and '%(_PowerShellSDKRuntimeNativeRequestedRid.Identity)' != 'osx-arm64'" />
       <_PowerShellSDKRuntimeNativeSelectedRid Include="@(_PowerShellSDKRuntimeNativeSupportedRid)"
                                               Condition="'$(_PowerShellSDKRuntimeNativeRequestedRidList)' == '' or $([System.String]::Copy(';$(_PowerShellSDKRuntimeNativeRequestedRidList);').Contains(';%(_PowerShellSDKRuntimeNativeSupportedRid.Identity);')) == 'True'">
         <RelativeDirectory>runtimes/%(_PowerShellSDKRuntimeNativeSupportedRid.Identity)/native</RelativeDirectory>
@@ -777,6 +781,10 @@
       RuntimeConfigPath="$(PublishDir)runtimes/linux-x64/native/pwsh.runtimeconfig.json"
       ApplicationRuntimeConfigPath="$(PublishDir)$(AssemblyName).runtimeconfig.json"
       Condition="Exists('$(PublishDir)runtimes/linux-x64/native/pwsh.runtimeconfig.json')" />
+    <PowerShellSDKRewriteSelfContainedRuntimeConfig
+      RuntimeConfigPath="$(PublishDir)runtimes/linux-arm/native/pwsh.runtimeconfig.json"
+      ApplicationRuntimeConfigPath="$(PublishDir)$(AssemblyName).runtimeconfig.json"
+      Condition="Exists('$(PublishDir)runtimes/linux-arm/native/pwsh.runtimeconfig.json')" />
     <PowerShellSDKRewriteSelfContainedRuntimeConfig
       RuntimeConfigPath="$(PublishDir)runtimes/linux-arm64/native/pwsh.runtimeconfig.json"
       ApplicationRuntimeConfigPath="$(PublishDir)$(AssemblyName).runtimeconfig.json"

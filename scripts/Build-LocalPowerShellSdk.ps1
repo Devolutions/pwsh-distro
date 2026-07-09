@@ -85,6 +85,7 @@ function Get-PSBuildRuntime {
   switch ($Rid) {
     'win-x64' { return 'fxdependent-win-desktop' }
     'linux-x64' { return 'fxdependent-linux-x64' }
+    'linux-arm' { return 'fxdependent-linux-arm' }
     'linux-arm64' { return 'fxdependent-linux-arm64' }
     'osx-x64' { return 'fxdependent' }
     'osx-arm64' { return 'fxdependent' }

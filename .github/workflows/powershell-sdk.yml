@@ -316,6 +316,10 @@ jobs:
             runner: ubuntu-24.04
             psbuild-runtime: fxdependent-linux-x64
             executable: pwsh
+          - rid: linux-arm
+            runner: ubuntu-24.04
+            psbuild-runtime: fxdependent-linux-arm
+            executable: pwsh
           - rid: linux-arm64
             runner: ubuntu-24.04-arm
             psbuild-runtime: fxdependent-linux-arm64
@@ -451,6 +455,7 @@ jobs:
             'win-x64' = 'pwsh.exe';
             'win-arm64' = 'pwsh.exe';
             'linux-x64' = 'pwsh';
+            'linux-arm' = 'pwsh';
             'linux-arm64' = 'pwsh';
             'osx-x64' = 'pwsh';
             'osx-arm64' = 'pwsh';
@@ -1128,6 +1133,7 @@ jobs:
             'win-x64' = @('pwsh.exe', 'pwsh.dll', 'pwsh.runtimeconfig.json')
             'win-arm64' = @('pwsh.exe', 'pwsh.dll', 'pwsh.runtimeconfig.json')
             'linux-x64' = @('pwsh', 'pwsh.dll', 'pwsh.runtimeconfig.json')
+            'linux-arm' = @('pwsh', 'pwsh.dll', 'pwsh.runtimeconfig.json')
             'linux-arm64' = @('pwsh', 'pwsh.dll', 'pwsh.runtimeconfig.json')
             'osx-x64' = @('pwsh', 'pwsh.dll', 'pwsh.runtimeconfig.json')
             'osx-arm64' = @('pwsh', 'pwsh.dll', 'pwsh.runtimeconfig.json')
@@ -1310,12 +1316,14 @@ jobs:
             'runtimes/win-x64/native',
             'runtimes/win-arm64/native',
             'runtimes/linux-x64/native',
+            'runtimes/linux-arm/native',
             'runtimes/linux-arm64/native',
             'runtimes/osx-x64/native',
             'runtimes/osx-arm64/native',
             'tools/apphost/win-x64',
             'tools/apphost/win-arm64',
             'tools/apphost/linux-x64',
+            'tools/apphost/linux-arm',
             'tools/apphost/linux-arm64',
             'tools/apphost/osx-x64',
             'tools/apphost/osx-arm64',
@@ -1416,6 +1424,9 @@ jobs:
             runner: windows-2025
           - rid: linux-x64
             runner: ubuntu-24.04
+          - rid: linux-arm
+            runner: ubuntu-24.04
+            skip-runtime-execution: true
           - rid: linux-arm64
             runner: ubuntu-24.04-arm
           - rid: osx-x64
@@ -1462,11 +1473,18 @@ jobs:
             throw "Invalid SDK package version '$SdkPackageVersion', expected X.Y.Z.R."
           }
 
-          ./eng/Validate-PowerShellSdkPackage.ps1 `
-            -PackageDirectory ./sdk-package `
-            -PowerShellVersion $Env:POWERSHELL_VERSION `
-            -PackageVersion $SdkPackageVersion `
-            -TargetFramework $TargetFramework `
-            -RuntimeIdentifier ${{matrix.rid}} `
-            -PackageId $Env:SDK_PACKAGE_ID `
-            -PackageVendorName $Env:SDK_VENDOR_NAME
+          $ValidateArguments = @(
+            '-PackageDirectory', './sdk-package',
+            '-PowerShellVersion', $Env:POWERSHELL_VERSION,
+            '-PackageVersion', $SdkPackageVersion,
+            '-TargetFramework', $TargetFramework,
+            '-RuntimeIdentifier', '${{matrix.rid}}',
+            '-PackageId', $Env:SDK_PACKAGE_ID,
+            '-PackageVendorName', $Env:SDK_VENDOR_NAME
+          )
+          [bool] $SkipRuntimeExecution = $false
+          if ([System.Boolean]::TryParse('${{matrix.skip-runtime-execution}}', [ref] $SkipRuntimeExecution) -and $SkipRuntimeExecution) {
+            $ValidateArguments += '-SkipRuntimeExecution'
+          }
+
+          ./eng/Validate-PowerShellSdkPackage.ps1 @ValidateArguments
