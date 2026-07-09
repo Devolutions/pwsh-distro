@@ -1788,7 +1788,7 @@ foreach (PSObject result in ps.Invoke())
   foreach ($RuntimeNativeRid in $RuntimeNativeValidationRids) {
     $RuntimeNativeExecutableName = if ($RuntimeNativeRid -like 'win-*') { 'pwsh.exe' } else { 'pwsh' }
     $RuntimeNativePwshPath = Assert-RuntimeNativeAppHostOutput -Directory $FrameworkDependentPublishDirectory -RuntimeIdentifier $RuntimeNativeRid -ExecutableName $RuntimeNativeExecutableName -SelfContained $false -Description "Sample framework-dependent publish output [$RuntimeNativeRid]"
-    if ($RuntimeNativeRid -eq $RuntimeIdentifier) {
+    if ($RuntimeNativeRid -eq $RuntimeIdentifier -and -not $SkipRuntimeExecution) {
       [void] (Invoke-PwshVersionCheck -PwshPath $RuntimeNativePwshPath -ExpectedVersion $PowerShellVersion)
       Invoke-PwshStartJobProbe -PwshPath $RuntimeNativePwshPath
     }
@@ -1816,8 +1816,10 @@ foreach (PSObject result in ps.Invoke())
     "/p:PowerShellSDKPSGalleryModules=All"
   )
   Assert-PSGalleryModulesPresent -Directory $OutputDirectory -ModuleNames $PSGalleryProbeModuleNames -Description 'Sample app output with PSGallery opt-in'
-  $OutputRuntimeNativePwshPath = Join-Path $OutputDirectory "runtimes/$RuntimeIdentifier/native/$ExecutableName"
-  Invoke-PwshPSGalleryModuleProbe -PwshPath $OutputRuntimeNativePwshPath -ModuleRoot (Join-Path $OutputDirectory 'Modules') -ModuleNames $PSGalleryProbeModuleNames
+  if (-not $SkipRuntimeExecution) {
+    $OutputRuntimeNativePwshPath = Join-Path $OutputDirectory "runtimes/$RuntimeIdentifier/native/$ExecutableName"
+    Invoke-PwshPSGalleryModuleProbe -PwshPath $OutputRuntimeNativePwshPath -ModuleRoot (Join-Path $OutputDirectory 'Modules') -ModuleNames $PSGalleryProbeModuleNames
+  }
 
   $PSGalleryPublishDirectory = Join-Path $SampleDirectory (Join-Path 'bin' (Join-Path 'Release' (Join-Path $SampleTargetFramework (Join-Path $RuntimeIdentifier 'publish-psgallery'))))
   Remove-Item $PSGalleryPublishDirectory -Recurse -Force -ErrorAction SilentlyContinue
@@ -1844,7 +1846,9 @@ foreach (PSObject result in ps.Invoke())
   Assert-PSGalleryModulesPresent -Directory $PSGalleryPublishDirectory -ModuleNames $PSGallerySubsetModuleNames -Description 'Sample PSGallery publish output'
   Assert-PSGalleryModulesAbsent -Directory $PSGalleryPublishDirectory -ModuleNames $UnexpectedPSGallerySubsetModuleNames -Description 'Sample PSGallery publish output'
   $PSGalleryPublishRuntimeNativePwshPath = Assert-RuntimeNativeAppHostOutput -Directory $PSGalleryPublishDirectory -RuntimeIdentifier $RuntimeIdentifier -ExecutableName $ExecutableName -SelfContained $false -Description "Sample PSGallery publish output [$RuntimeIdentifier]"
-  [void] (Invoke-PwshVersionCheck -PwshPath $PSGalleryPublishRuntimeNativePwshPath -ExpectedVersion $PowerShellVersion)
+  if (-not $SkipRuntimeExecution) {
+    [void] (Invoke-PwshVersionCheck -PwshPath $PSGalleryPublishRuntimeNativePwshPath -ExpectedVersion $PowerShellVersion)
+  }
 
   $LocalizedPublishDirectory = Join-Path $SampleDirectory (Join-Path 'bin' (Join-Path 'Release' (Join-Path $SampleTargetFramework (Join-Path $RuntimeIdentifier 'publish-localized'))))
   Remove-Item $LocalizedPublishDirectory -Recurse -Force -ErrorAction SilentlyContinue
@@ -1869,9 +1873,13 @@ foreach (PSObject result in ps.Invoke())
   Assert-FileContentMatches -ExpectedPath $RepresentativeLocalizedResourcePackagePath -ActualPath (Join-Path $LocalizedPublishDirectory $RepresentativeLocalizedResourcePath) -Description 'Sample localized resource publish output'
 
   Write-Host "Validated $PackageId $PackageVersion from $($Package.FullName)"
-  Write-Host "Sample app imported vendored PowerShell SDK $($AppVersion.Trim())"
-  Write-Host "Sample self-contained publish runtime-native apphost reported PowerShell $PwshVersion"
-  Write-Host "Sample framework-dependent publish runtime-native apphost reported PowerShell $PowerShellVersion"
+  if ($SkipRuntimeExecution) {
+    Write-Host "Skipped runtime execution probes for $RuntimeIdentifier."
+  } else {
+    Write-Host "Sample app imported vendored PowerShell SDK $($AppVersion.Trim())"
+    Write-Host "Sample self-contained publish runtime-native apphost reported PowerShell $PwshVersion"
+    Write-Host "Sample framework-dependent publish runtime-native apphost reported PowerShell $PowerShellVersion"
+  }
 } finally {
   Set-Location $PreviousLocation
   $Env:NUGET_PACKAGES = $PreviousNuGetPackages
