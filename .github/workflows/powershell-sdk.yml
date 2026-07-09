@@ -318,7 +318,7 @@ jobs:
             executable: pwsh
           - rid: linux-arm
             runner: ubuntu-24.04
-            psbuild-runtime: fxdependent-linux-arm
+            psbuild-runtime: linux-arm
             executable: pwsh
           - rid: linux-arm64
             runner: ubuntu-24.04-arm
