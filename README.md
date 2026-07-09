@@ -35,7 +35,7 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 | Latest downstream release tag | `v7.6.3.2` |
 | Latest PowerShell CLI release assets | `PowerShell-7.6.3-<os>-<arch>.tar.gz` for Windows, macOS, and Linux on x64 and arm64 |
 | PowerShell SDK package source | `https://api.nuget.org/v3/index.json` |
-| multi-pwsh apphost package | `Devolutions.MultiPwsh.Cli` / `0.14.1` |
+| multi-pwsh apphost package | `Devolutions.MultiPwsh.Cli` / `0.14.2` |
 | multi-pwsh apphost package source | `https://api.nuget.org/v3/index.json` |
 | psign code signing tool | `Devolutions.Psign.Tool` / `latest (un-pinned)` |
 | .NET runtime workflow | `v10.0.5` |
@@ -86,7 +86,7 @@ dotnet publish -c Release -r win-x64 --self-contained true
 .\bin\Release\net10.0\win-x64\publish\pwsh.exe -NoLogo -NoProfile -Command '$PSVersionTable'
 ```
 
-Use `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`, `win-x64`, or `win-arm64` as the runtime identifier. If you only need the SDK assemblies and do not want an apphost copied to the output, leave `PowerShellSDKAppHostLayout` unset.
+Use `linux-x64`, `linux-arm`, `linux-arm64`, `osx-x64`, `osx-arm64`, `win-x64`, or `win-arm64` as the runtime identifier. If you only need the SDK assemblies and do not want an apphost copied to the output, leave `PowerShellSDKAppHostLayout` unset.
 
 ### PowerShell CLI
 
@@ -186,7 +186,7 @@ The vendored SDK keeps upstream PowerShell build/runtime metadata separate from 
 
 The package keeps original assembly identities (`System.Management.Automation.dll`, `Microsoft.PowerShell.Commands.Utility.dll`, and related assemblies) so consumers only need to change the NuGet package reference. Source-built PowerShell assemblies are discovered from the current `pwsh-src` build outputs and embedded directly in `Devolutions.PowerShell.SDK`; the package records the embedded Microsoft package IDs and source-built package asset paths under `buildTransitive`, and validation fails if any of those package IDs appear in the restore graph. External packages that are not built by this repository, including `Microsoft.PowerShell.Native` and `Microsoft.PowerShell.MarkdownRender`, remain normal public NuGet dependencies.
 
-The SDK package also includes apphost files for `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`. These files are inert by default. A consuming project opts in by choosing an apphost layout. The root layout copies `pwsh`/`pwsh.exe`, `pwsh.dll`, `pwsh.runtimeconfig.json`, runtime assemblies, and built-in module manifests to the app root:
+The SDK package also includes apphost files for `win-x64`, `win-arm64`, `linux-x64`, `linux-arm`, `linux-arm64`, `osx-x64`, and `osx-arm64`. These files are inert by default. A consuming project opts in by choosing an apphost layout. The root layout copies `pwsh`/`pwsh.exe`, `pwsh.dll`, `pwsh.runtimeconfig.json`, runtime assemblies, and built-in module manifests to the app root:
 
 ```xml
 <PropertyGroup>

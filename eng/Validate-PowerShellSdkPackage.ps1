@@ -15,7 +15,9 @@ param(
 
   [string] $PackageId = 'Devolutions.PowerShell.SDK',
 
-  [string] $PackageVendorName = 'Devolutions'
+  [string] $PackageVendorName = 'Devolutions',
+
+  [switch] $SkipRuntimeExecution
 )
 
 Set-StrictMode -Version 3.0
@@ -1063,15 +1065,17 @@ if (ps.HadErrors)
       }
       if ($Layout.ExpectRootAppHost) {
         Assert-AppHostOutput -Directory $ProbeOutputDirectory -ExecutableName $ExecutableName -Description $Description
-        $RootPwshPath = Join-Path $ProbeOutputDirectory $ExecutableName
-        [void] (Invoke-PwshVersionCheck -PwshPath $RootPwshPath -ExpectedVersion $PowerShellVersion)
-        Invoke-PwshModuleProbe -PwshPath $RootPwshPath -ModuleRoot (Join-Path $ProbeOutputDirectory 'Modules')
+        if (-not $SkipRuntimeExecution) {
+          $RootPwshPath = Join-Path $ProbeOutputDirectory $ExecutableName
+          [void] (Invoke-PwshVersionCheck -PwshPath $RootPwshPath -ExpectedVersion $PowerShellVersion)
+          Invoke-PwshModuleProbe -PwshPath $RootPwshPath -ModuleRoot (Join-Path $ProbeOutputDirectory 'Modules')
+        }
       }
       if ($Layout.ExpectRuntimeNativeAppHost) {
         foreach ($RuntimeNativeRid in $RuntimeNativeValidationRids) {
           $RuntimeNativeExecutableName = if ($RuntimeNativeRid -like 'win-*') { 'pwsh.exe' } else { 'pwsh' }
           $RuntimeNativePwshPath = Assert-RuntimeNativeAppHostOutput -Directory $ProbeOutputDirectory -RuntimeIdentifier $RuntimeNativeRid -ExecutableName $RuntimeNativeExecutableName -SelfContained $false -Description "$Description [$RuntimeNativeRid]"
-          if ($RuntimeNativeRid -eq $CurrentRuntimeIdentifier) {
+          if ($RuntimeNativeRid -eq $CurrentRuntimeIdentifier -and -not $SkipRuntimeExecution) {
             [void] (Invoke-PwshVersionCheck -PwshPath $RuntimeNativePwshPath -ExpectedVersion $PowerShellVersion)
             Invoke-PwshModuleProbe -PwshPath $RuntimeNativePwshPath -ModuleRoot (Join-Path $ProbeOutputDirectory 'Modules')
           }
@@ -1672,7 +1676,7 @@ foreach (PSObject result in ps.Invoke())
   foreach ($RuntimeNativeRid in $RuntimeNativeValidationRids) {
     $RuntimeNativeExecutableName = if ($RuntimeNativeRid -like 'win-*') { 'pwsh.exe' } else { 'pwsh' }
     $RuntimeNativePwshPath = Assert-RuntimeNativeAppHostOutput -Directory $OutputDirectory -RuntimeIdentifier $RuntimeNativeRid -ExecutableName $RuntimeNativeExecutableName -SelfContained $false -Description "Sample app output [$RuntimeNativeRid]"
-    if ($RuntimeNativeRid -eq $RuntimeIdentifier) {
+    if ($RuntimeNativeRid -eq $RuntimeIdentifier -and -not $SkipRuntimeExecution) {
       [void] (Invoke-PwshVersionCheck -PwshPath $RuntimeNativePwshPath -ExpectedVersion $PowerShellVersion)
       Invoke-PwshModuleProbe -PwshPath $RuntimeNativePwshPath -ModuleRoot (Join-Path $OutputDirectory 'Modules')
       Invoke-PwshStartJobProbe -PwshPath $RuntimeNativePwshPath
@@ -1725,13 +1729,15 @@ foreach (PSObject result in ps.Invoke())
   Assert-LocalizedResourcePresent -Directory $OutputDirectory -RelativePath $RepresentativeLocalizedResourcePath -Description 'Sample app output with localized resources opt-in'
   Assert-FileContentMatches -ExpectedPath $RepresentativeLocalizedResourcePackagePath -ActualPath $OutputLocalizedResourcePath -Description 'Sample app output localized resource opt-in'
 
-  $AppOutput = & dotnet run --project $ProjectPath --no-build
-  if ($LASTEXITCODE -ne 0) {
-    throw "Sample app failed with exit code $LASTEXITCODE"
-  }
-  $AppVersion = [string] ($AppOutput | Select-Object -Last 1)
-  if ($AppVersion.Trim() -ne $PowerShellVersion) {
-    throw "Sample app imported PowerShell SDK version '$AppVersion', expected '$PowerShellVersion'"
+  if (-not $SkipRuntimeExecution) {
+    $AppOutput = & dotnet run --project $ProjectPath --no-build
+    if ($LASTEXITCODE -ne 0) {
+      throw "Sample app failed with exit code $LASTEXITCODE"
+    }
+    $AppVersion = [string] ($AppOutput | Select-Object -Last 1)
+    if ($AppVersion.Trim() -ne $PowerShellVersion) {
+      throw "Sample app imported PowerShell SDK version '$AppVersion', expected '$PowerShellVersion'"
+    }
   }
 
   Invoke-AppHostLayoutMatrixProbe -ValidationRoot $ValidationRoot -PackageDirectoryPath $PackageDirectoryPath -PackageId $PackageId -PackageVersion $PackageVersion -SampleTargetFramework $SampleTargetFramework -TargetFramework $TargetFramework -RuntimeAssetGroup $RuntimeAssetGroup -CurrentRuntimeIdentifier $RuntimeIdentifier -RuntimeNativeValidationRids $RuntimeNativeValidationRids -ExecutableName $ExecutableName -PowerShellVersion $PowerShellVersion -RestoredSdkPath $RestoredSdkPath -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -PSGalleryProbeModuleNames $PSGalleryProbeModuleNames
@@ -1748,7 +1754,7 @@ foreach (PSObject result in ps.Invoke())
   foreach ($RuntimeNativeRid in $RuntimeNativeValidationRids) {
     $RuntimeNativeExecutableName = if ($RuntimeNativeRid -like 'win-*') { 'pwsh.exe' } else { 'pwsh' }
     $RuntimeNativePwshPath = Assert-RuntimeNativeAppHostOutput -Directory $PublishDirectory -RuntimeIdentifier $RuntimeNativeRid -ExecutableName $RuntimeNativeExecutableName -SelfContained $true -Description "Sample self-contained publish output [$RuntimeNativeRid]"
-    if ($RuntimeNativeRid -eq $RuntimeIdentifier) {
+    if ($RuntimeNativeRid -eq $RuntimeIdentifier -and -not $SkipRuntimeExecution) {
       $PwshVersion = Invoke-PwshVersionCheck -PwshPath $RuntimeNativePwshPath -ExpectedVersion $PowerShellVersion
       Invoke-PwshModuleProbe -PwshPath $RuntimeNativePwshPath -ModuleRoot (Join-Path $PublishDirectory 'Modules')
       Invoke-PwshStartJobProbe -PwshPath $RuntimeNativePwshPath
