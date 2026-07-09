@@ -1473,18 +1473,18 @@ jobs:
             throw "Invalid SDK package version '$SdkPackageVersion', expected X.Y.Z.R."
           }
 
-          $ValidateArguments = @(
-            '-PackageDirectory', './sdk-package',
-            '-PowerShellVersion', $Env:POWERSHELL_VERSION,
-            '-PackageVersion', $SdkPackageVersion,
-            '-TargetFramework', $TargetFramework,
-            '-RuntimeIdentifier', '${{matrix.rid}}',
-            '-PackageId', $Env:SDK_PACKAGE_ID,
-            '-PackageVendorName', $Env:SDK_VENDOR_NAME
-          )
+          $ValidateArguments = @{
+            PackageDirectory = './sdk-package'
+            PowerShellVersion = $Env:POWERSHELL_VERSION
+            PackageVersion = $SdkPackageVersion
+            TargetFramework = $TargetFramework
+            RuntimeIdentifier = '${{matrix.rid}}'
+            PackageId = $Env:SDK_PACKAGE_ID
+            PackageVendorName = $Env:SDK_VENDOR_NAME
+          }
           [bool] $SkipRuntimeExecution = $false
           if ([System.Boolean]::TryParse('${{matrix.skip-runtime-execution}}', [ref] $SkipRuntimeExecution) -and $SkipRuntimeExecution) {
-            $ValidateArguments += '-SkipRuntimeExecution'
+            $ValidateArguments.SkipRuntimeExecution = $true
           }
 
           ./eng/Validate-PowerShellSdkPackage.ps1 @ValidateArguments
