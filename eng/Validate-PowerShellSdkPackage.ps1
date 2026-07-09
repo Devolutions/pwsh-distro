@@ -1127,6 +1127,20 @@ function Assert-RuntimeConfigMode {
   }
 }
 
+function Test-RuntimeConfigSelfContained {
+  param(
+    [Parameter(Mandatory)]
+    [string] $RuntimeConfigPath
+  )
+
+  if (-not (Test-Path $RuntimeConfigPath -PathType Leaf)) {
+    throw "Runtimeconfig file does not exist: $RuntimeConfigPath"
+  }
+
+  $RuntimeConfig = Get-Content -LiteralPath $RuntimeConfigPath -Raw
+  return $RuntimeConfig -match '"includedFrameworks"\s*:'
+}
+
 function Invoke-PwshVersionCheck {
   param(
     [Parameter(Mandatory)]
@@ -1661,13 +1675,14 @@ foreach (PSObject result in ps.Invoke())
       throw "Restored SDK package is missing expected file: $RestoredPath"
     }
   }
+  $FrameworkDependentAppHostSelfContained = Test-RuntimeConfigSelfContained -RuntimeConfigPath (Join-Path $RestoredSdkPath "tools/apphost/$RuntimeIdentifier/pwsh.runtimeconfig.json")
   $RepresentativeLocalizedResourcePath = Get-RepresentativeLocalizedResourcePath -RestoredSdkPath $RestoredSdkPath -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework
   $RepresentativeLocalizedResourcePackagePath = Join-Path $RestoredSdkPath "buildTransitive/localized-resources/$RuntimeAssetGroup/lib/$TargetFramework/$RepresentativeLocalizedResourcePath"
 
   Invoke-DotNet @('build', $ProjectPath, '--no-restore', '--nologo', '--verbosity', 'minimal')
 
   $OutputDirectory = Join-Path $SampleDirectory (Join-Path 'bin' (Join-Path 'Debug' (Join-Path $SampleTargetFramework $RuntimeIdentifier)))
-  Assert-SharedPowerShellOutput -Directory $OutputDirectory -SelfContained $false -Description 'Sample app output'
+  Assert-SharedPowerShellOutput -Directory $OutputDirectory -SelfContained $FrameworkDependentAppHostSelfContained -Description 'Sample app output'
   Assert-PowerShellConfig -Directory $OutputDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample app output'
   Assert-NoRootRuntimeNativeAppHostOutput -Directory $OutputDirectory -ExecutableName $ExecutableName -Description 'Sample app output'
   Assert-SharedPowerShellRuntimeLibPreserved -RestoredSdkPath $RestoredSdkPath -Directory $OutputDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample app output'
@@ -1764,7 +1779,7 @@ foreach (PSObject result in ps.Invoke())
   $FrameworkDependentPublishDirectory = Join-Path $SampleDirectory (Join-Path 'bin' (Join-Path 'Release' (Join-Path $SampleTargetFramework (Join-Path $RuntimeIdentifier 'publish-framework-dependent'))))
   Remove-Item $FrameworkDependentPublishDirectory -Recurse -Force -ErrorAction SilentlyContinue
   Invoke-DotNet @('publish', $ProjectPath, '--nologo', '--verbosity', 'minimal', '-c', 'Release', '-r', $RuntimeIdentifier, '--self-contained', 'false', '-o', $FrameworkDependentPublishDirectory)
-  Assert-SharedPowerShellOutput -Directory $FrameworkDependentPublishDirectory -SelfContained $false -Description 'Sample framework-dependent publish output'
+  Assert-SharedPowerShellOutput -Directory $FrameworkDependentPublishDirectory -SelfContained $FrameworkDependentAppHostSelfContained -Description 'Sample framework-dependent publish output'
   Assert-PowerShellConfig -Directory $FrameworkDependentPublishDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample framework-dependent publish output'
   Assert-NoRootRuntimeNativeAppHostOutput -Directory $FrameworkDependentPublishDirectory -ExecutableName $ExecutableName -Description 'Sample framework-dependent publish output'
   Assert-SharedPowerShellRuntimeLibPreserved -RestoredSdkPath $RestoredSdkPath -Directory $FrameworkDependentPublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample framework-dependent publish output'
@@ -1822,7 +1837,7 @@ foreach (PSObject result in ps.Invoke())
     $PSGalleryPublishDirectory,
     "/p:PowerShellSDKPSGalleryModules=$PSGallerySubsetModuleNamesPropertyValue"
   )
-  Assert-SharedPowerShellOutput -Directory $PSGalleryPublishDirectory -SelfContained $false -Description 'Sample PSGallery publish output'
+  Assert-SharedPowerShellOutput -Directory $PSGalleryPublishDirectory -SelfContained $FrameworkDependentAppHostSelfContained -Description 'Sample PSGallery publish output'
   Assert-PowerShellConfig -Directory $PSGalleryPublishDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample PSGallery publish output'
   Assert-NoRootRuntimeNativeAppHostOutput -Directory $PSGalleryPublishDirectory -ExecutableName $ExecutableName -Description 'Sample PSGallery publish output'
   Assert-SharedPowerShellRuntimeLibPreserved -RestoredSdkPath $RestoredSdkPath -Directory $PSGalleryPublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample PSGallery publish output'
@@ -1849,7 +1864,7 @@ foreach (PSObject result in ps.Invoke())
     $LocalizedPublishDirectory,
     '/p:PowerShellSDKLocalizedResources=Copy'
   )
-  Assert-SharedPowerShellOutput -Directory $LocalizedPublishDirectory -SelfContained $false -Description 'Sample localized resource publish output'
+  Assert-SharedPowerShellOutput -Directory $LocalizedPublishDirectory -SelfContained $FrameworkDependentAppHostSelfContained -Description 'Sample localized resource publish output'
   Assert-LocalizedResourcePresent -Directory $LocalizedPublishDirectory -RelativePath $RepresentativeLocalizedResourcePath -Description 'Sample localized resource publish output'
   Assert-FileContentMatches -ExpectedPath $RepresentativeLocalizedResourcePackagePath -ActualPath (Join-Path $LocalizedPublishDirectory $RepresentativeLocalizedResourcePath) -Description 'Sample localized resource publish output'
 
