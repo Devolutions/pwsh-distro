@@ -124,7 +124,7 @@ $WorkflowPins = [ordered]@{
   POWERSHELL_SOURCE_REF = $SourceRef
 }
 
-foreach ($WorkflowPath in @('.github\workflows\powershell-sdk.yml', '.github\workflows\powershell.yml')) {
+foreach ($WorkflowPath in @('.github\workflows\powershell-sdk.yml', '.github\workflows\powershell-cli.yml')) {
   $WorkflowText = Get-RepositoryFileText $WorkflowPath
   foreach ($Pin in $WorkflowPins.GetEnumerator()) {
     $WorkflowText = Set-YamlEnvValue -Text $WorkflowText -Name $Pin.Key -Value $Pin.Value -FileName $WorkflowPath

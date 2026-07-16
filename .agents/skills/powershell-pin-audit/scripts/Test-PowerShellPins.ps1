@@ -92,7 +92,7 @@ function Assert-Equal {
 }
 
 $SdkWorkflow = '.github\workflows\powershell-sdk.yml'
-$DistributionWorkflow = '.github\workflows\powershell.yml'
+$DistributionWorkflow = '.github\workflows\powershell-cli.yml'
 $SdkPins = Get-PowerShellWorkflowPins $SdkWorkflow
 $DistributionPins = Get-PowerShellWorkflowPins $DistributionWorkflow
 

@@ -7,7 +7,7 @@ description: Audits coordinated PowerShell version pins across workflows, .gitmo
 
 Use this skill when updating the pinned PowerShell version, reviewing a PowerShell release bump, or checking that the repository's coordinated PowerShell pins still agree.
 
-The audit checks the primary `.github/workflows/powershell-sdk.yml` workflow, the secondary `.github/workflows/powershell.yml` workflow, `.gitmodules`, the README "Current pins" table, and `pwsh-src/PowerShell.Common.props` when the submodule is available.
+The audit checks the primary `.github/workflows/powershell-sdk.yml` workflow, the secondary `.github/workflows/powershell-cli.yml` workflow, `.gitmodules`, the README "Current pins" table, and `pwsh-src/PowerShell.Common.props` when the submodule is available.
 
 ## Prerequisites
 
