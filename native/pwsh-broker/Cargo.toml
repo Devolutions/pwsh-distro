@@ -1,0 +1,12 @@
+[package]
+name = "devolutions-pwsh-broker"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+name = "devolutions_pwsh_broker"
+
+[dependencies]
+devolutions-pwsh-protocol = { path = "../pwsh-protocol" }

@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>Devolutions.PowerShell.SDK.NativeAot</PackageId>
+    <Description>Experimental NativeAOT-safe facade for process-isolated PowerShell hosting.</Description>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <NativeAotPackageRid Condition="'$(NativeAotPackageRid)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">win-x64</NativeAotPackageRid>
+    <NativeAotPackageRid Condition="'$(NativeAotPackageRid)' == '' and $([MSBuild]::IsOSPlatform('Linux'))">linux-x64</NativeAotPackageRid>
+    <NativeAotPackageAssetsDirectory>$(BaseIntermediateOutputPath)nativeaot-assets\$(NativeAotPackageRid)</NativeAotPackageAssetsDirectory>
+    <NativeAotBrokerFile Condition="'$(NativeAotPackageRid)' == 'win-x64'">devolutions_pwsh_broker.dll</NativeAotBrokerFile>
+    <NativeAotBrokerFile Condition="'$(NativeAotPackageRid)' == 'linux-x64'">libdevolutions_pwsh_broker.so</NativeAotBrokerFile>
+    <NativeAotBrokerFile Condition="'$(NativeAotPackageRid)' == 'win-arm64'">devolutions_pwsh_broker.dll</NativeAotBrokerFile>
+    <NativeAotWorkerFile Condition="'$(NativeAotPackageRid)' == 'win-x64'">devolutions-pwsh-worker.exe</NativeAotWorkerFile>
+    <NativeAotWorkerFile Condition="'$(NativeAotPackageRid)' == 'linux-x64'">devolutions-pwsh-worker</NativeAotWorkerFile>
+    <NativeAotWorkerFile Condition="'$(NativeAotPackageRid)' == 'win-arm64'">devolutions-pwsh-worker.exe</NativeAotWorkerFile>
+    <NativeAotPackageArchitecture Condition="'$(NativeAotPackageRid)' == 'win-x64' or '$(NativeAotPackageRid)' == 'linux-x64'">x64</NativeAotPackageArchitecture>
+    <NativeAotPackageArchitecture Condition="'$(NativeAotPackageRid)' == 'win-arm64'">arm64</NativeAotPackageArchitecture>
+    <NativeAotCargoTarget Condition="'$(NativeAotPackageRid)' == 'win-arm64'">--target aarch64-pc-windows-msvc</NativeAotCargoTarget>
+    <NativeAotCargoProfile Condition="'$(Configuration)' == 'Release'">--release</NativeAotCargoProfile>
+    <NativeAotCargoOutputDirectory Condition="'$(Configuration)' == 'Release'">release</NativeAotCargoOutputDirectory>
+    <NativeAotCargoOutputDirectory Condition="'$(NativeAotCargoOutputDirectory)' == ''">debug</NativeAotCargoOutputDirectory>
+    <NativeAotCargoArtifactsDirectory>$(MSBuildProjectDirectory)\..\..\native\target\$(NativeAotCargoOutputDirectory)</NativeAotCargoArtifactsDirectory>
+    <NativeAotCargoArtifactsDirectory Condition="'$(NativeAotPackageRid)' == 'win-arm64'">$(MSBuildProjectDirectory)\..\..\native\target\aarch64-pc-windows-msvc\$(NativeAotCargoOutputDirectory)</NativeAotCargoArtifactsDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="buildTransitive\Devolutions.PowerShell.SDK.NativeAot.targets" Pack="true" PackagePath="buildTransitive" />
+    <None Include="README.md" Pack="true" PackagePath="" />
+    <None Include="..\..\docs\nativeaot-sdk-contract.md" Pack="true" PackagePath="docs" />
+  </ItemGroup>
+
+  <Target Name="StageNativeAotPackageAssets" BeforeTargets="_GetPackageFiles">
+    <Error Condition="'$(NativeAotPackageRid)' == ''"
+           Text="Devolutions.PowerShell.SDK.NativeAot packaging supports win-x64, win-arm64, and linux-x64." />
+    <MSBuild Projects="$(MSBuildProjectDirectory)\..\..\src\Devolutions.PowerShell.SDK.NativeAot\Devolutions.PowerShell.SDK.NativeAot.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=AnyCPU" />
+    <Exec Command="cargo build --manifest-path &quot;$(MSBuildProjectDirectory)\..\..\native\Cargo.toml&quot; $(NativeAotCargoProfile) $(NativeAotCargoTarget)" />
+    <MSBuild Projects="$(MSBuildProjectDirectory)\..\..\bridge\Devolutions.PowerShell.WorkerBridge\Devolutions.PowerShell.WorkerBridge.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=AnyCPU" />
+    <MakeDir Directories="$(NativeAotPackageAssetsDirectory)" />
+    <Copy SourceFiles="$(NativeAotCargoArtifactsDirectory)\$(NativeAotBrokerFile)"
+          DestinationFolder="$(NativeAotPackageAssetsDirectory)" />
+    <Copy SourceFiles="$(NativeAotCargoArtifactsDirectory)\$(NativeAotWorkerFile)"
+          DestinationFolder="$(NativeAotPackageAssetsDirectory)" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\..\..\bridge\Devolutions.PowerShell.WorkerBridge\bin\$(Configuration)\net10.0\Devolutions.PowerShell.WorkerBridge.dll"
+          DestinationFolder="$(NativeAotPackageAssetsDirectory)" />
+    <WriteLinesToFile File="$(NativeAotPackageAssetsDirectory)\devolutions-pwsh-nativeaot-assets.json"
+                      Lines="{&quot;schemaVersion&quot;:1,&quot;rid&quot;:&quot;$(NativeAotPackageRid)&quot;,&quot;architecture&quot;:&quot;$(NativeAotPackageArchitecture)&quot;}"
+                      Overwrite="true" />
+    <ItemGroup>
+      <None Include="$(MSBuildProjectDirectory)\..\..\src\Devolutions.PowerShell.SDK.NativeAot\bin\$(Configuration)\net10.0\Devolutions.PowerShell.SDK.NativeAot.dll"
+            Pack="true"
+            PackagePath="lib\net10.0" />
+      <None Include="$(NativeAotPackageAssetsDirectory)\$(NativeAotBrokerFile)" Pack="true" PackagePath="runtimes\$(NativeAotPackageRid)\native" />
+      <None Include="$(NativeAotPackageAssetsDirectory)\$(NativeAotWorkerFile)" Pack="true" PackagePath="runtimes\$(NativeAotPackageRid)\native" />
+      <None Include="$(NativeAotPackageAssetsDirectory)\Devolutions.PowerShell.WorkerBridge.dll" Pack="true" PackagePath="runtimes\$(NativeAotPackageRid)\native" />
+      <None Include="$(NativeAotPackageAssetsDirectory)\devolutions-pwsh-nativeaot-assets.json" Pack="true" PackagePath="runtimes\$(NativeAotPackageRid)\native" />
+    </ItemGroup>
+  </Target>
+</Project>

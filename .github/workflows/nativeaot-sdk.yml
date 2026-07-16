@@ -1,0 +1,236 @@
+name: NativeAOT SDK
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/nativeaot-sdk.yml
+      - .gitmodules
+      - bridge/**
+      - docs/nativeaot-sdk-contract.md
+      - native/**
+      - pack/Devolutions.PowerShell.SDK.NativeAot/**
+      - samples/NativeAotPowerShellSample/**
+      - src/Devolutions.PowerShell.SDK.NativeAot/**
+      - tests/Test-NativeAotContract.ps1
+      - pwsh-src
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/nativeaot-sdk.yml
+      - .gitmodules
+      - bridge/**
+      - docs/nativeaot-sdk-contract.md
+      - native/**
+      - pack/Devolutions.PowerShell.SDK.NativeAot/**
+      - samples/NativeAotPowerShellSample/**
+      - src/Devolutions.PowerShell.SDK.NativeAot/**
+      - tests/Test-NativeAotContract.ps1
+      - pwsh-src
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nativeaot-sdk-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  POWERSHELL_VERSION: "7.6.3"
+
+jobs:
+  contract:
+    name: NativeAOT contract [${{ matrix.rid }}]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-2025
+            payload-archive: PowerShell-7.6.3-win-x64.zip
+          - rid: linux-x64
+            runner: ubuntu-24.04
+            payload-archive: powershell-7.6.3-linux-x64.tar.gz
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.0
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Set up pinned .NET SDK
+        uses: actions/setup-dotnet@v5.3.0
+        with:
+          global-json-file: pwsh-src/global.json
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Linux NativeAOT prerequisites
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang zlib1g-dev
+
+      - name: Download explicit PowerShell payload
+        id: payload
+        shell: pwsh
+        env:
+          PAYLOAD_ARCHIVE: ${{ matrix.payload-archive }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $payloadRoot = Join-Path $Env:RUNNER_TEMP 'powershell-payload'
+          $archivePath = Join-Path $Env:RUNNER_TEMP $Env:PAYLOAD_ARCHIVE
+          $uri = "https://github.com/PowerShell/PowerShell/releases/download/v$Env:POWERSHELL_VERSION/$Env:PAYLOAD_ARCHIVE"
+          Remove-Item -LiteralPath $payloadRoot -Recurse -Force -ErrorAction SilentlyContinue
+          Invoke-WebRequest -Uri $uri -OutFile $archivePath
+
+          if ($IsWindows) {
+            Expand-Archive -LiteralPath $archivePath -DestinationPath $payloadRoot -Force
+          }
+          else {
+            New-Item -ItemType Directory -Path $payloadRoot -Force | Out-Null
+            tar -xzf $archivePath -C $payloadRoot
+          }
+
+          $requiredHostFxr = if ($IsWindows) { 'hostfxr.dll' } else { 'libhostfxr.so' }
+          foreach ($file in 'pwsh.dll', 'pwsh.runtimeconfig.json', $requiredHostFxr) {
+            if (-not (Test-Path -LiteralPath (Join-Path $payloadRoot $file) -PathType Leaf)) {
+              throw "The downloaded payload is missing $file."
+            }
+          }
+
+          "path=$payloadRoot" >> $Env:GITHUB_OUTPUT
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path native/Cargo.toml --all -- --check
+
+      - name: Lint Rust workspace
+        run: cargo clippy --manifest-path native/Cargo.toml --workspace --all-targets -- -D warnings
+
+      - name: Test Rust workspace
+        run: cargo test --manifest-path native/Cargo.toml --workspace
+
+      - name: Run explicit-payload NativeAOT contract
+        shell: pwsh
+        run: ./tests/Test-NativeAotContract.ps1 -PayloadDirectory '${{ steps.payload.outputs.path }}' -Configuration Release
+
+  win-arm64-package:
+    name: NativeAOT package [win-arm64 build-only]
+    runs-on: windows-2025
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.0
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Set up pinned .NET SDK
+        uses: actions/setup-dotnet@v5.3.0
+        with:
+          global-json-file: pwsh-src/global.json
+
+      - name: Set up Rust stable with Windows ARM64 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+
+      - name: Build and package Windows ARM64 native assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $installationPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($installationPath)) {
+            throw 'A Visual Studio C++ toolchain was not found.'
+          }
+
+          $vcvars = Join-Path $installationPath 'VC\Auxiliary\Build\vcvarsall.bat'
+          $environment = & $env:ComSpec /c "call `"$vcvars`" x64_arm64 >nul && set"
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not configure the MSVC x64-to-ARM64 environment.'
+          }
+
+          foreach ($line in $environment) {
+            if ($line -match '^([^=]+)=(.*)$') {
+              [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process')
+            }
+          }
+
+          $env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER = (Get-Command link.exe -ErrorAction Stop).Source
+          dotnet pack pack/Devolutions.PowerShell.SDK.NativeAot/Devolutions.PowerShell.SDK.NativeAot.csproj `
+            -c Release `
+            -p:NativeAotPackageRid=win-arm64 `
+            -o nativeaot-packages
+          if ($LASTEXITCODE -ne 0) {
+            throw "win-arm64 package staging failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Verify Windows ARM64 package assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $package = Get-ChildItem -LiteralPath nativeaot-packages -Filter 'Devolutions.PowerShell.SDK.NativeAot.*.nupkg' -File | Select-Object -First 1
+          if ($null -eq $package) {
+            throw 'win-arm64 package staging did not produce an nupkg.'
+          }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($package.FullName)
+          try {
+            $entries = $archive.Entries.FullName
+            foreach ($entryName in @(
+              'runtimes/win-arm64/native/devolutions_pwsh_broker.dll',
+              'runtimes/win-arm64/native/devolutions-pwsh-worker.exe',
+              'runtimes/win-arm64/native/Devolutions.PowerShell.WorkerBridge.dll',
+              'runtimes/win-arm64/native/devolutions-pwsh-nativeaot-assets.json'
+            )) {
+              if ($entries -notcontains $entryName) {
+                throw "win-arm64 package is missing $entryName."
+              }
+            }
+
+            $descriptor = $archive.GetEntry('runtimes/win-arm64/native/devolutions-pwsh-nativeaot-assets.json')
+            $descriptorReader = [System.IO.StreamReader]::new($descriptor.Open())
+            try {
+              $descriptorJson = $descriptorReader.ReadToEnd() | ConvertFrom-Json
+            }
+            finally {
+              $descriptorReader.Dispose()
+            }
+            if ($descriptorJson.rid -ne 'win-arm64' -or $descriptorJson.architecture -ne 'arm64') {
+              throw "Unexpected win-arm64 asset descriptor: $($descriptorJson | ConvertTo-Json -Compress)."
+            }
+
+            foreach ($entryName in 'runtimes/win-arm64/native/devolutions_pwsh_broker.dll', 'runtimes/win-arm64/native/devolutions-pwsh-worker.exe') {
+              $entry = $archive.GetEntry($entryName)
+              $stream = $entry.Open()
+              try {
+                $bytes = [byte[]]::new(64)
+                if ($stream.Read($bytes, 0, $bytes.Length) -ne $bytes.Length) {
+                  throw "The ARM64 package asset is truncated: $entryName."
+                }
+                $offset = [BitConverter]::ToInt32($bytes, 0x3c)
+                if ($offset -lt 0 -or $offset + 6 -gt $bytes.Length -or [BitConverter]::ToUInt16($bytes, $offset + 4) -ne 0xAA64) {
+                  throw "The package asset is not ARM64 PE: $entryName."
+                }
+              }
+              finally {
+                $stream.Dispose()
+              }
+            }
+          }
+          finally {
+            $archive.Dispose()
+          }

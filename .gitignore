@@ -5,3 +5,6 @@ package/
 patchsets/
 *.nupkg
 *.tar.gz
+**/bin/
+**/obj/
+native/target/

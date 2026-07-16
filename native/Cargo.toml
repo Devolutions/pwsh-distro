@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "pwsh-protocol",
+    "pwsh-broker",
+    "pwsh-worker",
+]
+resolver = "2"

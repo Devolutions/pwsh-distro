@@ -1,0 +1,49 @@
+<Project>
+  <PropertyGroup>
+    <DevolutionsPowerShellNativeAotEnabled Condition="'$(DevolutionsPowerShellNativeAotEnabled)' == ''">false</DevolutionsPowerShellNativeAotEnabled>
+    <DevolutionsPowerShellNativeAotAssetsPath>$(MSBuildThisFileDirectory)..\runtimes\$(RuntimeIdentifier)\native\</DevolutionsPowerShellNativeAotAssetsPath>
+    <DevolutionsPowerShellNativeAotBrokerFile Condition="'$(RuntimeIdentifier)' == 'win-x64'">devolutions_pwsh_broker.dll</DevolutionsPowerShellNativeAotBrokerFile>
+    <DevolutionsPowerShellNativeAotBrokerFile Condition="'$(RuntimeIdentifier)' == 'linux-x64'">libdevolutions_pwsh_broker.so</DevolutionsPowerShellNativeAotBrokerFile>
+    <DevolutionsPowerShellNativeAotBrokerFile Condition="'$(RuntimeIdentifier)' == 'win-arm64'">devolutions_pwsh_broker.dll</DevolutionsPowerShellNativeAotBrokerFile>
+    <DevolutionsPowerShellNativeAotWorkerFile Condition="'$(RuntimeIdentifier)' == 'win-x64'">devolutions-pwsh-worker.exe</DevolutionsPowerShellNativeAotWorkerFile>
+    <DevolutionsPowerShellNativeAotWorkerFile Condition="'$(RuntimeIdentifier)' == 'linux-x64'">devolutions-pwsh-worker</DevolutionsPowerShellNativeAotWorkerFile>
+    <DevolutionsPowerShellNativeAotWorkerFile Condition="'$(RuntimeIdentifier)' == 'win-arm64'">devolutions-pwsh-worker.exe</DevolutionsPowerShellNativeAotWorkerFile>
+  </PropertyGroup>
+
+  <Target Name="StageDevolutionsPowerShellNativeAotAssets"
+          BeforeTargets="Build;Publish"
+          Condition="'$(DevolutionsPowerShellNativeAotEnabled)' == 'true'">
+    <Error Condition="'$(RuntimeIdentifier)' != 'win-x64' and '$(RuntimeIdentifier)' != 'win-arm64' and '$(RuntimeIdentifier)' != 'linux-x64'"
+           Text="DevolutionsPowerShellNativeAotEnabled supports only RuntimeIdentifier=win-x64, win-arm64, or linux-x64." />
+    <ItemGroup>
+      <Content Include="$(DevolutionsPowerShellNativeAotAssetsPath)$(DevolutionsPowerShellNativeAotBrokerFile)"
+               Link="$(DevolutionsPowerShellNativeAotBrokerFile)"
+               CopyToOutputDirectory="PreserveNewest"
+               CopyToPublishDirectory="PreserveNewest" />
+      <Content Include="$(DevolutionsPowerShellNativeAotAssetsPath)$(DevolutionsPowerShellNativeAotWorkerFile)"
+               Link="$(DevolutionsPowerShellNativeAotWorkerFile)"
+               CopyToOutputDirectory="PreserveNewest"
+               CopyToPublishDirectory="PreserveNewest" />
+      <Content Include="$(DevolutionsPowerShellNativeAotAssetsPath)Devolutions.PowerShell.WorkerBridge.dll"
+               Link="Devolutions.PowerShell.WorkerBridge.dll"
+               CopyToOutputDirectory="PreserveNewest"
+               CopyToPublishDirectory="PreserveNewest" />
+      <Content Include="$(DevolutionsPowerShellNativeAotAssetsPath)devolutions-pwsh-nativeaot-assets.json"
+               Link="devolutions-pwsh-nativeaot-assets.json"
+               CopyToOutputDirectory="PreserveNewest"
+               CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CopyDevolutionsPowerShellNativeAotBridge"
+          AfterTargets="Build;Publish"
+          Condition="'$(DevolutionsPowerShellNativeAotEnabled)' == 'true'">
+    <Copy SourceFiles="$(DevolutionsPowerShellNativeAotAssetsPath)Devolutions.PowerShell.WorkerBridge.dll"
+          DestinationFiles="$(OutDir)Devolutions.PowerShell.WorkerBridge.dll"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(DevolutionsPowerShellNativeAotAssetsPath)Devolutions.PowerShell.WorkerBridge.dll"
+          DestinationFiles="$(PublishDir)Devolutions.PowerShell.WorkerBridge.dll"
+          SkipUnchangedFiles="true"
+          Condition="'$(PublishDir)' != ''" />
+  </Target>
+</Project>

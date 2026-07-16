@@ -88,6 +88,47 @@ dotnet publish -c Release -r win-x64 --self-contained true
 
 Use `linux-x64`, `linux-arm`, `linux-arm64`, `osx-x64`, `osx-arm64`, `win-x64`, or `win-arm64` as the runtime identifier. If you only need the SDK assemblies and do not want an apphost copied to the output, leave `PowerShellSDKAppHostLayout` unset.
 
+### NativeAOT PowerShell SDK (experimental)
+
+`Devolutions.PowerShell.SDK.NativeAot` is an intentionally separate,
+experimental facade for NativeAOT clients. It does **not** reference
+`System.Management.Automation` and is not a drop-in replacement for
+`Devolutions.PowerShell.SDK`. The facade calls a Rust broker by P/Invoke; the
+broker starts a separate Rust worker that loads an explicit PowerShell payload
+through that payload's local `hostfxr`. This keeps the client process free of
+CoreCLR and permits the worker payload to use a different .NET runtime.
+
+The client API is DTO-only: it supports structured command construction,
+primitive values, ordered output/error/warning/verbose/debug/information/
+progress events, cancellation, and lifecycle diagnostics. It does not support
+runspaces, `PSObject`, custom hosts, delegates, arbitrary CLR values, or live
+PowerShell exceptions. A session serializes its requests; independent sessions
+use separate workers and can run concurrently. Cancellation is cooperative;
+an active invocation interrupted by disposal reports `WorkerExited`.
+
+Install and publish only with the explicit native asset opt-in:
+
+```xml
+<PropertyGroup>
+  <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  <PublishAot>true</PublishAot>
+  <DevolutionsPowerShellNativeAotEnabled>true</DevolutionsPowerShellNativeAotEnabled>
+</PropertyGroup>
+```
+
+The package does not bundle or discover PowerShell. Stage a trusted, explicit
+payload and generate its exhaustive SHA-256 manifest with
+`pack\Devolutions.PowerShell.SDK.NativeAot\tools\New-NativeAotPayloadManifest.ps1`.
+The worker rejects symlinked, incomplete, unlisted, tampered, or wrong-RID/
+architecture payloads, has no global host fallback, and runs under the
+caller’s OS identity. `win-x64` and `linux-x64` are supported with payload and
+published-consumer execution evidence. `win-arm64` has build/package evidence
+only and is not yet supported because no ARM64 payload execution environment
+has validated it. Linux uses a same-user Unix-domain socket with peer-UID
+validation. See
+[the current SDK baseline](docs/current-sdk-api-baseline.md) and
+[the NativeAOT contract](docs/nativeaot-sdk-contract.md) before adopting it.
+
 ### PowerShell CLI
 
 Use the PowerShell CLI archives when you want a ready-to-run, self-contained PowerShell layout without creating a .NET project. Download the archive for the target platform from the latest GitHub release:
