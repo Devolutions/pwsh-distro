@@ -20,7 +20,9 @@ param(
 
   [hashtable] $SourceBuiltAssemblyDirectoriesByPackagePath,
 
-  [string] $SourcePackageDirectory
+  [string] $SourcePackageDirectory,
+
+  [string] $SourceBuiltSdkProjectPath
 )
 
 Set-StrictMode -Version 3.0
@@ -247,6 +249,65 @@ function Add-ExternalDependenciesFromNuspec {
       -TargetFramework '' `
       -Id $DependencyId `
       -Version ([string] $Dependency.version)
+  }
+}
+
+function Get-PackageReferenceVersions {
+  param(
+    [Parameter(Mandatory)]
+    [string] $ProjectPath
+  )
+
+  if (-not (Test-Path -LiteralPath $ProjectPath -PathType Leaf)) {
+    throw "Source-built SDK project was not found: $ProjectPath"
+  }
+
+  [xml] $Project = Get-Content -LiteralPath $ProjectPath
+  $DependencyVersions = [ordered]@{}
+  foreach ($PackageReference in @($Project.SelectNodes("//*[local-name()='PackageReference']"))) {
+    $Id = $PackageReference.GetAttribute('Include')
+    $Version = $PackageReference.GetAttribute('Version')
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+      $VersionElement = $PackageReference.SelectSingleNode("*[local-name()='Version']")
+      if ($VersionElement) {
+        $Version = $VersionElement.InnerText
+      }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Id) -and -not [string]::IsNullOrWhiteSpace($Version)) {
+      $DependencyVersions[$Id] = $Version
+    }
+  }
+
+  return $DependencyVersions
+}
+
+function Set-SourceBuiltDependencyVersions {
+  param(
+    [Parameter(Mandatory)]
+    [System.Collections.Specialized.OrderedDictionary] $DependencyGroups,
+
+    [Parameter(Mandatory)]
+    [System.Collections.IDictionary] $SourceBuiltDependencyVersions
+  )
+
+  $AppliedDependencyIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($Dependencies in @($DependencyGroups.Values)) {
+    foreach ($DependencyId in @($Dependencies.Keys)) {
+      if ($SourceBuiltDependencyVersions.Contains($DependencyId)) {
+        $Dependencies[$DependencyId] = [string] $SourceBuiltDependencyVersions[$DependencyId]
+        [void] $AppliedDependencyIds.Add($DependencyId)
+      }
+    }
+  }
+
+  $UnmatchedDependencyIds = @(
+    $SourceBuiltDependencyVersions.Keys |
+      Where-Object { -not $AppliedDependencyIds.Contains([string] $_) } |
+      Sort-Object
+  )
+  if ($UnmatchedDependencyIds.Count -gt 0) {
+    throw "Source-built SDK dependencies were not found in vendored package metadata: $($UnmatchedDependencyIds -join ', ')"
   }
 }
 
@@ -696,6 +757,12 @@ try {
       -NuspecPath (Get-NuspecPath -PackageRootPath $ExtractedPackageRoots[$EmbeddedPackageId]) `
       -EmbeddedIds $EmbeddedPackageIds `
       -DependencyGroups $DependencyGroups
+  }
+  if ($SourceBuiltSdkProjectPath) {
+    $SourceBuiltDependencyVersions = Get-PackageReferenceVersions -ProjectPath $SourceBuiltSdkProjectPath
+    Set-SourceBuiltDependencyVersions `
+      -DependencyGroups $DependencyGroups `
+      -SourceBuiltDependencyVersions $SourceBuiltDependencyVersions
   }
 
   Copy-PackagePayload -SourceRoot $ExtractedPackageRoots[$OriginalPackageId] -DestinationRoot $PackageRootPath

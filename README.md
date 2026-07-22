@@ -22,16 +22,16 @@ To build a local, current-RID SDK package for smoke testing outside Actions:
 .\scripts\Build-LocalPowerShellSdk.ps1 -Validate
 ```
 
-The local script writes under `output\local-sdk\<rid>\` and produces a single-RID validation package. The GitHub Actions SDK workflow remains the authoritative multi-RID package build. Pass `-SdkPackageVersion 7.6.3.2` to smoke-test the latest downstream package revision for the same upstream PowerShell release.
+The local script writes under `output\local-sdk\<rid>\` and produces a single-RID validation package. The GitHub Actions SDK workflow remains the authoritative multi-RID package build. Pass `-SdkPackageVersion 7.6.3.2` to smoke-test the latest published downstream package while the first 7.6.4 package is being prepared.
 
 ## Current pins
 
 | Component | Version |
 | --- | --- |
-| PowerShell upstream release | `7.6.3` / `v7.6.3` |
-| PowerShell downstream source ref | `downstream/v7.6.3` based on `upstream/v7.6.3` |
+| PowerShell upstream release | `7.6.4` / `v7.6.4` |
+| PowerShell downstream source ref | `downstream/v7.6.4` based on `upstream/v7.6.4` |
 | PowerShell target framework | `net10.0` |
-| PowerShell SDK package | `Devolutions.PowerShell.SDK` / `7.6.3.0` workflow default; `7.6.3.2` latest published package |
+| PowerShell SDK package | `Devolutions.PowerShell.SDK` / `7.6.4.0` workflow default; `7.6.3.2` latest published package |
 | Latest downstream release tag | `v7.6.3.2` |
 | Latest PowerShell CLI release assets | `PowerShell-7.6.3-<os>-<arch>.tar.gz` for Windows, macOS, and Linux on x64 and arm64 |
 | PowerShell SDK package source | `https://api.nuget.org/v3/index.json` |
@@ -239,5 +239,5 @@ The apphost output is intended for running scripts with the core built-in module
 The secondary PowerShell CLI workflow uses this same package-consumer path instead of rebuilding PowerShell from source. It creates a temporary .NET project, restores the pinned SDK package from the pinned package source or a workflow-built SDK artifact, enables root apphost and PSGallery module import, opts into localized resources when present, publishes self-contained for the matrix RID, removes the temporary host application files, validates the PowerShell layout, and archives the result as `.tar.gz` for every platform, including Windows. Windows archives additionally stage the matching `Microsoft.WindowsDesktop.App.Runtime.<rid>` payload so WPF/WinForms assemblies such as `PresentationFramework.dll`, `System.Windows.Forms.dll`, and `WindowsBase.dll` load from `$PSHOME`. For end-to-end dry runs outside `.github/workflows/release.yml`, pass `sdk_artifact_run_id` to `.github/workflows/powershell-cli.yml` so it downloads the `PowerShell-SDK-Release-X.Y.Z.R` artifact from a prior `.github/workflows/powershell-sdk.yml` run and repackages that workflow-built `.nupkg` instead of restoring from NuGet.org. If the artifact name does not include the SDK version, also pass `sdk_package_version`.
 
 During NuGet packing, upstream `Microsoft.PowerShell.SDK` content file/reference metadata can emit NU5100/NU5131 package analysis warnings. The SDK workflow treats package validation as the source of truth: the generated sample must restore only the vendored PowerShell package ID, build, publish framework-dependent and self-contained outputs, execute `pwsh`, and load copied built-in modules.
-
+Generated source checkouts and build artifacts are not part of this repository.
 Generated source checkouts and build artifacts are not part of this repository.

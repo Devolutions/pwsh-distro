@@ -97,7 +97,13 @@ if ($SyncTags) {
   }
 
   if ($Dropped.Count -gt 0) {
-    Invoke-Git tag -d @($Dropped | ForEach-Object { $_ -replace '^refs/tags/','' })
+    foreach ($Tag in $Dropped) {
+      $ShortName = $Tag -replace '^refs/tags/',''
+      & git tag -d $ShortName
+      if ($LASTEXITCODE -ne 0) {
+        throw "git tag -d $ShortName failed with exit code $LASTEXITCODE"
+      }
+    }
   }
 
   Write-Host "Kept $($Kept.Count) upstream tag(s) matching '$TagIncludePattern'; dropped $($Dropped.Count) non-matching tag(s)."

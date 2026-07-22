@@ -1,6 +1,6 @@
 # Agent instructions
 
-This repository is a small GitHub Actions project for building PowerShell distribution artifacts. Treat `.github/workflows/powershell-sdk.yml` as the primary product surface and `.github/workflows/powershell.yml` as the secondary product surface.
+This repository is a small GitHub Actions project for building PowerShell distribution artifacts. Treat `.github/workflows/powershell-sdk.yml` as the primary product surface and `.github/workflows/powershell-cli.yml` as the secondary product surface.
 
 Keep version pins explicit in workflow `env` blocks. When updating PowerShell, update the PowerShell version, release tag, upstream tag, and source ref in both PowerShell workflows, verify the upstream target framework from `pwsh-src/PowerShell.Common.props`, and keep SDK packaging paths derived from that property instead of hardcoding `net*` folders. The version bump is four coordinated edits in one PR: the `POWERSHELL_*` env vars in both PowerShell workflows, the `branch = downstream/vX.Y.Z` line in `.gitmodules` (git does not expand variables there, so it must be edited literally), the `pwsh-src` submodule pointer on `master` (`git submodule update --remote pwsh-src && git add pwsh-src`), and the "Current pins" table in README.md.
 

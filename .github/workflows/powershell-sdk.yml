@@ -106,11 +106,11 @@ permissions:
   contents: read
 
 env:
-  POWERSHELL_VERSION: "7.6.3"
-  POWERSHELL_RELEASE_TAG: "v7.6.3"
-  POWERSHELL_UPSTREAM_TAG: "upstream/v7.6.3"
+  POWERSHELL_VERSION: "7.6.4"
+  POWERSHELL_RELEASE_TAG: "v7.6.4"
+  POWERSHELL_UPSTREAM_TAG: "upstream/v7.6.4"
   POWERSHELL_SOURCE_REPOSITORY: ${{ github.repository }}
-  POWERSHELL_SOURCE_REF: "downstream/v7.6.3"
+  POWERSHELL_SOURCE_REF: "downstream/v7.6.4"
   POWERSHELL_VENDOR_NAME: "Devolutions"
   SDK_VENDOR_NAME: "Devolutions"
   SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
@@ -1078,7 +1078,8 @@ jobs:
             -PackageId $Env:SDK_PACKAGE_ID `
             -VendorName $Env:SDK_VENDOR_NAME `
             -SourceBuiltAssemblyNames $SourceBuiltAssemblyNames `
-            -SourceBuiltAssemblyDirectoriesByPackagePath $SourceBuiltAssemblyDirectoriesByPackagePath
+            -SourceBuiltAssemblyDirectoriesByPackagePath $SourceBuiltAssemblyDirectoriesByPackagePath `
+            -SourceBuiltSdkProjectPath './src/Microsoft.PowerShell.SDK/Microsoft.PowerShell.SDK.csproj'
 
           $AnyAnyRuntimesDir = Join-Path $SdkStagePath "contentFiles/any/any/runtimes"
           Remove-Item $AnyAnyRuntimesDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -1486,5 +1487,5 @@ jobs:
           if ([System.Boolean]::TryParse('${{matrix.skip-runtime-execution}}', [ref] $SkipRuntimeExecution) -and $SkipRuntimeExecution) {
             $ValidateArguments.SkipRuntimeExecution = $true
           }
-
+          ./eng/Validate-PowerShellSdkPackage.ps1 @ValidateArguments
           ./eng/Validate-PowerShellSdkPackage.ps1 @ValidateArguments

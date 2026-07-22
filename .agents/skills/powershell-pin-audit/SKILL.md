@@ -7,7 +7,7 @@ description: Audits coordinated PowerShell version pins across workflows, .gitmo
 
 Use this skill when updating the pinned PowerShell version, reviewing a PowerShell release bump, or checking that the repository's coordinated PowerShell pins still agree.
 
-The audit checks the primary `.github/workflows/powershell-sdk.yml` workflow, the secondary `.github/workflows/powershell.yml` workflow, `.gitmodules`, the README "Current pins" table, and `pwsh-src/PowerShell.Common.props` when the submodule is available.
+The audit checks the primary `.github/workflows/powershell-sdk.yml` workflow, the secondary `.github/workflows/powershell-cli.yml` workflow, `.gitmodules`, the README "Current pins" table, and `pwsh-src/PowerShell.Common.props` when the submodule is available.
 
 ## Prerequisites
 
@@ -41,6 +41,7 @@ pwsh .\.agents\skills\powershell-pin-audit\scripts\Test-PowerShellPins.ps1 -Repo
 - `POWERSHELL_RELEASE_TAG` is `v$POWERSHELL_VERSION`.
 - `POWERSHELL_UPSTREAM_TAG` is `upstream/$POWERSHELL_RELEASE_TAG`.
 - `POWERSHELL_SOURCE_REF` is `downstream/$POWERSHELL_RELEASE_TAG`.
+- The CLI workflow SDK package ID, version, and revision match the SDK workflow defaults.
 - `.gitmodules` tracks the same downstream branch as `POWERSHELL_SOURCE_REF`.
 - README "Current pins" records the same upstream release, downstream source ref, upstream base tag, and target framework.
 - If `pwsh-src/PowerShell.Common.props` exists, README's target framework matches its `<TargetFramework>` value.
