@@ -92,7 +92,7 @@ function Assert-Equal {
 }
 
 $SdkWorkflow = '.github\workflows\powershell-sdk.yml'
-$DistributionWorkflow = '.github\workflows\powershell.yml'
+$DistributionWorkflow = '.github\workflows\powershell-cli.yml'
 $SdkPins = Get-PowerShellWorkflowPins $SdkWorkflow
 $DistributionPins = Get-PowerShellWorkflowPins $DistributionWorkflow
 
@@ -114,6 +114,17 @@ if ($SdkPackageRevision -notmatch '^\d+$') {
   Add-AuditError "SDK_PACKAGE_REVISION in $SdkWorkflow must be numeric, found '$SdkPackageRevision'."
 }
 $SdkPackageVersion = "$Version.$SdkPackageRevision"
+$DistributionWorkflowText = Get-RepositoryFileText $DistributionWorkflow
+$DistributionSdkPackageId = Get-YamlScalar -Text $DistributionWorkflowText -Name 'SDK_PACKAGE_ID' -FileName $DistributionWorkflow
+$DistributionSdkPackageVersion = Get-YamlScalar -Text $DistributionWorkflowText -Name 'SDK_PACKAGE_VERSION' -FileName $DistributionWorkflow
+$DistributionSdkPackageRevision = Get-YamlScalar -Text $DistributionWorkflowText -Name 'SDK_PACKAGE_REVISION' -FileName $DistributionWorkflow
+if ($DistributionSdkPackageRevision -notmatch '^\d+$') {
+  Add-AuditError "SDK_PACKAGE_REVISION in $DistributionWorkflow must be numeric, found '$DistributionSdkPackageRevision'."
+}
+
+Assert-Equal -Actual $DistributionSdkPackageId -Expected $SdkPackageId -Description "SDK_PACKAGE_ID in $DistributionWorkflow"
+Assert-Equal -Actual $DistributionSdkPackageRevision -Expected $SdkPackageRevision -Description "SDK_PACKAGE_REVISION in $DistributionWorkflow"
+Assert-Equal -Actual $DistributionSdkPackageVersion -Expected $SdkPackageVersion -Description "SDK_PACKAGE_VERSION in $DistributionWorkflow"
 
 Assert-Equal -Actual $ReleaseTag -Expected "v$Version" -Description 'POWERSHELL_RELEASE_TAG'
 Assert-Equal -Actual $UpstreamTag -Expected "upstream/$ReleaseTag" -Description 'POWERSHELL_UPSTREAM_TAG'

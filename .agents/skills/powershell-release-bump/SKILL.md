@@ -7,7 +7,7 @@ description: Coordinates PowerShell release bumps across workflow env pins, .git
 
 Use this skill when moving this repository to a new upstream PowerShell release or reviewing a PR that claims to bump PowerShell.
 
-This repository requires a coordinated bump across `.github\workflows\powershell-sdk.yml`, `.github\workflows\powershell.yml`, `.gitmodules`, the `pwsh-src` submodule pointer, and README's "Current pins" table. Keep `POWERSHELL_SOURCE_REF` separate from `POWERSHELL_RELEASE_TAG`: the source ref points to `downstream/vX.Y.Z`, while the release tag remains the upstream `vX.Y.Z` value.
+This repository requires a coordinated bump across `.github\workflows\powershell-sdk.yml`, `.github\workflows\powershell-cli.yml`, `.gitmodules`, the `pwsh-src` submodule pointer, and README's "Current pins" table. Keep `POWERSHELL_SOURCE_REF` separate from `POWERSHELL_RELEASE_TAG`: the source ref points to `downstream/vX.Y.Z`, while the release tag remains the upstream `vX.Y.Z` value.
 
 ## Prerequisites
 

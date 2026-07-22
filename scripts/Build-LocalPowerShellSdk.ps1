@@ -529,7 +529,8 @@ try {
     -PackageId $PackageId `
     -VendorName $VendorName `
     -SourceBuiltAssemblyNames $SourceBuiltAssemblyNames `
-    -SourceBuiltAssemblyDirectoriesByPackagePath $SourceBuiltAssemblyDirectoriesByPackagePath
+    -SourceBuiltAssemblyDirectoriesByPackagePath $SourceBuiltAssemblyDirectoriesByPackagePath `
+    -SourceBuiltSdkProjectPath (Join-Path $PwshSourceRoot 'src\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj')
 
   $AnyAnyRuntimesDir = Join-Path $SdkStagePath 'contentFiles\any\any\runtimes'
   Remove-Item $AnyAnyRuntimesDir -Recurse -Force -ErrorAction SilentlyContinue

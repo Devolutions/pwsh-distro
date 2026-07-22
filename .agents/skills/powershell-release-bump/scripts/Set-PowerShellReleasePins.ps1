@@ -5,6 +5,8 @@ param(
 
   [string] $TargetFramework,
 
+  [string] $SdkPackageRevision = '0',
+
   [string] $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..\..')).Path
 )
 
@@ -38,7 +40,10 @@ function Set-RepositoryFileText {
 
   $Path = Get-RepositoryPath $RelativePath
   if ($PSCmdlet.ShouldProcess($RelativePath, 'Update PowerShell release pins')) {
-    Set-Content -LiteralPath $Path -Value $Text -Encoding utf8NoBOM
+    [System.IO.File]::WriteAllText(
+      $Path,
+      $Text,
+      [System.Text.UTF8Encoding]::new($false))
   }
 }
 
@@ -106,6 +111,11 @@ if ($NormalizedVersion -notmatch '^\d+\.\d+\.\d+$') {
   throw "Version must be in X.Y.Z or vX.Y.Z form. Received '$Version'."
 }
 
+$SdkPackageRevision = $SdkPackageRevision.Trim()
+if ($SdkPackageRevision -notmatch '^\d+$') {
+  throw "SdkPackageRevision must be a non-negative integer. Received '$SdkPackageRevision'."
+}
+
 if (-not $TargetFramework) {
   $TargetFramework = Get-PowerShellTargetFramework
 }
@@ -113,9 +123,11 @@ if (-not $TargetFramework) {
 $ReleaseTag = "v$NormalizedVersion"
 $UpstreamTag = "upstream/$ReleaseTag"
 $SourceRef = "downstream/$ReleaseTag"
+$SdkPackageVersion = "$NormalizedVersion.$SdkPackageRevision"
 $ReadmeReleaseValue = "``$NormalizedVersion`` / ``$ReleaseTag``"
 $ReadmeSourceRefValue = "``$SourceRef`` based on ``$UpstreamTag``"
 $ReadmeTargetFrameworkValue = "``$TargetFramework``"
+$ReadmeSdkPackageDefaultValue = "``$SdkPackageVersion``"
 
 $WorkflowPins = [ordered]@{
   POWERSHELL_VERSION = $NormalizedVersion
@@ -124,10 +136,14 @@ $WorkflowPins = [ordered]@{
   POWERSHELL_SOURCE_REF = $SourceRef
 }
 
-foreach ($WorkflowPath in @('.github\workflows\powershell-sdk.yml', '.github\workflows\powershell.yml')) {
+foreach ($WorkflowPath in @('.github\workflows\powershell-sdk.yml', '.github\workflows\powershell-cli.yml')) {
   $WorkflowText = Get-RepositoryFileText $WorkflowPath
   foreach ($Pin in $WorkflowPins.GetEnumerator()) {
     $WorkflowText = Set-YamlEnvValue -Text $WorkflowText -Name $Pin.Key -Value $Pin.Value -FileName $WorkflowPath
+  }
+  $WorkflowText = Set-YamlEnvValue -Text $WorkflowText -Name 'SDK_PACKAGE_REVISION' -Value $SdkPackageRevision -FileName $WorkflowPath
+  if ($WorkflowPath -eq '.github\workflows\powershell-cli.yml') {
+    $WorkflowText = Set-YamlEnvValue -Text $WorkflowText -Name 'SDK_PACKAGE_VERSION' -Value $SdkPackageVersion -FileName $WorkflowPath
   }
   Set-RepositoryFileText -RelativePath $WorkflowPath -Text $WorkflowText
 }
@@ -156,6 +172,11 @@ $ReadmeText = Set-RegexValue `
   -Pattern '^(\| PowerShell target framework \| )`[^`]+`( \|\r?)$' `
   -ReplacementValue $ReadmeTargetFrameworkValue `
   -Description 'README PowerShell target framework row'
+$ReadmeText = Set-RegexValue `
+  -Text $ReadmeText `
+  -Pattern '^(\| PowerShell SDK package \| `[^`]+` / )`[^`]+`( workflow default; `[^`]+` latest published package \|\r?)$' `
+  -ReplacementValue $ReadmeSdkPackageDefaultValue `
+  -Description 'README PowerShell SDK package workflow default'
 Set-RepositoryFileText -RelativePath 'README.md' -Text $ReadmeText
 
 Write-Output "PowerShellVersion=$NormalizedVersion"
@@ -163,4 +184,5 @@ Write-Output "PowerShellReleaseTag=$ReleaseTag"
 Write-Output "PowerShellUpstreamTag=$UpstreamTag"
 Write-Output "PowerShellSourceRef=$SourceRef"
 Write-Output "PowerShellTargetFramework=$TargetFramework"
+Write-Output "SdkPackageVersion=$SdkPackageVersion"
 Write-Output 'NextStep=git submodule update --remote pwsh-src && git add pwsh-src'

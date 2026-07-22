@@ -64,13 +64,13 @@ permissions:
   actions: read
   contents: read
 env:
-  POWERSHELL_VERSION: "7.6.3"
-  POWERSHELL_RELEASE_TAG: "v7.6.3"
-  POWERSHELL_UPSTREAM_TAG: "upstream/v7.6.3"
+  POWERSHELL_VERSION: "7.6.4"
+  POWERSHELL_RELEASE_TAG: "v7.6.4"
+  POWERSHELL_UPSTREAM_TAG: "upstream/v7.6.4"
   POWERSHELL_SOURCE_REPOSITORY: ${{ github.repository }}
-  POWERSHELL_SOURCE_REF: "downstream/v7.6.3"
+  POWERSHELL_SOURCE_REF: "downstream/v7.6.4"
   SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
-  SDK_PACKAGE_VERSION: "7.6.3.0"
+  SDK_PACKAGE_VERSION: "7.6.4.0"
   SDK_PACKAGE_REVISION: "0"
   SDK_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
 jobs:
