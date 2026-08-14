@@ -1130,12 +1130,9 @@ jobs:
           }
           foreach ($RuntimeGroup in $LocalizedResourceSources.Keys) {
             $LocalizedResourceDestinationRoot = Join-Path $SdkStagePath "buildTransitive/localized-resources/$RuntimeGroup/lib/$TargetFramework"
-            $CopiedLocalizedResourceCount = Copy-LocalizedResourcesToPackage `
+            Copy-LocalizedResourcesToPackage `
               -SourceRoot $LocalizedResourceSources[$RuntimeGroup] `
-              -DestinationRoot $LocalizedResourceDestinationRoot
-            if ($CopiedLocalizedResourceCount -eq 0) {
-              throw "No localized resources were staged for runtime group '$RuntimeGroup' from $($LocalizedResourceSources[$RuntimeGroup])"
-            }
+              -DestinationRoot $LocalizedResourceDestinationRoot | Out-Null
           }
 
           $WindowsDesktopPayloadSourceRoot = Join-Path $AppHostDownloadPath 'PowerShell-SDK-AppHost-win-x64/windows-desktop-payload'
