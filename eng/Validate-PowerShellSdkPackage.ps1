@@ -609,14 +609,14 @@ function Get-RepresentativeLocalizedResourcePath {
 
   $LocalizedResourceRoot = Join-Path $RestoredSdkPath "buildTransitive/localized-resources/$RuntimeAssetGroup/lib/$TargetFramework"
   if (-not (Test-Path $LocalizedResourceRoot -PathType Container)) {
-    throw "Restored SDK package is missing localized resource root: $LocalizedResourceRoot"
+    return $null
   }
 
   $LocalizedResourceFile = Get-ChildItem -LiteralPath $LocalizedResourceRoot -Recurse -File -Filter '*.resources.dll' |
     Sort-Object FullName |
     Select-Object -First 1
   if (-not $LocalizedResourceFile) {
-    throw "Restored SDK package contains no localized resource files under: $LocalizedResourceRoot"
+    return $null
   }
 
   return $LocalizedResourceFile.FullName.Substring($LocalizedResourceRoot.Length + 1)
@@ -655,6 +655,40 @@ function Assert-LocalizedResourcePresent {
   $Path = Join-Path $Directory $RelativePath
   if (-not (Test-Path $Path -PathType Leaf)) {
     throw "$Description is missing expected localized resource: $Path"
+  }
+}
+
+function Get-LocalizedResourceFileSnapshot {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Directory
+  )
+
+  return @(
+    Get-ChildItem -LiteralPath $Directory -Recurse -File -Filter '*.resources.dll' |
+      Sort-Object FullName |
+      ForEach-Object {
+        $RelativePath = $_.FullName.Substring($Directory.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+        "$RelativePath|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+      }
+  )
+}
+
+function Assert-LocalizedResourceFilesUnchanged {
+  param(
+    [Parameter(Mandatory)]
+    [string[]] $ExpectedSnapshot,
+
+    [Parameter(Mandatory)]
+    [string[]] $ActualSnapshot,
+
+    [Parameter(Mandatory)]
+    [string] $Description
+  )
+
+  $Difference = @(Compare-Object -ReferenceObject $ExpectedSnapshot -DifferenceObject $ActualSnapshot)
+  if ($Difference.Count -ne 0) {
+    throw "$Description changed localized resource files: $($Difference.InputObject -join ', ')"
   }
 }
 
@@ -937,10 +971,10 @@ function Invoke-AppHostLayoutMatrixProbe {
   )
 
   $Layouts = @(
-    [pscustomobject]@{ Name = 'None'; AppHostLayout = ''; ExpectRootAppHost = $false; ExpectRuntimeNativeAppHost = $false; CopyPSGalleryModules = $false },
-    [pscustomobject]@{ Name = 'Root'; AppHostLayout = 'Root'; ExpectRootAppHost = $true; ExpectRuntimeNativeAppHost = $false; CopyPSGalleryModules = $false },
-    [pscustomobject]@{ Name = 'RuntimeNative'; AppHostLayout = 'RuntimeNative'; ExpectRootAppHost = $false; ExpectRuntimeNativeAppHost = $true; CopyPSGalleryModules = $true },
-    [pscustomobject]@{ Name = 'Both'; AppHostLayout = 'Both'; ExpectRootAppHost = $true; ExpectRuntimeNativeAppHost = $true; CopyPSGalleryModules = $true }
+    [pscustomobject]@{ Name = 'None'; AppHostLayout = ''; ExpectRootAppHost = $false; ExpectRuntimeNativeAppHost = $false; CopyPSGalleryModules = $false; CopyLocalizedResources = $false },
+    [pscustomobject]@{ Name = 'Root'; AppHostLayout = 'Root'; ExpectRootAppHost = $true; ExpectRuntimeNativeAppHost = $false; CopyPSGalleryModules = $false; CopyLocalizedResources = $true },
+    [pscustomobject]@{ Name = 'RuntimeNative'; AppHostLayout = 'RuntimeNative'; ExpectRootAppHost = $false; ExpectRuntimeNativeAppHost = $true; CopyPSGalleryModules = $true; CopyLocalizedResources = $false },
+    [pscustomobject]@{ Name = 'Both'; AppHostLayout = 'Both'; ExpectRootAppHost = $true; ExpectRuntimeNativeAppHost = $true; CopyPSGalleryModules = $true; CopyLocalizedResources = $false }
   )
 
   foreach ($Layout in $Layouts) {
@@ -1063,6 +1097,19 @@ if (ps.HadErrors)
       if ($Layout.CopyPSGalleryModules) {
         Assert-PSGalleryModulesPresent -Directory $ProbeOutputDirectory -ModuleNames $PSGalleryProbeModuleNames -Description $Description
       }
+      if ($Layout.CopyLocalizedResources) {
+        $LocalizedResourceOutputBefore = @(Get-LocalizedResourceFileSnapshot -Directory $ProbeOutputDirectory)
+        Invoke-DotNet @(
+          'msbuild',
+          $ProjectPath,
+          '-nologo',
+          '-verbosity:minimal',
+          '-t:PowerShellSDKCopyAppHostLocalizedResourcesToOutput',
+          '/p:PowerShellSDKLocalizedResources=Copy'
+        )
+        $LocalizedResourceOutputAfter = @(Get-LocalizedResourceFileSnapshot -Directory $ProbeOutputDirectory)
+        Assert-LocalizedResourceFilesUnchanged -ExpectedSnapshot $LocalizedResourceOutputBefore -ActualSnapshot $LocalizedResourceOutputAfter -Description "$Description localized resources output opt-in"
+      }
       if ($Layout.ExpectRootAppHost) {
         Assert-AppHostOutput -Directory $ProbeOutputDirectory -ExecutableName $ExecutableName -Description $Description
         if (-not $SkipRuntimeExecution) {
@@ -1080,6 +1127,46 @@ if (ps.HadErrors)
             Invoke-PwshModuleProbe -PwshPath $RuntimeNativePwshPath -ModuleRoot (Join-Path $ProbeOutputDirectory 'Modules')
           }
         }
+      }
+
+      if ($Layout.CopyLocalizedResources) {
+        $LocalizedPublishDirectory = Join-Path $ProbeDirectory (Join-Path 'bin' (Join-Path 'Release' (Join-Path $SampleTargetFramework (Join-Path $CurrentRuntimeIdentifier 'publish-localized'))))
+        Remove-Item -LiteralPath $LocalizedPublishDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        Invoke-DotNet @(
+          'publish',
+          $ProjectPath,
+          '--nologo',
+          '--verbosity',
+          'minimal',
+          '-c',
+          'Release',
+          '-r',
+          $CurrentRuntimeIdentifier,
+          '--self-contained',
+          'false',
+          '-o',
+          $LocalizedPublishDirectory
+        )
+        $LocalizedResourcePublishBefore = @(Get-LocalizedResourceFileSnapshot -Directory $LocalizedPublishDirectory)
+        Invoke-DotNet @(
+          'publish',
+          $ProjectPath,
+          '--nologo',
+          '--verbosity',
+          'minimal',
+          '-c',
+          'Release',
+          '-r',
+          $CurrentRuntimeIdentifier,
+          '--self-contained',
+          'false',
+          '-o',
+          $LocalizedPublishDirectory,
+          '/p:PowerShellSDKLocalizedResources=Copy'
+        )
+        $LocalizedResourcePublishAfter = @(Get-LocalizedResourceFileSnapshot -Directory $LocalizedPublishDirectory)
+        Assert-AppHostOutput -Directory $LocalizedPublishDirectory -ExecutableName $ExecutableName -Description "$($Layout.Name) layout localized resource publish output"
+        Assert-LocalizedResourceFilesUnchanged -ExpectedSnapshot $LocalizedResourcePublishBefore -ActualSnapshot $LocalizedResourcePublishAfter -Description "$($Layout.Name) layout localized resource publish opt-in"
       }
 
       $ProbeOutput = & dotnet run --project $ProjectPath --no-build
@@ -1677,7 +1764,12 @@ foreach (PSObject result in ps.Invoke())
   }
   $FrameworkDependentAppHostSelfContained = Test-RuntimeConfigSelfContained -RuntimeConfigPath (Join-Path $RestoredSdkPath "tools/apphost/$RuntimeIdentifier/pwsh.runtimeconfig.json")
   $RepresentativeLocalizedResourcePath = Get-RepresentativeLocalizedResourcePath -RestoredSdkPath $RestoredSdkPath -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework
-  $RepresentativeLocalizedResourcePackagePath = Join-Path $RestoredSdkPath "buildTransitive/localized-resources/$RuntimeAssetGroup/lib/$TargetFramework/$RepresentativeLocalizedResourcePath"
+  $RepresentativeLocalizedResourcePackagePath = $null
+  if ($RepresentativeLocalizedResourcePath) {
+    $RepresentativeLocalizedResourcePackagePath = Join-Path $RestoredSdkPath "buildTransitive/localized-resources/$RuntimeAssetGroup/lib/$TargetFramework/$RepresentativeLocalizedResourcePath"
+  } else {
+    Write-Host "SDK package does not include localized resources for '$RuntimeAssetGroup/$TargetFramework'; validating PowerShellSDKLocalizedResources=Copy as a no-op."
+  }
 
   Invoke-DotNet @('build', $ProjectPath, '--no-restore', '--nologo', '--verbosity', 'minimal')
 
@@ -1730,9 +1822,11 @@ foreach (PSObject result in ps.Invoke())
   )
   Assert-PowerShellConfig -Directory $OutputDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample app output restored config'
 
-  $OutputLocalizedResourcePath = Join-Path $OutputDirectory $RepresentativeLocalizedResourcePath
-  Remove-Item -LiteralPath $OutputLocalizedResourcePath -Force -ErrorAction SilentlyContinue
-  Assert-LocalizedResourceAbsent -Directory $OutputDirectory -RelativePath $RepresentativeLocalizedResourcePath -Description 'Sample app output before localized resources opt-in'
+  if ($RepresentativeLocalizedResourcePath) {
+    $OutputLocalizedResourcePath = Join-Path $OutputDirectory $RepresentativeLocalizedResourcePath
+    Remove-Item -LiteralPath $OutputLocalizedResourcePath -Force -ErrorAction SilentlyContinue
+    Assert-LocalizedResourceAbsent -Directory $OutputDirectory -RelativePath $RepresentativeLocalizedResourcePath -Description 'Sample app output before localized resources opt-in'
+  }
   Invoke-DotNet @(
     'msbuild',
     $ProjectPath,
@@ -1741,8 +1835,10 @@ foreach (PSObject result in ps.Invoke())
     '-t:PowerShellSDKCopyRuntimeNativeLocalizedResourcesToOutput',
     '/p:PowerShellSDKLocalizedResources=Copy'
   )
-  Assert-LocalizedResourcePresent -Directory $OutputDirectory -RelativePath $RepresentativeLocalizedResourcePath -Description 'Sample app output with localized resources opt-in'
-  Assert-FileContentMatches -ExpectedPath $RepresentativeLocalizedResourcePackagePath -ActualPath $OutputLocalizedResourcePath -Description 'Sample app output localized resource opt-in'
+  if ($RepresentativeLocalizedResourcePath) {
+    Assert-LocalizedResourcePresent -Directory $OutputDirectory -RelativePath $RepresentativeLocalizedResourcePath -Description 'Sample app output with localized resources opt-in'
+    Assert-FileContentMatches -ExpectedPath $RepresentativeLocalizedResourcePackagePath -ActualPath $OutputLocalizedResourcePath -Description 'Sample app output localized resource opt-in'
+  }
 
   if (-not $SkipRuntimeExecution) {
     $AppOutput = & dotnet run --project $ProjectPath --no-build
@@ -1869,8 +1965,10 @@ foreach (PSObject result in ps.Invoke())
     '/p:PowerShellSDKLocalizedResources=Copy'
   )
   Assert-SharedPowerShellOutput -Directory $LocalizedPublishDirectory -SelfContained $FrameworkDependentAppHostSelfContained -Description 'Sample localized resource publish output'
-  Assert-LocalizedResourcePresent -Directory $LocalizedPublishDirectory -RelativePath $RepresentativeLocalizedResourcePath -Description 'Sample localized resource publish output'
-  Assert-FileContentMatches -ExpectedPath $RepresentativeLocalizedResourcePackagePath -ActualPath (Join-Path $LocalizedPublishDirectory $RepresentativeLocalizedResourcePath) -Description 'Sample localized resource publish output'
+  if ($RepresentativeLocalizedResourcePath) {
+    Assert-LocalizedResourcePresent -Directory $LocalizedPublishDirectory -RelativePath $RepresentativeLocalizedResourcePath -Description 'Sample localized resource publish output'
+    Assert-FileContentMatches -ExpectedPath $RepresentativeLocalizedResourcePackagePath -ActualPath (Join-Path $LocalizedPublishDirectory $RepresentativeLocalizedResourcePath) -Description 'Sample localized resource publish output'
+  }
 
   Write-Host "Validated $PackageId $PackageVersion from $($Package.FullName)"
   if ($SkipRuntimeExecution) {

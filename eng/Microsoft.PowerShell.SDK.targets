@@ -454,11 +454,10 @@
           DependsOnTargets="_PowerShellSDKResolveAppHost"
           AfterTargets="PowerShellSDKCopyAppHostToOutput"
           Condition="'$(_PowerShellSDKLocalizedResourcesCopyToOutputEnabled)' == 'true' and '$(_PowerShellSDKRootAppHostEnabled)' == 'true'">
-    <Error Condition="'@(_PowerShellSDKAppHostLocalizedResourceFile)' == ''"
-           Text="PowerShellSDKLocalizedResources=Copy, but this PowerShell SDK package does not include localized resources for runtime group '$(_PowerShellSDKAppHostRuntimeGroup)' and target framework '$(TargetFramework)'." />
     <Copy SourceFiles="@(_PowerShellSDKAppHostLocalizedResourceFile)"
           DestinationFiles="@(_PowerShellSDKAppHostLocalizedResourceFile->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+          SkipUnchangedFiles="true"
+          Condition="'@(_PowerShellSDKAppHostLocalizedResourceFile)' != ''" />
   </Target>
 
   <Target Name="PowerShellSDKCopyRuntimeNativeAppHostsToOutput"
@@ -521,11 +520,10 @@
           DependsOnTargets="_PowerShellSDKResolveRuntimeNativeAppHosts"
           AfterTargets="PowerShellSDKCopyRuntimeNativeAppHostsToOutput"
           Condition="'$(_PowerShellSDKLocalizedResourcesCopyToOutputEnabled)' == 'true' and '$(_PowerShellSDKRuntimeNativeAppHostEnabled)' == 'true'">
-    <Error Condition="'@(_PowerShellSDKRuntimeNativeSharedLocalizedResourceFile)' == ''"
-           Text="PowerShellSDKLocalizedResources=Copy, but this PowerShell SDK package does not include localized resources for runtime group '$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)' and target framework '$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)'." />
     <Copy SourceFiles="@(_PowerShellSDKRuntimeNativeSharedLocalizedResourceFile)"
           DestinationFiles="@(_PowerShellSDKRuntimeNativeSharedLocalizedResourceFile->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+          SkipUnchangedFiles="true"
+          Condition="'@(_PowerShellSDKRuntimeNativeSharedLocalizedResourceFile)' != ''" />
   </Target>
 
   <Target Name="PowerShellSDKCopyPSGalleryModulesToOutput"
@@ -585,11 +583,10 @@
           DependsOnTargets="_PowerShellSDKResolveAppHost"
           AfterTargets="Publish"
           Condition="'$(_PowerShellSDKLocalizedResourcesCopyToPublishEnabled)' == 'true' and '$(_PowerShellSDKRootAppHostEnabled)' == 'true'">
-    <Error Condition="'@(_PowerShellSDKAppHostLocalizedResourceFile)' == ''"
-           Text="PowerShellSDKLocalizedResources=Copy, but this PowerShell SDK package does not include localized resources for runtime group '$(_PowerShellSDKAppHostRuntimeGroup)' and target framework '$(TargetFramework)'." />
     <Copy SourceFiles="@(_PowerShellSDKAppHostLocalizedResourceFile)"
           DestinationFiles="@(_PowerShellSDKAppHostLocalizedResourceFile->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+          SkipUnchangedFiles="true"
+          Condition="'@(_PowerShellSDKAppHostLocalizedResourceFile)' != ''" />
   </Target>
 
   <Target Name="PowerShellSDKAddRuntimeNativeAppHostsToPublish"
@@ -646,11 +643,10 @@
           DependsOnTargets="_PowerShellSDKResolveRuntimeNativeAppHosts"
           AfterTargets="Publish"
           Condition="'$(_PowerShellSDKLocalizedResourcesCopyToPublishEnabled)' == 'true' and '$(_PowerShellSDKRuntimeNativeCopyToPublishEnabled)' == 'true'">
-    <Error Condition="'@(_PowerShellSDKRuntimeNativeSharedLocalizedResourceFile)' == ''"
-           Text="PowerShellSDKLocalizedResources=Copy, but this PowerShell SDK package does not include localized resources for runtime group '$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)' and target framework '$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)'." />
     <Copy SourceFiles="@(_PowerShellSDKRuntimeNativeSharedLocalizedResourceFile)"
           DestinationFiles="@(_PowerShellSDKRuntimeNativeSharedLocalizedResourceFile->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+          SkipUnchangedFiles="true"
+          Condition="'@(_PowerShellSDKRuntimeNativeSharedLocalizedResourceFile)' != ''" />
   </Target>
 
   <Target Name="PowerShellSDKAddPSGalleryModulesToPublish"
