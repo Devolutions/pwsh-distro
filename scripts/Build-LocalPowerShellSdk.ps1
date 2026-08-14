@@ -452,7 +452,7 @@ $OriginalModuleNugetConfig = if ($HadModuleNugetConfig) { Get-Content -LiteralPa
 Push-Location $PwshSourceRoot
 try {
   Import-Module .\build.psm1 -Force
-  # The SDK is installed by the caller; prevent bootstrap from installing the unused dotnet-format global tool.
+  # Packaging does not use dotnet-format; prevent bootstrap from installing that global tool.
   $PreviousTfBuild = $env:TF_BUILD
   try {
     $env:TF_BUILD = 'true'
