@@ -452,7 +452,18 @@ $OriginalModuleNugetConfig = if ($HadModuleNugetConfig) { Get-Content -LiteralPa
 Push-Location $PwshSourceRoot
 try {
   Import-Module .\build.psm1 -Force
-  Start-PSBootstrap -Scenario DotNet
+  # Packaging does not use dotnet-format; prevent bootstrap from installing that global tool.
+  $PreviousTfBuild = $env:TF_BUILD
+  try {
+    $env:TF_BUILD = 'true'
+    Start-PSBootstrap -Scenario DotNet
+  } finally {
+    if ($null -eq $PreviousTfBuild) {
+      Remove-Item Env:\TF_BUILD -ErrorAction SilentlyContinue
+    } else {
+      $env:TF_BUILD = $PreviousTfBuild
+    }
+  }
   if ($IsWindows) {
     Switch-PSNugetConfig -Source Public
     $ModuleNugetConfig = @(

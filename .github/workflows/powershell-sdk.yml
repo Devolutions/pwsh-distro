@@ -413,7 +413,18 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Import-Module .\build.psm1 -Force
           Import-Module (Join-Path $PWD '../eng/PowerShellSdkPackaging.psm1') -Force
-          Start-PSBootstrap -Scenario DotNet
+          # The workflow already installs the SDK; prevent bootstrap from installing the unused dotnet-format global tool.
+          $PreviousTfBuild = $env:TF_BUILD
+          try {
+            $env:TF_BUILD = 'true'
+            Start-PSBootstrap -Scenario DotNet
+          } finally {
+            if ($null -eq $PreviousTfBuild) {
+              Remove-Item Env:\TF_BUILD -ErrorAction SilentlyContinue
+            } else {
+              $env:TF_BUILD = $PreviousTfBuild
+            }
+          }
 
           if ($IsWindows) {
             Switch-PSNugetConfig -Source Public
@@ -869,7 +880,18 @@ jobs:
           Import-Module .\build.psm1 -Force
           Import-Module (Join-Path $PWD '../eng/PowerShellSdkPackaging.psm1') -Force
           $env:PowerShellVendor = $Env:POWERSHELL_VENDOR_NAME
-          Start-PSBootstrap -Scenario DotNet
+          # The workflow already installs the SDK; prevent bootstrap from installing the unused dotnet-format global tool.
+          $PreviousTfBuild = $env:TF_BUILD
+          try {
+            $env:TF_BUILD = 'true'
+            Start-PSBootstrap -Scenario DotNet
+          } finally {
+            if ($null -eq $PreviousTfBuild) {
+              Remove-Item Env:\TF_BUILD -ErrorAction SilentlyContinue
+            } else {
+              $env:TF_BUILD = $PreviousTfBuild
+            }
+          }
           Start-PSBuild -Clean -PSModuleRestore -Configuration Release -ReleaseTag $Env:POWERSHELL_RELEASE_TAG -UseNuGetOrg
 
           [xml]$CommonProps = Get-Content ./PowerShell.Common.props
