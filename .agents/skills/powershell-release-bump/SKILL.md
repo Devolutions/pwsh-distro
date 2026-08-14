@@ -58,13 +58,14 @@ The patch range is the source of truth. Carry all of its commits unless a newer 
 
 ### 2. Mirror and publish the upstream release tag
 
-Synchronize namespaced upstream tags, verify the target tag, and publish only that new mirror tag:
+Synchronize namespaced upstream tags, verify the target tag, and publish the refreshed upstream mirror branch plus the new mirror tag:
 
 ```powershell
 pwsh .\scripts\Sync-PowerShellUpstream.ps1 -SyncTags
 git rev-parse --verify "upstream/v$Version^{commit}"
 git show "upstream/v$Version:PowerShell.Common.props" |
   Select-String -Pattern 'TargetFramework'
+git push --force origin "refs/heads/upstream:refs/heads/upstream"
 git push origin "refs/tags/upstream/v$Version:refs/tags/upstream/v$Version"
 ```
 
@@ -79,11 +80,11 @@ pwsh .\scripts\New-PowerShellPatchBranch.ps1 -Version $Version
 $PatchWorktree = Join-Path $env:TEMP "pwsh-src-v$Version"
 git worktree add $PatchWorktree "downstream/v$Version"
 
-$PatchCommits = git rev-list --reverse "upstream/v$PreviousVersion..downstream/v$PreviousVersion"
-foreach ($PatchCommit in $PatchCommits) {
-  git -C $PatchWorktree cherry-pick $PatchCommit
+$PatchCommits = @(git rev-list --reverse "upstream/v$PreviousVersion..downstream/v$PreviousVersion")
+if ($PatchCommits.Count -gt 0) {
+  git -C $PatchWorktree cherry-pick @PatchCommits
   if ($LASTEXITCODE -ne 0) {
-    throw "Resolve the cherry-pick for $PatchCommit in $PatchWorktree before continuing."
+    throw "Resolve the cherry-pick in $PatchWorktree, then run 'git -C $PatchWorktree cherry-pick --continue'."
   }
 }
 ```
@@ -108,9 +109,18 @@ Validate the patched source, confirm it remains based on the target upstream tag
 
 ```powershell
 git -C $PatchWorktree diff --check
+if ($LASTEXITCODE -ne 0) {
+  throw "The patched source diff check failed."
+}
 git -C $PatchWorktree merge-base --is-ancestor "upstream/v$Version^{commit}" HEAD
+if ($LASTEXITCODE -ne 0) {
+  throw "downstream/v$Version is not based on upstream/v$Version."
+}
 git -C $PatchWorktree log --oneline "upstream/v$Version..HEAD"
 git push origin "downstream/v$Version"
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to publish downstream/v$Version."
+}
 ```
 
 ### 4. Update coordinated distribution pins
@@ -155,9 +165,21 @@ Get-Content -Raw .github\workflows\powershell-sdk.yml | ConvertFrom-Yaml | Out-N
 Get-Content -Raw .github\workflows\powershell-cli.yml | ConvertFrom-Yaml | Out-Null
 
 git -C pwsh-src rev-parse --verify "upstream/v$Version^{commit}"
+if ($LASTEXITCODE -ne 0) {
+  throw "pwsh-src is missing upstream/v$Version."
+}
 git -C pwsh-src merge-base --is-ancestor "upstream/v$Version^{commit}" HEAD
+if ($LASTEXITCODE -ne 0) {
+  throw "pwsh-src is not based on upstream/v$Version."
+}
 git --no-pager diff --check
+if ($LASTEXITCODE -ne 0) {
+  throw "The unstaged diff check failed."
+}
 git --no-pager diff --cached --check
+if ($LASTEXITCODE -ne 0) {
+  throw "The staged diff check failed."
+}
 git submodule status pwsh-src
 git status --short
 ```
