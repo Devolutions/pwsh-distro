@@ -705,16 +705,19 @@ function Get-XmlDocumentationFileNames {
   )
 
   $RuntimeXmlRoot = Join-Path $RestoredSdkPath "runtimes/$RuntimeAssetGroup/lib/$TargetFramework"
-  $PreferredNames = @(
-    'System.Management.Automation.xml',
-    'Microsoft.PowerShell.Commands.Management.xml'
-  )
-  $Found = @()
-  foreach ($Name in $PreferredNames) {
-    if (Test-Path (Join-Path $RuntimeXmlRoot $Name) -PathType Leaf) {
-      $Found += $Name
-    }
+  if (-not (Test-Path -LiteralPath $RuntimeXmlRoot -PathType Container)) {
+    throw "SDK package is missing expected XML documentation directory $RuntimeXmlRoot"
   }
+
+  $Found = @(
+    Get-ChildItem -LiteralPath $RuntimeXmlRoot -Filter '*.xml' -File |
+      Where-Object {
+        $_.Extension -eq '.xml' -and
+        $_.Name -notlike '*-Help.xml'
+      } |
+      Select-Object -ExpandProperty Name |
+      Sort-Object
+  )
   if ($Found.Count -eq 0) {
     throw "SDK package is missing expected XML documentation files under $RuntimeXmlRoot"
   }
