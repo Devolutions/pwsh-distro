@@ -837,6 +837,7 @@ try {
     <PowerShellSDKAppHostLayout>Root</PowerShellSDKAppHostLayout>
     <PowerShellSDKAppHostRuntimeIdentifier>$EscapedRuntimeIdentifier</PowerShellSDKAppHostRuntimeIdentifier>
     <PowerShellSDKPSGalleryModules>All</PowerShellSDKPSGalleryModules>
+    <PowerShellSDKXmlDocumentation>Copy</PowerShellSDKXmlDocumentation>
     <PowerShellSDKConfig>$EscapedConfigMode</PowerShellSDKConfig>
     <PowerShellSDKConfigExecutionPolicy>Bypass</PowerShellSDKConfigExecutionPolicy>
     <PowerShellSDKConfigOverwriteExisting>true</PowerShellSDKConfigOverwriteExisting>

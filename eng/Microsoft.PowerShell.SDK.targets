@@ -138,12 +138,14 @@
     <PowerShellSDKConfigExecutionPolicy Condition="'$(PowerShellSDKConfigExecutionPolicy)' == ''">Bypass</PowerShellSDKConfigExecutionPolicy>
     <PowerShellSDKConfigOverwriteExisting Condition="'$(PowerShellSDKConfigOverwriteExisting)' == ''">false</PowerShellSDKConfigOverwriteExisting>
     <PowerShellSDKLocalizedResources Condition="'$(PowerShellSDKLocalizedResources)' == ''">None</PowerShellSDKLocalizedResources>
+    <PowerShellSDKXmlDocumentation Condition="'$(PowerShellSDKXmlDocumentation)' == ''">None</PowerShellSDKXmlDocumentation>
     <PowerShellSDKPSGalleryModules Condition="'$(PowerShellSDKPSGalleryModules)' == ''">None</PowerShellSDKPSGalleryModules>
     <_PowerShellSDKAppHostLayoutValue>$([System.String]::Copy('$(PowerShellSDKAppHostLayout)').ToLowerInvariant())</_PowerShellSDKAppHostLayoutValue>
     <_PowerShellSDKAppHostImplementationValue>$([System.String]::Copy('$(PowerShellSDKAppHostImplementation)').ToLowerInvariant())</_PowerShellSDKAppHostImplementationValue>
     <_PowerShellSDKConfigValue>$([System.String]::Copy('$(PowerShellSDKConfig)').ToLowerInvariant())</_PowerShellSDKConfigValue>
     <_PowerShellSDKConfigOverwriteExistingValue>$([System.String]::Copy('$(PowerShellSDKConfigOverwriteExisting)').ToLowerInvariant())</_PowerShellSDKConfigOverwriteExistingValue>
     <_PowerShellSDKLocalizedResourcesValue>$([System.String]::Copy('$(PowerShellSDKLocalizedResources)').ToLowerInvariant())</_PowerShellSDKLocalizedResourcesValue>
+    <_PowerShellSDKXmlDocumentationValue>$([System.String]::Copy('$(PowerShellSDKXmlDocumentation)').ToLowerInvariant())</_PowerShellSDKXmlDocumentationValue>
     <_PowerShellSDKPSGalleryModulesValue>$([System.String]::Copy('$(PowerShellSDKPSGalleryModules)').ToLowerInvariant())</_PowerShellSDKPSGalleryModulesValue>
     <_PowerShellSDKSelfContainedValue>$([System.String]::Copy('$(SelfContained)').ToLowerInvariant())</_PowerShellSDKSelfContainedValue>
     <_PowerShellSDKCopyPhasesForItems>$([System.Text.RegularExpressions.Regex]::Replace('$(PowerShellSDKCopyPhases)', '%3[Bb]', ';'))</_PowerShellSDKCopyPhasesForItems>
@@ -162,6 +164,9 @@
     <_PowerShellSDKLocalizedResourcesEnabled Condition="'$(_PowerShellSDKLocalizedResourcesValue)' == 'copy'">true</_PowerShellSDKLocalizedResourcesEnabled>
     <_PowerShellSDKLocalizedResourcesCopyToOutputEnabled Condition="'$(_PowerShellSDKLocalizedResourcesEnabled)' == 'true' and '$(_PowerShellSDKCopyToOutputEnabled)' == 'true'">true</_PowerShellSDKLocalizedResourcesCopyToOutputEnabled>
     <_PowerShellSDKLocalizedResourcesCopyToPublishEnabled Condition="'$(_PowerShellSDKLocalizedResourcesEnabled)' == 'true' and '$(_PowerShellSDKCopyToPublishEnabled)' == 'true'">true</_PowerShellSDKLocalizedResourcesCopyToPublishEnabled>
+    <_PowerShellSDKXmlDocumentationEnabled Condition="'$(_PowerShellSDKXmlDocumentationValue)' == 'copy'">true</_PowerShellSDKXmlDocumentationEnabled>
+    <_PowerShellSDKXmlDocumentationCopyToOutputEnabled Condition="'$(_PowerShellSDKXmlDocumentationEnabled)' == 'true' and '$(_PowerShellSDKCopyToOutputEnabled)' == 'true'">true</_PowerShellSDKXmlDocumentationCopyToOutputEnabled>
+    <_PowerShellSDKXmlDocumentationCopyToPublishEnabled Condition="'$(_PowerShellSDKXmlDocumentationEnabled)' == 'true' and '$(_PowerShellSDKCopyToPublishEnabled)' == 'true'">true</_PowerShellSDKXmlDocumentationCopyToPublishEnabled>
     <_PowerShellSDKConfigEnabled Condition="'$(_PowerShellSDKConfigValue)' == 'copy' and '$(_PowerShellSDKAppHostEnabled)' == 'true'">true</_PowerShellSDKConfigEnabled>
     <_PowerShellSDKConfigCopyToOutputEnabled Condition="'$(_PowerShellSDKConfigEnabled)' == 'true' and '$(_PowerShellSDKCopyToOutputEnabled)' == 'true'">true</_PowerShellSDKConfigCopyToOutputEnabled>
     <_PowerShellSDKConfigCopyToPublishEnabled Condition="'$(_PowerShellSDKConfigEnabled)' == 'true' and '$(_PowerShellSDKCopyToPublishEnabled)' == 'true'">true</_PowerShellSDKConfigCopyToPublishEnabled>
@@ -181,6 +186,8 @@
            Text="PowerShellSDKConfigOverwriteExisting must be true or false." />
     <Error Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(PowerShellSDKLocalizedResources)', '^(?i:None|Copy)$')) != 'True'"
            Text="PowerShellSDKLocalizedResources must be None or Copy." />
+    <Error Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(PowerShellSDKXmlDocumentation)', '^(?i:None|Copy)$')) != 'True'"
+           Text="PowerShellSDKXmlDocumentation must be None or Copy." />
     <Error Condition="'$(_PowerShellSDKAppHostEnabled)' == 'true' and '$(_PowerShellSDKAppHostImplementationValue)' == 'dotnet'"
            Text="PowerShellSDKAppHostImplementation=DotNet is not available in this SDK package. Use Auto or MultiPwsh." />
   </Target>
@@ -195,6 +202,10 @@
     <ItemGroup>
       <NativeCopyLocalItems Remove="@(NativeCopyLocalItems)"
                             Condition="'%(NativeCopyLocalItems.NuGetPackageId)' == 'Devolutions.PowerShell.SDK' and $([System.String]::Copy('%(NativeCopyLocalItems.PathInPackage)').Contains('/native/'))" />
+      <RuntimeCopyLocalItems Remove="@(RuntimeCopyLocalItems)"
+                             Condition="'%(RuntimeCopyLocalItems.NuGetPackageId)' == 'Devolutions.PowerShell.SDK' and '%(RuntimeCopyLocalItems.Extension)' == '.xml'" />
+      <ReferenceCopyLocalPaths Remove="@(ReferenceCopyLocalPaths)"
+                               Condition="'%(ReferenceCopyLocalPaths.NuGetPackageId)' == 'Devolutions.PowerShell.SDK' and '%(ReferenceCopyLocalPaths.Extension)' == '.xml'" />
     </ItemGroup>
   </Target>
 
@@ -207,6 +218,8 @@
                              Condition="'$(_PowerShellSDKRuntimeNativeCopyToPublishEnabled)' == 'true' and '%(ResolvedFileToPublish.PowerShellSDKRuntimeNativeSharedPayload)' != 'true' and ('%(ResolvedFileToPublish.NuGetPackageId)' == 'Devolutions.PowerShell.SDK' or $([System.String]::Copy('%(ResolvedFileToPublish.FullPath)').Contains('\devolutions.powershell.sdk\')) or $([System.String]::Copy('%(ResolvedFileToPublish.FullPath)').Contains('/devolutions.powershell.sdk/'))) and ($([System.String]::Copy('%(ResolvedFileToPublish.PathInPackage)').Contains('/lib/')) or ($([System.String]::Copy('%(ResolvedFileToPublish.FullPath)').Contains('\runtimes\')) and $([System.String]::Copy('%(ResolvedFileToPublish.FullPath)').Contains('\lib\'))) or ($([System.String]::Copy('%(ResolvedFileToPublish.FullPath)').Contains('/runtimes/')) and $([System.String]::Copy('%(ResolvedFileToPublish.FullPath)').Contains('/lib/'))))" />
       <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
                              Condition="'$(_PowerShellSDKRuntimeNativeCopyToPublishEnabled)' == 'true' and '%(ResolvedFileToPublish.PowerShellSDKRuntimeNativeSharedPayload)' != 'true' and '%(ResolvedFileToPublish.Filename)%(ResolvedFileToPublish.Extension)' == 'System.Management.Automation.dll' and ('%(ResolvedFileToPublish.NuGetPackageId)' == 'PowerShellStandard.Library' or $([System.String]::Copy('%(ResolvedFileToPublish.FullPath)').Contains('\powershellstandard.library\')) or $([System.String]::Copy('%(ResolvedFileToPublish.FullPath)').Contains('/powershellstandard.library/')))" />
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="'%(ResolvedFileToPublish.PowerShellSDKXmlDocumentation)' != 'true' and '%(ResolvedFileToPublish.Extension)' == '.xml' and ('%(ResolvedFileToPublish.NuGetPackageId)' == 'Devolutions.PowerShell.SDK' or $([System.String]::Copy('%(ResolvedFileToPublish.FullPath)').Contains('\devolutions.powershell.sdk\')) or $([System.String]::Copy('%(ResolvedFileToPublish.FullPath)').Contains('/devolutions.powershell.sdk/')))" />
     </ItemGroup>
   </Target>
 
@@ -245,7 +258,8 @@
     <ItemGroup>
       <_PowerShellSDKAppHostFile Include="$(_PowerShellSDKAppHostSourceDir)**/*" />
       <_PowerShellSDKModuleFile Include="$(_PowerShellSDKModuleSourceDir)**/*" />
-      <_PowerShellSDKAppHostRuntimeFile Include="$(_PowerShellSDKAppHostRuntimeSourceDir)*.dll;$(_PowerShellSDKAppHostRuntimeSourceDir)*.xml" />
+      <_PowerShellSDKAppHostRuntimeFile Include="$(_PowerShellSDKAppHostRuntimeSourceDir)*.dll" />
+      <_PowerShellSDKAppHostXmlDocumentationFile Include="$(_PowerShellSDKAppHostRuntimeSourceDir)*.xml" />
       <_PowerShellSDKAppHostCompanionFile Include="$(_PowerShellSDKAppHostRuntimeSourceDir)*.config" />
       <_PowerShellSDKAppHostLocalizedResourceFile Include="$(_PowerShellSDKAppHostLocalizedResourceSourceDir)**/*"
                                                   Condition="Exists('$(_PowerShellSDKAppHostLocalizedResourceSourceDir)')" />
@@ -349,7 +363,8 @@
     <ItemGroup>
       <_PowerShellSDKRuntimeNativeSharedAppHostFile Include="$(_PowerShellSDKRuntimeNativeSharedAppHostSourceDir)pwsh.dll;$(_PowerShellSDKRuntimeNativeSharedAppHostSourceDir)pwsh.runtimeconfig.json" />
       <_PowerShellSDKRuntimeNativeSharedModuleFile Include="$(_PowerShellSDKRuntimeNativeSharedModuleSourceDir)**/*" />
-      <_PowerShellSDKRuntimeNativeSharedRuntimeFile Include="$(_PowerShellSDKRuntimeNativeSharedRuntimeSourceDir)*.dll;$(_PowerShellSDKRuntimeNativeSharedRuntimeSourceDir)*.xml" />
+      <_PowerShellSDKRuntimeNativeSharedRuntimeFile Include="$(_PowerShellSDKRuntimeNativeSharedRuntimeSourceDir)*.dll" />
+      <_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile Include="$(_PowerShellSDKRuntimeNativeSharedRuntimeSourceDir)*.xml" />
       <_PowerShellSDKRuntimeNativeSharedCompanionFile Include="$(_PowerShellSDKRuntimeNativeSharedRuntimeSourceDir)*.config" />
       <_PowerShellSDKRuntimeNativeSharedLocalizedResourceFile Include="$(_PowerShellSDKRuntimeNativeSharedLocalizedResourceSourceDir)**/*"
                                                              Condition="Exists('$(_PowerShellSDKRuntimeNativeSharedLocalizedResourceSourceDir)')" />
@@ -460,6 +475,16 @@
           Condition="'@(_PowerShellSDKAppHostLocalizedResourceFile)' != ''" />
   </Target>
 
+  <Target Name="PowerShellSDKCopyAppHostXmlDocumentationToOutput"
+          DependsOnTargets="_PowerShellSDKResolveAppHost"
+          AfterTargets="PowerShellSDKCopyAppHostToOutput"
+          Condition="'$(_PowerShellSDKXmlDocumentationCopyToOutputEnabled)' == 'true' and '$(_PowerShellSDKRootAppHostEnabled)' == 'true'">
+    <Copy SourceFiles="@(_PowerShellSDKAppHostXmlDocumentationFile)"
+          DestinationFiles="@(_PowerShellSDKAppHostXmlDocumentationFile->'$(OutDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_PowerShellSDKAppHostXmlDocumentationFile)' != ''" />
+  </Target>
+
   <Target Name="PowerShellSDKCopyRuntimeNativeAppHostsToOutput"
           DependsOnTargets="_PowerShellSDKResolveRuntimeNativeAppHosts"
           AfterTargets="CopyFilesToOutputDirectory"
@@ -526,6 +551,20 @@
           Condition="'@(_PowerShellSDKRuntimeNativeSharedLocalizedResourceFile)' != ''" />
   </Target>
 
+  <Target Name="PowerShellSDKCopyRuntimeNativeXmlDocumentationToOutput"
+          DependsOnTargets="_PowerShellSDKResolveRuntimeNativeAppHosts"
+          AfterTargets="PowerShellSDKCopyRuntimeNativeAppHostsToOutput"
+          Condition="'$(_PowerShellSDKXmlDocumentationCopyToOutputEnabled)' == 'true' and '$(_PowerShellSDKRuntimeNativeAppHostEnabled)' == 'true'">
+    <Copy SourceFiles="@(_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile)"
+          DestinationFiles="@(_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile->'$(OutDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile)' != ''" />
+    <Copy SourceFiles="@(_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile)"
+          DestinationFiles="@(_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile->'$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)/lib/$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)/%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile)' != ''" />
+  </Target>
+
   <Target Name="PowerShellSDKCopyPSGalleryModulesToOutput"
           DependsOnTargets="_PowerShellSDKResolvePSGalleryModules"
           AfterTargets="CopyFilesToOutputDirectory"
@@ -589,6 +628,16 @@
           Condition="'@(_PowerShellSDKAppHostLocalizedResourceFile)' != ''" />
   </Target>
 
+  <Target Name="PowerShellSDKCopyAppHostXmlDocumentationToPublish"
+          DependsOnTargets="_PowerShellSDKResolveAppHost"
+          AfterTargets="Publish"
+          Condition="'$(_PowerShellSDKXmlDocumentationCopyToPublishEnabled)' == 'true' and '$(_PowerShellSDKRootAppHostEnabled)' == 'true'">
+    <Copy SourceFiles="@(_PowerShellSDKAppHostXmlDocumentationFile)"
+          DestinationFiles="@(_PowerShellSDKAppHostXmlDocumentationFile->'$(PublishDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_PowerShellSDKAppHostXmlDocumentationFile)' != ''" />
+  </Target>
+
   <Target Name="PowerShellSDKAddRuntimeNativeAppHostsToPublish"
           DependsOnTargets="_PowerShellSDKResolveRuntimeNativeAppHosts"
           BeforeTargets="ComputeFilesToPublish"
@@ -647,6 +696,28 @@
           DestinationFiles="@(_PowerShellSDKRuntimeNativeSharedLocalizedResourceFile->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true"
           Condition="'@(_PowerShellSDKRuntimeNativeSharedLocalizedResourceFile)' != ''" />
+  </Target>
+
+  <Target Name="PowerShellSDKAddRuntimeNativeXmlDocumentationToPublish"
+          DependsOnTargets="_PowerShellSDKResolveRuntimeNativeAppHosts"
+          BeforeTargets="ComputeFilesToPublish"
+          Condition="'$(_PowerShellSDKXmlDocumentationCopyToPublishEnabled)' == 'true' and '$(_PowerShellSDKRuntimeNativeCopyToPublishEnabled)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="@(_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile)"
+                             Condition="'@(_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile)' != ''">
+        <RelativePath>%(_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile.Filename)%(_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile.Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <PowerShellSDKRuntimeNativeSharedPayload>true</PowerShellSDKRuntimeNativeSharedPayload>
+        <PowerShellSDKXmlDocumentation>true</PowerShellSDKXmlDocumentation>
+      </ResolvedFileToPublish>
+      <ResolvedFileToPublish Include="@(_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile)"
+                             Condition="'@(_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile)' != ''">
+        <RelativePath>runtimes\$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)\lib\$(_PowerShellSDKRuntimeNativeSharedPayloadTargetFramework)\%(_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile.Filename)%(_PowerShellSDKRuntimeNativeSharedXmlDocumentationFile.Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <PowerShellSDKRuntimeNativeSharedPayload>true</PowerShellSDKRuntimeNativeSharedPayload>
+        <PowerShellSDKXmlDocumentation>true</PowerShellSDKXmlDocumentation>
+      </ResolvedFileToPublish>
+    </ItemGroup>
   </Target>
 
   <Target Name="PowerShellSDKAddPSGalleryModulesToPublish"
