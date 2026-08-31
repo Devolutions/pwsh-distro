@@ -75,6 +75,7 @@ To also copy a runnable PowerShell apphost beside your app, opt in from the proj
 <PropertyGroup>
   <PowerShellSDKAppHostLayout>Root</PowerShellSDKAppHostLayout>
   <PowerShellSDKLocalizedResources>Copy</PowerShellSDKLocalizedResources>
+  <PowerShellSDKXmlDocumentation>Copy</PowerShellSDKXmlDocumentation>
   <PowerShellSDKPSGalleryModules>Microsoft.PowerShell.Archive;Microsoft.PowerShell.ThreadJob</PowerShellSDKPSGalleryModules>
 </PropertyGroup>
 ```
@@ -207,11 +208,12 @@ This copies a minimal native launcher to `runtimes/<rid>/native/pwsh.exe` (or `p
 
 The source-built PowerShell runtime is patched so out-of-process jobs can use the selected runtime-native launcher when `$PSHOME/pwsh.exe` is not present. This lets `Start-Job` work in bundled-host scenarios that copy `pwsh.exe` under `runtimes/<rid>/native` instead of the app root.
 
-Use `PowerShellSDKCopyPhases` to decide where opted-in payloads are copied. The default is `Output;Publish`; set it to `Output` or `Publish` to disable the other phase. The package also has optional config, localized resource, and PSGallery module payloads:
+Use `PowerShellSDKCopyPhases` to decide where opted-in payloads are copied. The default is `Output;Publish`; set it to `Output` or `Publish` to disable the other phase. The package also has optional config, localized resource, XML documentation, and PSGallery module payloads:
 
 ```xml
 <PropertyGroup>
   <PowerShellSDKLocalizedResources>Copy</PowerShellSDKLocalizedResources>
+  <PowerShellSDKXmlDocumentation>Copy</PowerShellSDKXmlDocumentation>
   <PowerShellSDKPSGalleryModules>Microsoft.PowerShell.Archive;Microsoft.PowerShell.ThreadJob</PowerShellSDKPSGalleryModules>
 </PropertyGroup>
 ```
@@ -230,13 +232,14 @@ Use `PowerShellSDKCopyPhases` to decide where opted-in payloads are copied. The 
 | `PowerShellSDKConfigExecutionPolicy` | `Bypass` | PowerShell execution policy | Sets `Microsoft.PowerShell:ExecutionPolicy` in generated config. |
 | `PowerShellSDKConfigOverwriteExisting` | `false` | `true`, `false` | Replaces existing `powershell.config.json` only when `true`. |
 | `PowerShellSDKLocalizedResources` | `None` | `None`, `Copy` | Copies staged localized resource assemblies beside the apphost payload when the source package includes them. |
+| `PowerShellSDKXmlDocumentation` | `None` | `None`, `Copy` | Copies assembly XML documentation files such as `System.Management.Automation.xml` beside the apphost payload. These files stay in the package for IntelliSense even when copy is disabled. |
 | `PowerShellSDKPSGalleryModules` | `None` | `None`, `All`, or module list | Copies all staged PSGallery modules or a semicolon-delimited subset to `Modules`. |
 
 When passing semicolon-delimited values on the `dotnet` or `msbuild` command line, encode semicolons as `%3B`, such as `/p:PowerShellSDKCopyPhases=Output%3BPublish`.
 
-The apphost output is intended for running scripts with the core built-in modules from `$PSHOME/Modules`; it is not a full PowerShell distribution archive unless consumers deliberately enable optional payloads such as localized resources and PSGallery modules. PSGallery modules increase package and output size, include additional package-management or interactive functionality, and several are script modules subject to the bundled PowerShell execution policy.
+The apphost output is intended for running scripts with the core built-in modules from `$PSHOME/Modules`; it is not a full PowerShell distribution archive unless consumers deliberately enable optional payloads such as localized resources, XML documentation, and PSGallery modules. PSGallery modules increase package and output size, include additional package-management or interactive functionality, and several are script modules subject to the bundled PowerShell execution policy.
 
-The secondary PowerShell CLI workflow uses this same package-consumer path instead of rebuilding PowerShell from source. It creates a temporary .NET project, restores the pinned SDK package from the pinned package source or a workflow-built SDK artifact, enables root apphost and PSGallery module import, opts into localized resources when present, publishes self-contained for the matrix RID, removes the temporary host application files, validates the PowerShell layout, and archives the result as `.tar.gz` for every platform, including Windows. Windows archives additionally stage the matching `Microsoft.WindowsDesktop.App.Runtime.<rid>` payload so WPF/WinForms assemblies such as `PresentationFramework.dll`, `System.Windows.Forms.dll`, and `WindowsBase.dll` load from `$PSHOME`. For end-to-end dry runs outside `.github/workflows/release.yml`, pass `sdk_artifact_run_id` to `.github/workflows/powershell-cli.yml` so it downloads the `PowerShell-SDK-Release-X.Y.Z.R` artifact from a prior `.github/workflows/powershell-sdk.yml` run and repackages that workflow-built `.nupkg` instead of restoring from NuGet.org. If the artifact name does not include the SDK version, also pass `sdk_package_version`.
+The secondary PowerShell CLI workflow uses this same package-consumer path instead of rebuilding PowerShell from source. It creates a temporary .NET project, restores the pinned SDK package from the pinned package source or a workflow-built SDK artifact, enables root apphost, XML documentation, and PSGallery module import, opts into localized resources when present, publishes self-contained for the matrix RID, removes the temporary host application files, validates the PowerShell layout, and archives the result as `.tar.gz` for every platform, including Windows. Windows archives additionally stage the matching `Microsoft.WindowsDesktop.App.Runtime.<rid>` payload so WPF/WinForms assemblies such as `PresentationFramework.dll`, `System.Windows.Forms.dll`, and `WindowsBase.dll` load from `$PSHOME`. For end-to-end dry runs outside `.github/workflows/release.yml`, pass `sdk_artifact_run_id` to `.github/workflows/powershell-cli.yml` so it downloads the `PowerShell-SDK-Release-X.Y.Z.R` artifact from a prior `.github/workflows/powershell-sdk.yml` run and repackages that workflow-built `.nupkg` instead of restoring from NuGet.org. If the artifact name does not include the SDK version, also pass `sdk_package_version`.
 
 During NuGet packing, upstream `Microsoft.PowerShell.SDK` content file/reference metadata can emit NU5100/NU5131 package analysis warnings. The SDK workflow treats package validation as the source of truth: the generated sample must restore only the vendored PowerShell package ID, build, publish framework-dependent and self-contained outputs, execute `pwsh`, and load copied built-in modules.
 Generated source checkouts and build artifacts are not part of this repository.

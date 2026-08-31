@@ -692,6 +692,115 @@ function Assert-LocalizedResourceFilesUnchanged {
   }
 }
 
+function Get-XmlDocumentationFileNames {
+  param(
+    [Parameter(Mandatory)]
+    [string] $RestoredSdkPath,
+
+    [Parameter(Mandatory)]
+    [string] $RuntimeAssetGroup,
+
+    [Parameter(Mandatory)]
+    [string] $TargetFramework
+  )
+
+  $RuntimeXmlRoot = Join-Path $RestoredSdkPath "runtimes/$RuntimeAssetGroup/lib/$TargetFramework"
+  $PreferredNames = @(
+    'System.Management.Automation.xml',
+    'Microsoft.PowerShell.Commands.Management.xml'
+  )
+  $Found = @()
+  foreach ($Name in $PreferredNames) {
+    if (Test-Path (Join-Path $RuntimeXmlRoot $Name) -PathType Leaf) {
+      $Found += $Name
+    }
+  }
+  if ($Found.Count -eq 0) {
+    throw "SDK package is missing expected XML documentation files under $RuntimeXmlRoot"
+  }
+
+  return $Found
+}
+
+function Get-XmlDocumentationOutputRelativePaths {
+  param(
+    [Parameter(Mandatory)]
+    [string[]] $FileNames,
+
+    [string] $RuntimeAssetGroup,
+
+    [string] $TargetFramework,
+
+    [bool] $IncludeRuntimeLib = $false
+  )
+
+  $RelativePaths = @($FileNames)
+  if ($IncludeRuntimeLib) {
+    foreach ($Name in $FileNames) {
+      $RelativePaths += "runtimes/$RuntimeAssetGroup/lib/$TargetFramework/$Name"
+    }
+  }
+
+  return $RelativePaths
+}
+
+function Assert-XmlDocumentationFiles {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Directory,
+
+    [Parameter(Mandatory)]
+    [string[]] $RelativePaths,
+
+    [Parameter(Mandatory)]
+    [bool] $Present,
+
+    [Parameter(Mandatory)]
+    [string] $Description
+  )
+
+  foreach ($RelativePath in $RelativePaths) {
+    $Path = Join-Path $Directory ($RelativePath -replace '/', [IO.Path]::DirectorySeparatorChar)
+    if ($Present) {
+      if (-not (Test-Path $Path -PathType Leaf)) {
+        throw "$Description is missing expected XML documentation file: $Path"
+      }
+    }
+    elseif (Test-Path $Path -PathType Leaf) {
+      throw "$Description unexpectedly contains XML documentation file: $Path"
+    }
+  }
+}
+
+function Assert-XmlDocumentationContentMatches {
+  param(
+    [Parameter(Mandatory)]
+    [string] $RestoredSdkPath,
+
+    [Parameter(Mandatory)]
+    [string] $Directory,
+
+    [Parameter(Mandatory)]
+    [string] $RuntimeAssetGroup,
+
+    [Parameter(Mandatory)]
+    [string] $TargetFramework,
+
+    [Parameter(Mandatory)]
+    [string[]] $RelativePaths,
+
+    [Parameter(Mandatory)]
+    [string] $Description
+  )
+
+  foreach ($RelativePath in $RelativePaths) {
+    $FileName = Split-Path $RelativePath -Leaf
+    $ExpectedPath = Join-Path $RestoredSdkPath "runtimes/$RuntimeAssetGroup/lib/$TargetFramework/$FileName"
+    $ActualPath = Join-Path $Directory ($RelativePath -replace '/', [IO.Path]::DirectorySeparatorChar)
+    Assert-FileContentMatches -ExpectedPath $ExpectedPath -ActualPath $ActualPath -Description "$Description ($RelativePath)"
+  }
+}
+
 function Invoke-RuntimeNativeOverwriteProbe {
   param(
     [Parameter(Mandatory)]
@@ -971,11 +1080,14 @@ function Invoke-AppHostLayoutMatrixProbe {
   )
 
   $Layouts = @(
-    [pscustomobject]@{ Name = 'None'; AppHostLayout = ''; ExpectRootAppHost = $false; ExpectRuntimeNativeAppHost = $false; CopyPSGalleryModules = $false; CopyLocalizedResources = $false },
-    [pscustomobject]@{ Name = 'Root'; AppHostLayout = 'Root'; ExpectRootAppHost = $true; ExpectRuntimeNativeAppHost = $false; CopyPSGalleryModules = $false; CopyLocalizedResources = $true },
-    [pscustomobject]@{ Name = 'RuntimeNative'; AppHostLayout = 'RuntimeNative'; ExpectRootAppHost = $false; ExpectRuntimeNativeAppHost = $true; CopyPSGalleryModules = $true; CopyLocalizedResources = $false },
-    [pscustomobject]@{ Name = 'Both'; AppHostLayout = 'Both'; ExpectRootAppHost = $true; ExpectRuntimeNativeAppHost = $true; CopyPSGalleryModules = $true; CopyLocalizedResources = $false }
+    [pscustomobject]@{ Name = 'None'; AppHostLayout = ''; ExpectRootAppHost = $false; ExpectRuntimeNativeAppHost = $false; CopyPSGalleryModules = $false; CopyLocalizedResources = $false; CopyXmlDocumentation = $false },
+    [pscustomobject]@{ Name = 'Root'; AppHostLayout = 'Root'; ExpectRootAppHost = $true; ExpectRuntimeNativeAppHost = $false; CopyPSGalleryModules = $false; CopyLocalizedResources = $true; CopyXmlDocumentation = $true },
+    [pscustomobject]@{ Name = 'RuntimeNative'; AppHostLayout = 'RuntimeNative'; ExpectRootAppHost = $false; ExpectRuntimeNativeAppHost = $true; CopyPSGalleryModules = $true; CopyLocalizedResources = $false; CopyXmlDocumentation = $false },
+    [pscustomobject]@{ Name = 'Both'; AppHostLayout = 'Both'; ExpectRootAppHost = $true; ExpectRuntimeNativeAppHost = $true; CopyPSGalleryModules = $true; CopyLocalizedResources = $false; CopyXmlDocumentation = $false }
   )
+
+  $XmlDocumentationFileNames = Get-XmlDocumentationFileNames -RestoredSdkPath $RestoredSdkPath -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework
+  $XmlDocumentationRootRelativePaths = Get-XmlDocumentationOutputRelativePaths -FileNames $XmlDocumentationFileNames
 
   foreach ($Layout in $Layouts) {
     $ProbeDirectory = Join-Path $ValidationRoot "sample-layout-$($Layout.Name.ToLowerInvariant())"
@@ -1090,6 +1202,7 @@ if (ps.HadErrors)
 
       Assert-SharedPowerShellRuntimeLibPreserved -RestoredSdkPath $RestoredSdkPath -Directory $ProbeOutputDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description $Description
       Assert-AppDepsRuntimeTargetsPreserved -Directory $ProbeOutputDirectory -AssemblyName $AssemblyName -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description $Description
+      Assert-XmlDocumentationFiles -Directory $ProbeOutputDirectory -RelativePaths $XmlDocumentationRootRelativePaths -Present $false -Description "$Description before XML documentation opt-in"
 
       if ($Layout.AppHostLayout) {
         Assert-PowerShellConfig -Directory $ProbeOutputDirectory -ExpectedExecutionPolicy 'Bypass' -Description $Description
@@ -1109,6 +1222,18 @@ if (ps.HadErrors)
         )
         $LocalizedResourceOutputAfter = @(Get-LocalizedResourceFileSnapshot -Directory $ProbeOutputDirectory)
         Assert-LocalizedResourceFilesUnchanged -ExpectedSnapshot $LocalizedResourceOutputBefore -ActualSnapshot $LocalizedResourceOutputAfter -Description "$Description localized resources output opt-in"
+      }
+      if ($Layout.CopyXmlDocumentation) {
+        Invoke-DotNet @(
+          'msbuild',
+          $ProjectPath,
+          '-nologo',
+          '-verbosity:minimal',
+          '-t:PowerShellSDKCopyAppHostXmlDocumentationToOutput',
+          '/p:PowerShellSDKXmlDocumentation=Copy'
+        )
+        Assert-XmlDocumentationFiles -Directory $ProbeOutputDirectory -RelativePaths $XmlDocumentationRootRelativePaths -Present $true -Description "$Description with XML documentation opt-in"
+        Assert-XmlDocumentationContentMatches -RestoredSdkPath $RestoredSdkPath -Directory $ProbeOutputDirectory -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -RelativePaths $XmlDocumentationRootRelativePaths -Description "$Description XML documentation opt-in"
       }
       if ($Layout.ExpectRootAppHost) {
         Assert-AppHostOutput -Directory $ProbeOutputDirectory -ExecutableName $ExecutableName -Description $Description
@@ -1167,6 +1292,46 @@ if (ps.HadErrors)
         $LocalizedResourcePublishAfter = @(Get-LocalizedResourceFileSnapshot -Directory $LocalizedPublishDirectory)
         Assert-AppHostOutput -Directory $LocalizedPublishDirectory -ExecutableName $ExecutableName -Description "$($Layout.Name) layout localized resource publish output"
         Assert-LocalizedResourceFilesUnchanged -ExpectedSnapshot $LocalizedResourcePublishBefore -ActualSnapshot $LocalizedResourcePublishAfter -Description "$($Layout.Name) layout localized resource publish opt-in"
+      }
+
+      if ($Layout.CopyXmlDocumentation) {
+        $XmlPublishDirectory = Join-Path $ProbeDirectory (Join-Path 'bin' (Join-Path 'Release' (Join-Path $SampleTargetFramework (Join-Path $CurrentRuntimeIdentifier 'publish-xml-documentation'))))
+        Remove-Item -LiteralPath $XmlPublishDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        Invoke-DotNet @(
+          'publish',
+          $ProjectPath,
+          '--nologo',
+          '--verbosity',
+          'minimal',
+          '-c',
+          'Release',
+          '-r',
+          $CurrentRuntimeIdentifier,
+          '--self-contained',
+          'false',
+          '-o',
+          $XmlPublishDirectory
+        )
+        Assert-XmlDocumentationFiles -Directory $XmlPublishDirectory -RelativePaths $XmlDocumentationRootRelativePaths -Present $false -Description "$($Layout.Name) layout publish output before XML documentation opt-in"
+        Invoke-DotNet @(
+          'publish',
+          $ProjectPath,
+          '--nologo',
+          '--verbosity',
+          'minimal',
+          '-c',
+          'Release',
+          '-r',
+          $CurrentRuntimeIdentifier,
+          '--self-contained',
+          'false',
+          '-o',
+          $XmlPublishDirectory,
+          '/p:PowerShellSDKXmlDocumentation=Copy'
+        )
+        Assert-AppHostOutput -Directory $XmlPublishDirectory -ExecutableName $ExecutableName -Description "$($Layout.Name) layout XML documentation publish output"
+        Assert-XmlDocumentationFiles -Directory $XmlPublishDirectory -RelativePaths $XmlDocumentationRootRelativePaths -Present $true -Description "$($Layout.Name) layout XML documentation publish output"
+        Assert-XmlDocumentationContentMatches -RestoredSdkPath $RestoredSdkPath -Directory $XmlPublishDirectory -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -RelativePaths $XmlDocumentationRootRelativePaths -Description "$($Layout.Name) layout XML documentation publish output"
       }
 
       $ProbeOutput = & dotnet run --project $ProjectPath --no-build
@@ -1770,11 +1935,14 @@ foreach (PSObject result in ps.Invoke())
   } else {
     Write-Host "SDK package does not include localized resources for '$RuntimeAssetGroup/$TargetFramework'; validating PowerShellSDKLocalizedResources=Copy as a no-op."
   }
+  $XmlDocumentationFileNames = Get-XmlDocumentationFileNames -RestoredSdkPath $RestoredSdkPath -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework
+  $XmlDocumentationOutputRelativePaths = Get-XmlDocumentationOutputRelativePaths -FileNames $XmlDocumentationFileNames -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -IncludeRuntimeLib $true
 
   Invoke-DotNet @('build', $ProjectPath, '--no-restore', '--nologo', '--verbosity', 'minimal')
 
   $OutputDirectory = Join-Path $SampleDirectory (Join-Path 'bin' (Join-Path 'Debug' (Join-Path $SampleTargetFramework $RuntimeIdentifier)))
   Assert-SharedPowerShellOutput -Directory $OutputDirectory -SelfContained $FrameworkDependentAppHostSelfContained -Description 'Sample app output'
+  Assert-XmlDocumentationFiles -Directory $OutputDirectory -RelativePaths $XmlDocumentationOutputRelativePaths -Present $false -Description 'Sample app output before XML documentation opt-in'
   Assert-PowerShellConfig -Directory $OutputDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample app output'
   Assert-NoRootRuntimeNativeAppHostOutput -Directory $OutputDirectory -ExecutableName $ExecutableName -Description 'Sample app output'
   Assert-SharedPowerShellRuntimeLibPreserved -RestoredSdkPath $RestoredSdkPath -Directory $OutputDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample app output'
@@ -1840,6 +2008,17 @@ foreach (PSObject result in ps.Invoke())
     Assert-FileContentMatches -ExpectedPath $RepresentativeLocalizedResourcePackagePath -ActualPath $OutputLocalizedResourcePath -Description 'Sample app output localized resource opt-in'
   }
 
+  Invoke-DotNet @(
+    'msbuild',
+    $ProjectPath,
+    '-nologo',
+    '-verbosity:minimal',
+    '-t:PowerShellSDKCopyRuntimeNativeXmlDocumentationToOutput',
+    '/p:PowerShellSDKXmlDocumentation=Copy'
+  )
+  Assert-XmlDocumentationFiles -Directory $OutputDirectory -RelativePaths $XmlDocumentationOutputRelativePaths -Present $true -Description 'Sample app output with XML documentation opt-in'
+  Assert-XmlDocumentationContentMatches -RestoredSdkPath $RestoredSdkPath -Directory $OutputDirectory -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -RelativePaths $XmlDocumentationOutputRelativePaths -Description 'Sample app output XML documentation opt-in'
+
   if (-not $SkipRuntimeExecution) {
     $AppOutput = & dotnet run --project $ProjectPath --no-build
     if ($LASTEXITCODE -ne 0) {
@@ -1857,6 +2036,7 @@ foreach (PSObject result in ps.Invoke())
 
   $PublishDirectory = Join-Path $SampleDirectory (Join-Path 'bin' (Join-Path 'Release' (Join-Path $SampleTargetFramework (Join-Path $RuntimeIdentifier 'publish'))))
   Assert-SharedPowerShellOutput -Directory $PublishDirectory -SelfContained $true -Description 'Sample self-contained publish output'
+  Assert-XmlDocumentationFiles -Directory $PublishDirectory -RelativePaths $XmlDocumentationOutputRelativePaths -Present $false -Description 'Sample self-contained publish output before XML documentation opt-in'
   Assert-PowerShellConfig -Directory $PublishDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample self-contained publish output'
   Assert-NoRootRuntimeNativeAppHostOutput -Directory $PublishDirectory -ExecutableName $ExecutableName -Description 'Sample self-contained publish output'
   Assert-SharedPowerShellRuntimeLibPreserved -RestoredSdkPath $RestoredSdkPath -Directory $PublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample self-contained publish output'
@@ -1876,6 +2056,7 @@ foreach (PSObject result in ps.Invoke())
   Remove-Item $FrameworkDependentPublishDirectory -Recurse -Force -ErrorAction SilentlyContinue
   Invoke-DotNet @('publish', $ProjectPath, '--nologo', '--verbosity', 'minimal', '-c', 'Release', '-r', $RuntimeIdentifier, '--self-contained', 'false', '-o', $FrameworkDependentPublishDirectory)
   Assert-SharedPowerShellOutput -Directory $FrameworkDependentPublishDirectory -SelfContained $FrameworkDependentAppHostSelfContained -Description 'Sample framework-dependent publish output'
+  Assert-XmlDocumentationFiles -Directory $FrameworkDependentPublishDirectory -RelativePaths $XmlDocumentationOutputRelativePaths -Present $false -Description 'Sample framework-dependent publish output before XML documentation opt-in'
   Assert-PowerShellConfig -Directory $FrameworkDependentPublishDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample framework-dependent publish output'
   Assert-NoRootRuntimeNativeAppHostOutput -Directory $FrameworkDependentPublishDirectory -ExecutableName $ExecutableName -Description 'Sample framework-dependent publish output'
   Assert-SharedPowerShellRuntimeLibPreserved -RestoredSdkPath $RestoredSdkPath -Directory $FrameworkDependentPublishDirectory -SourceBuiltPackageAssetEntries $SourceBuiltPackageAssetEntries -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -Description 'Sample framework-dependent publish output'
@@ -1969,6 +2150,28 @@ foreach (PSObject result in ps.Invoke())
     Assert-LocalizedResourcePresent -Directory $LocalizedPublishDirectory -RelativePath $RepresentativeLocalizedResourcePath -Description 'Sample localized resource publish output'
     Assert-FileContentMatches -ExpectedPath $RepresentativeLocalizedResourcePackagePath -ActualPath (Join-Path $LocalizedPublishDirectory $RepresentativeLocalizedResourcePath) -Description 'Sample localized resource publish output'
   }
+
+  $XmlPublishDirectory = Join-Path $SampleDirectory (Join-Path 'bin' (Join-Path 'Release' (Join-Path $SampleTargetFramework (Join-Path $RuntimeIdentifier 'publish-xml-documentation'))))
+  Remove-Item $XmlPublishDirectory -Recurse -Force -ErrorAction SilentlyContinue
+  Invoke-DotNet @(
+    'publish',
+    $ProjectPath,
+    '--nologo',
+    '--verbosity',
+    'minimal',
+    '-c',
+    'Release',
+    '-r',
+    $RuntimeIdentifier,
+    '--self-contained',
+    'false',
+    '-o',
+    $XmlPublishDirectory,
+    '/p:PowerShellSDKXmlDocumentation=Copy'
+  )
+  Assert-SharedPowerShellOutput -Directory $XmlPublishDirectory -SelfContained $FrameworkDependentAppHostSelfContained -Description 'Sample XML documentation publish output'
+  Assert-XmlDocumentationFiles -Directory $XmlPublishDirectory -RelativePaths $XmlDocumentationOutputRelativePaths -Present $true -Description 'Sample XML documentation publish output'
+  Assert-XmlDocumentationContentMatches -RestoredSdkPath $RestoredSdkPath -Directory $XmlPublishDirectory -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -RelativePaths $XmlDocumentationOutputRelativePaths -Description 'Sample XML documentation publish output'
 
   Write-Host "Validated $PackageId $PackageVersion from $($Package.FullName)"
   if ($SkipRuntimeExecution) {
