@@ -28,10 +28,10 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 
 | Component | Version |
 | --- | --- |
-| PowerShell upstream release | `7.6.5` / `v7.6.5` |
-| PowerShell downstream source ref | `downstream/v7.6.5` based on `upstream/v7.6.5` |
+| PowerShell upstream release | `7.6.6` / `v7.6.6` |
+| PowerShell downstream source ref | `downstream/v7.6.6` based on `upstream/v7.6.6` |
 | PowerShell target framework | `net10.0` |
-| PowerShell SDK package | `Devolutions.PowerShell.SDK` / `7.6.5.0` workflow default; `7.6.3.2` latest published package |
+| PowerShell SDK package | `Devolutions.PowerShell.SDK` / `7.6.6.0` workflow default; `7.6.3.2` latest published package |
 | Latest downstream release tag | `v7.6.3.2` |
 | Latest PowerShell CLI release assets | `PowerShell-7.6.3-<os>-<arch>.tar.gz` for Windows, macOS, and Linux on x64 and arm64 |
 | PowerShell SDK package source | `https://api.nuget.org/v3/index.json` |
