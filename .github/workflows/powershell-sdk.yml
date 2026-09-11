@@ -106,11 +106,11 @@ permissions:
   contents: read
 
 env:
-  POWERSHELL_VERSION: "7.6.5"
-  POWERSHELL_RELEASE_TAG: "v7.6.5"
-  POWERSHELL_UPSTREAM_TAG: "upstream/v7.6.5"
+  POWERSHELL_VERSION: "7.6.6"
+  POWERSHELL_RELEASE_TAG: "v7.6.6"
+  POWERSHELL_UPSTREAM_TAG: "upstream/v7.6.6"
   POWERSHELL_SOURCE_REPOSITORY: ${{ github.repository }}
-  POWERSHELL_SOURCE_REF: "downstream/v7.6.5"
+  POWERSHELL_SOURCE_REF: "downstream/v7.6.6"
   POWERSHELL_VENDOR_NAME: "Devolutions"
   SDK_VENDOR_NAME: "Devolutions"
   SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
