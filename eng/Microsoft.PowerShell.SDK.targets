@@ -512,13 +512,14 @@
           DestinationFiles="@(_PowerShellSDKRuntimeNativeAppHostFile->'$(OutDir)%(RelativeDirectory)/%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
     <ItemGroup>
-      <!-- No shared-payload copy to the output root here. This layout's apphost lives in runtimes/<rid>/native, and
-           the OS loader already finds its neighbours there, so a root copy adds a second copy of every native in the
-           output pinned to the shared payload's single RID - wrong for every other architecture the package ships,
-           and preferred anyway because the root is in NATIVE_DLL_SEARCH_DIRECTORIES. The Root layout, which does put
-           an apphost at the root, is served by PowerShellSDKCopyAppHostToOutput using the root apphost's own RID;
-           doing it again from here would overwrite those with a different architecture whenever the two RIDs differ,
-           which they independently can. -->
+      <!-- Windows is excluded because there the copy is both unnecessary and harmful. This layout's apphost lives in
+           runtimes/<rid>/native, and the Windows loader searches an executable's own directory, so it already finds
+           its neighbours; the copy only adds a second set at the root pinned to the shared payload's single RID,
+           which is wrong for every other architecture the package ships and wins anyway because the root is in
+           NATIVE_DLL_SEARCH_DIRECTORIES. Neither dlopen nor dyld searches the executable's directory, so on unix the
+           root copy is how the hosted payload finds its natives at all and has to stay. -->
+      <_PowerShellSDKRuntimeNativeSharedNativeDependencyFile Include="$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadNativeDependencyRid)/native/*.dll;$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadNativeDependencyRid)/native/*.so;$(OutDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadNativeDependencyRid)/native/*.dylib"
+                                                             Condition="'$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)' != 'win'" />
       <_PowerShellSDKRuntimeNativeAppHostNativeDependencyFile Include="$(OutDir)runtimes/%(_PowerShellSDKRuntimeNativeSelectedRid.NativeDependencyRid)/native/*.dll;$(OutDir)runtimes/%(_PowerShellSDKRuntimeNativeSelectedRid.NativeDependencyRid)/native/*.so;$(OutDir)runtimes/%(_PowerShellSDKRuntimeNativeSelectedRid.NativeDependencyRid)/native/*.dylib">
         <RuntimeIdentifier>%(_PowerShellSDKRuntimeNativeSelectedRid.Identity)</RuntimeIdentifier>
         <RelativeDirectory>%(_PowerShellSDKRuntimeNativeSelectedRid.RelativeDirectory)</RelativeDirectory>
@@ -527,6 +528,10 @@
       <_PowerShellSDKRuntimeNativeSharedDependencyFile Include="@(_PowerShellSDKRuntimeNativeSharedDependencySourceFile)"
                                                        Condition="!Exists('$(OutDir)%(_PowerShellSDKRuntimeNativeSharedDependencySourceFile.Filename)%(_PowerShellSDKRuntimeNativeSharedDependencySourceFile.Extension)')" />
     </ItemGroup>
+    <Copy SourceFiles="@(_PowerShellSDKRuntimeNativeSharedNativeDependencyFile)"
+          DestinationFiles="@(_PowerShellSDKRuntimeNativeSharedNativeDependencyFile->'$(OutDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_PowerShellSDKRuntimeNativeSharedNativeDependencyFile)' != ''" />
     <Copy SourceFiles="@(_PowerShellSDKRuntimeNativeAppHostNativeDependencyFile)"
           DestinationFiles="@(_PowerShellSDKRuntimeNativeAppHostNativeDependencyFile->'$(OutDir)%(RelativeDirectory)/%(Filename)%(Extension)')"
           SkipUnchangedFiles="true"
@@ -786,11 +791,18 @@
           AfterTargets="Publish"
           Condition="'$(_PowerShellSDKRuntimeNativeCopyToPublishEnabled)' == 'true'">
     <ItemGroup>
+      <!-- Windows excluded; see the matching comment in PowerShellSDKCopyRuntimeNativeAppHostsToOutput. -->
+      <_PowerShellSDKPublishedRuntimeNativeSharedNativeDependencyFile Include="$(PublishDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadNativeDependencyRid)/native/*.dll;$(PublishDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadNativeDependencyRid)/native/*.so;$(PublishDir)runtimes/$(_PowerShellSDKRuntimeNativeSharedPayloadNativeDependencyRid)/native/*.dylib"
+                                                                      Condition="'$(_PowerShellSDKRuntimeNativeSharedPayloadGroup)' != 'win'" />
       <_PowerShellSDKPublishedRuntimeNativeAppHostNativeDependencyFile Include="$(PublishDir)runtimes/%(_PowerShellSDKRuntimeNativeSelectedRid.NativeDependencyRid)/native/*.dll;$(PublishDir)runtimes/%(_PowerShellSDKRuntimeNativeSelectedRid.NativeDependencyRid)/native/*.so;$(PublishDir)runtimes/%(_PowerShellSDKRuntimeNativeSelectedRid.NativeDependencyRid)/native/*.dylib">
         <RuntimeIdentifier>%(_PowerShellSDKRuntimeNativeSelectedRid.Identity)</RuntimeIdentifier>
         <RelativeDirectory>%(_PowerShellSDKRuntimeNativeSelectedRid.RelativeDirectory)</RelativeDirectory>
       </_PowerShellSDKPublishedRuntimeNativeAppHostNativeDependencyFile>
     </ItemGroup>
+    <Copy SourceFiles="@(_PowerShellSDKPublishedRuntimeNativeSharedNativeDependencyFile)"
+          DestinationFiles="@(_PowerShellSDKPublishedRuntimeNativeSharedNativeDependencyFile->'$(PublishDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_PowerShellSDKPublishedRuntimeNativeSharedNativeDependencyFile)' != ''" />
     <Copy SourceFiles="@(_PowerShellSDKPublishedRuntimeNativeAppHostNativeDependencyFile)"
           DestinationFiles="@(_PowerShellSDKPublishedRuntimeNativeAppHostNativeDependencyFile->'$(PublishDir)%(RelativeDirectory)/%(Filename)%(Extension)')"
           SkipUnchangedFiles="true"
