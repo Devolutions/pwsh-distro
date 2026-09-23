@@ -37,7 +37,7 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 | PowerShell SDK package source | `https://api.nuget.org/v3/index.json` |
 | multi-pwsh apphost package | `Devolutions.MultiPwsh.Cli` / `0.14.2` |
 | multi-pwsh apphost package source | `https://api.nuget.org/v3/index.json` |
-| psign code signing tool | `Devolutions.Psign.Tool` / `latest (un-pinned)` |
+| psign code signing tool | `Devolutions.Psign.Tool` / `0.7.0` |
 | .NET runtime workflow | `v10.0.5` |
 | llvm-prebuilt | `v2026.1.1` |
 | clang+llvm | `22.1.4` |
@@ -109,20 +109,61 @@ On Linux or macOS, use the matching `PowerShell-7.6.3-linux-<arch>.tar.gz` or `P
 
 The CLI archives are produced from the release-ready `Devolutions.PowerShell.SDK` package, so they include the same source-built PowerShell payloads. Windows archives also include the matching Windows Desktop runtime payload needed for WPF/WinForms assemblies under `$PSHOME`.
 
+### Windows MSI installers
+
+The release workflow builds x64 and ARM64 MSI installers from its release-ready Windows CLI archives, signs the MSIs with `Devolutions.Psign.Tool` 0.7.0 and Azure Key Vault when SDK code signing is enabled, and includes both installers in release assets and checksums. Non-dry-run releases require signing secrets; dry runs are unsigned unless `sign-dry-run` is enabled with signing secrets. Installing MSIs requires administrator privileges.
+
+You can also run `.github/workflows/powershell-msi.yml` separately with a **published** release tag such as `v7.6.3.2`, or leave `release_tag` blank and provide a CLI workflow `cli_run_id` plus `package_version` (for example `7.6.6.0`). Standalone MSI signing defaults to enabled and requires code signing secrets in the selected GitHub environment; disable `sign_msi` only for unsigned test artifacts. Signing an MSI does not sign previously unsigned binaries inside a CLI artifact.
+
+Packaging sources live in the top-level `package/` directory so other distribution formats can be added beside `package/msi/`. The installer source and image assets were copied from PowerShell's MIT-licensed 7.6.6 installer and migrated to WiX 4; the upstream copyright and permission notice appears below. `package/msi/New-PowerShellDistroMsi.ps1` harvests the existing CLI layout, not the upstream PowerShell build output. It restores pinned WiX 4 packages from NuGet.org and can be run locally on Windows with a previously unpacked Windows CLI archive:
+
+```powershell
+.\package\msi\New-PowerShellDistroMsi.ps1 -PayloadDirectory .\pwsh-cli -PackageVersion 7.6.6.0 -Architecture x64 -OutputDirectory .\output\msi
+```
+
+The installer uses Devolutions product names, upgrade codes, registry keys, Start menu entries, and architecture-specific `Program Files\Devolutions\PowerShell\7-<arch>` directories rather than Microsoft's MSI identity or install directory. Optional PATH integration and event-manifest registration are off by default; Microsoft Update enrollment, shared App Paths registration, and machine-wide telemetry changes from the upstream installer are intentionally omitted. Other optional context-menu and remoting features remain. MSI versions encode `X.Y.Z.R` as `X.Y.(Z * 100 + R)` so revision bumps are upgrades (`R` must be 0–99). The `package/msi/` sources do not need an upstream MSI target and remain on the distro branch when PowerShell 7.7 removes upstream packaging.
+
+The copied PowerShell installer source and artwork carry this MIT license notice:
+
+```text
+Copyright (c) Microsoft Corporation.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED *AS IS*, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Workflows
 
 | Workflow | Purpose | Output |
 | --- | --- | --- |
 | `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors the source-built PowerShell SDK assemblies into one `Devolutions.PowerShell.SDK` package, signs the source-built payloads, and validates it in a sample .NET app with opt-in apphost import. It can run manually or as a reusable workflow. | `PowerShell-SDK-Release-X.Y.Z.R` artifact containing one `.nupkg`; the latest release publishes `Devolutions.PowerShell.SDK.7.6.3.2.nupkg`. |
 | `.github/workflows/powershell-cli.yml` | Restores a pinned or workflow-built `Devolutions.PowerShell.SDK` package, imports its apphost and module payload through MSBuild, publishes a self-contained PowerShell layout, and repackages it for Windows, macOS, and Linux on x64 and arm64. It can run manually or as a reusable workflow. | `PowerShell-7.6.3-<os>-<arch>` `.tar.gz` artifacts; the latest release includes Windows, macOS, and Linux archives for x64 and arm64. |
-| `.github/workflows/release.yml` | Orchestrates the reusable SDK workflow first, repackages that signed SDK artifact through the reusable CLI workflow, publishes the SDK package, and creates the GitHub release. | NuGet.org publish plus GitHub release `vX.Y.Z.R`; the latest published release is `v7.6.3.2` and contains the SDK `.nupkg`, all CLI `.tar.gz` archives, the downstream PowerShell patch file, and checksums. |
+| `.github/workflows/powershell-msi.yml` | Packages published Windows CLI archives, CLI workflow artifacts, or the current release's prepared CLI archives, then signs and verifies the MSI when enabled. | `Devolutions-PowerShell-<tag-or-version>-win-<arch>-msi` artifacts containing an x64 or ARM64 `.msi`. |
+| `.github/workflows/release.yml` | Orchestrates the SDK, CLI, and MSI workflows, signs release-ready CLI and MSI artifacts, publishes the SDK package, and creates the GitHub release. | NuGet.org publish plus GitHub release `vX.Y.Z.R`; future releases include the SDK `.nupkg`, six CLI `.tar.gz` archives, two signed Windows `.msi` installers, the downstream PowerShell patch, and checksums. The latest published release `v7.6.3.2` predates MSI publishing. |
 | `.github/workflows/dotnet-runtime.yml` | Builds the .NET runtime tag used by this PowerShell release for Windows, macOS, and Linux on x86_64 and arm64 with prebuilt clang+llvm from `awakecoding/llvm-prebuilt`. It can run manually or as a reusable workflow and uploads a `DotNet-Runtime-<rid>` artifact per matrix entry containing the source-built `Microsoft.NETCore.App.Runtime.<rid>` runtime pack. | `DotNet-Runtime-<rid>` artifacts containing the source-built runtime packs. |
 
 All workflows are manual and can be started from the GitHub Actions **Run workflow** button.
 
 ## Publishing PowerShell releases
 
-The release workflow publishes only after the SDK package has been built, had its source-built payloads signed for release, been validated on every RID in the validation matrix, and been repackaged into every CLI archive. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`; the latest published release is `v7.6.3.2`, which carries downstream SDK package revision `2` for upstream PowerShell `7.6.3`.
+The release workflow publishes only after the SDK package has been built, had its source-built payloads signed for release, been validated on every RID in the validation matrix, and been repackaged into every CLI archive and both Windows MSI installers. ReadyToRun CLI archives are signed before MSI packaging, so the MSIs contain the final CLI payload. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`; the latest published release is `v7.6.3.2`, which carries downstream SDK package revision `2` for upstream PowerShell `7.6.3`.
 
 Manual inputs:
 
@@ -139,7 +180,7 @@ Manual inputs:
 
 The standalone CLI workflow also has an opt-in `ready_to_run` input that runs a targeted crossgen2 pass over packaged PowerShell managed assemblies after the self-contained layout is assembled. It is disabled by default because ReadyToRun rewrites managed PE files and invalidates existing Authenticode signatures. For signed releases, use `.github/workflows/release.yml` with both signing and `ready_to_run` enabled so the CLI archives are signed after the R2R pass.
 
-Before validation and CLI packaging, the SDK workflow runs a signing stage that downloads the built `.nupkg`, installs the latest `Devolutions.Psign.Tool` .NET tool, extracts the package, signs the source-built payloads inside it with Azure Key Vault, and repacks the `.nupkg` without adding a NuGet package signature. The signing pass covers the built PowerShell assemblies in `ref/` and `runtimes/*/lib/`, the apphost payloads in `tools/apphost/*` and `runtimes/*/native`, the Windows desktop payload, and the built-in module manifests/format/script files in `contentFiles/any/any/runtimes/**/Modules/**`. CLI archives are built from this release-ready SDK package, so their Windows executable and module payloads come from the signed `.nupkg`. A non-dry-run publish requires these environment secrets and variables:
+Before validation and CLI packaging, the SDK workflow runs a signing stage that downloads the built `.nupkg`, installs the pinned `Devolutions.Psign.Tool` .NET tool, extracts the package, signs the source-built payloads inside it with Azure Key Vault, and repacks the `.nupkg` without adding a NuGet package signature. The signing pass covers the built PowerShell assemblies in `ref/` and `runtimes/*/lib/`, the apphost payloads in `tools/apphost/*` and `runtimes/*/native`, the Windows desktop payload, and the built-in module manifests/format/script files in `contentFiles/any/any/runtimes/**/Modules/**`. CLI archives are built from this release-ready SDK package, so their Windows executable and module payloads come from the signed `.nupkg`. A non-dry-run publish requires these environment secrets and variables:
 
 | Name | Type |
 | --- | --- |
@@ -150,7 +191,7 @@ Before validation and CLI packaging, the SDK workflow runs a signing stage that 
 | `CODE_SIGNING_CERTIFICATE_NAME` | Secret |
 | `CODE_SIGNING_TIMESTAMP_SERVER` | Variable |
 
-Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The release workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation only in the publishing job. A real publish pushes the validated `.nupkg` containing signed Windows payloads to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the SDK package asset, every CLI archive, the generated downstream PowerShell patch file, and a SHA256 checksum file covering all release assets.
+Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The release workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation only in the publishing job. A real publish pushes the validated `.nupkg` containing signed Windows payloads to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the SDK package asset, every CLI archive, both signed MSI installers, the generated downstream PowerShell patch file, and a SHA256 checksum file covering all release assets.
 
 ## Source-built .NET runtime option
 

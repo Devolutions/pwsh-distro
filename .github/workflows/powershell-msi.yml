@@ -1,0 +1,214 @@
+name: PowerShell MSI
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published release tag with signed Windows CLI archives (vX.Y.Z.R); leave blank to use a CLI run
+        required: false
+        default: ""
+        type: string
+      cli_run_id:
+        description: CLI workflow run ID to package before publishing a release (requires package_version)
+        required: false
+        default: ""
+        type: string
+      package_version:
+        description: X.Y.Z.R version when using cli_run_id (for example, 7.6.6.0)
+        required: false
+        default: ""
+        type: string
+      sign_msi:
+        description: Sign the MSI with Azure Key Vault (requires code signing secrets)
+        required: true
+        type: boolean
+        default: true
+      github-env:
+        description: GitHub environment containing code signing secrets
+        required: true
+        type: choice
+        options:
+          - publish-test
+          - publish-prod
+        default: publish-test
+  workflow_call:
+    inputs:
+      package_version:
+        required: true
+        type: string
+      cli_artifact_name:
+        description: Current-run artifact containing release-ready CLI archives
+        required: true
+        type: string
+      sign_msi:
+        required: true
+        type: boolean
+      github-env:
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
+  PSIGN_TOOL_PACKAGE_VERSION: "0.7.0"
+
+jobs:
+  build:
+    name: MSI [win-${{ matrix.arch }}]
+    runs-on: windows-2025
+    environment: ${{ inputs.github-env }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - name: Enable Windows long path support
+        run: git config --system core.longpaths true
+
+      - name: Clone project with PowerShell submodule
+        uses: actions/checkout@v7.0.0
+        with:
+          submodules: true
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5.3.0
+        with:
+          global-json-file: pwsh-src/global.json
+
+      - name: Download current-run release-ready CLI archives
+        if: ${{ inputs.cli_artifact_name != '' }}
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: ${{ inputs.cli_artifact_name }}
+          path: archives
+
+      - name: Download and package Windows CLI
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          CLI_RUN_ID: ${{ inputs.cli_run_id }}
+          CLI_ARTIFACT_NAME: ${{ inputs.cli_artifact_name }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
+          ARCHITECTURE: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($Env:CLI_ARTIFACT_NAME) {
+            if ($Env:RELEASE_TAG -or $Env:CLI_RUN_ID -or $Env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+              throw 'Current-run CLI artifact requires package_version and cannot be combined with release_tag or cli_run_id.'
+            }
+            $PackageVersion = $Env:PACKAGE_VERSION
+          } elseif ($Env:RELEASE_TAG) {
+            if ($Env:CLI_RUN_ID -or $Env:PACKAGE_VERSION) {
+              throw 'Specify release_tag OR cli_run_id and package_version, not both.'
+            }
+            if ($Env:RELEASE_TAG -notmatch '^v(?<version>\d+\.\d+\.\d+\.\d+)$') {
+              throw "Release tag must be vX.Y.Z.R: $Env:RELEASE_TAG"
+            }
+            $PackageVersion = $Matches.version
+          } else {
+            if ($Env:CLI_RUN_ID -notmatch '^\d+$' -or $Env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+              throw 'Specify a numeric cli_run_id and an X.Y.Z.R package_version when release_tag is blank.'
+            }
+            $PackageVersion = $Env:PACKAGE_VERSION
+          }
+
+          $PowerShellVersion = $PackageVersion -replace '\.\d+$', ''
+          $ArchiveName = "PowerShell-$PowerShellVersion-windows-$Env:ARCHITECTURE.tar.gz"
+          $ArchiveDirectory = Join-Path $PWD 'archives'
+          $PayloadDirectory = Join-Path $PWD 'payload'
+          New-Item -ItemType Directory -Path $ArchiveDirectory, $PayloadDirectory -Force | Out-Null
+
+          if ($Env:CLI_ARTIFACT_NAME) {
+            Write-Host "Using current-run CLI artifact $Env:CLI_ARTIFACT_NAME."
+          } elseif ($Env:RELEASE_TAG) {
+            & gh release download $Env:RELEASE_TAG --repo $Env:GITHUB_REPOSITORY --pattern $ArchiveName --dir $ArchiveDirectory
+            if ($LASTEXITCODE -ne 0) {
+              throw "Unable to download $ArchiveName from $Env:RELEASE_TAG."
+            }
+          } else {
+            $ArtifactName = "PowerShell-$PowerShellVersion-windows-$Env:ARCHITECTURE"
+            & gh run download $Env:CLI_RUN_ID --repo $Env:GITHUB_REPOSITORY --name $ArtifactName --dir $ArchiveDirectory
+            if ($LASTEXITCODE -ne 0) {
+              throw "Unable to download $ArchiveName from CLI run $Env:CLI_RUN_ID."
+            }
+          }
+          $ArchivePath = Join-Path $ArchiveDirectory $ArchiveName
+          if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
+            throw "Release asset was not found: $ArchivePath"
+          }
+
+          & tar -xzf $ArchivePath -C $PayloadDirectory
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to extract $ArchivePath"
+          }
+          & ./package/msi/New-PowerShellDistroMsi.ps1 -PayloadDirectory $PayloadDirectory -PackageVersion $PackageVersion -Architecture $Env:ARCHITECTURE -OutputDirectory (Join-Path $PWD 'output\msi')
+
+      - name: Install pinned psign tool
+        if: ${{ inputs.sign_msi }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ToolRoot = Join-Path $Env:RUNNER_TEMP 'psign-tool'
+          New-Item -ItemType Directory -Path $ToolRoot -Force | Out-Null
+          & dotnet tool install --tool-path $ToolRoot $Env:PSIGN_TOOL_PACKAGE_ID --version $Env:PSIGN_TOOL_PACKAGE_VERSION
+          if ($LASTEXITCODE -ne 0) {
+            throw "dotnet tool install failed for $Env:PSIGN_TOOL_PACKAGE_ID with exit code $LASTEXITCODE"
+          }
+          $ToolRoot >> $Env:GITHUB_PATH
+
+      - name: Code sign and verify PowerShell MSI
+        if: ${{ inputs.sign_msi }}
+        shell: pwsh
+        env:
+          CODE_SIGNING_KEYVAULT_URL: ${{ secrets.CODE_SIGNING_KEYVAULT_URL }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          CODE_SIGNING_CLIENT_ID: ${{ secrets.CODE_SIGNING_CLIENT_ID }}
+          CODE_SIGNING_CLIENT_SECRET: ${{ secrets.CODE_SIGNING_CLIENT_SECRET }}
+          CODE_SIGNING_CERTIFICATE_NAME: ${{ secrets.CODE_SIGNING_CERTIFICATE_NAME }}
+          CODE_SIGNING_TIMESTAMP_SERVER: ${{ vars.CODE_SIGNING_TIMESTAMP_SERVER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($Name in @(
+            'CODE_SIGNING_KEYVAULT_URL', 'AZURE_TENANT_ID', 'CODE_SIGNING_CLIENT_ID',
+            'CODE_SIGNING_CLIENT_SECRET', 'CODE_SIGNING_CERTIFICATE_NAME', 'CODE_SIGNING_TIMESTAMP_SERVER'
+          )) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($Name))) {
+              throw "$Name is required to sign an MSI."
+            }
+          }
+
+          $MsiPackages = @(Get-ChildItem -LiteralPath ./output/msi -Filter '*.msi' -File)
+          if ($MsiPackages.Count -ne 1) {
+            throw "Expected one MSI to sign, found $($MsiPackages.Count)."
+          }
+
+          $SigningArgs = @(
+            '--mode', 'portable', 'sign',
+            '--azure-key-vault-url', $Env:CODE_SIGNING_KEYVAULT_URL,
+            '--azure-key-vault-certificate', $Env:CODE_SIGNING_CERTIFICATE_NAME,
+            '--azure-key-vault-client-id', $Env:CODE_SIGNING_CLIENT_ID,
+            '--azure-key-vault-client-secret', $Env:CODE_SIGNING_CLIENT_SECRET,
+            '--azure-key-vault-tenant-id', $Env:AZURE_TENANT_ID,
+            '--timestamp-url', $Env:CODE_SIGNING_TIMESTAMP_SERVER,
+            '--timestamp-digest', 'sha256',
+            '--digest', 'sha256',
+            '--exit-codes', 'azure'
+          )
+          & psign-tool @SigningArgs $MsiPackages[0].FullName
+          if ($LASTEXITCODE -ne 0) {
+            throw "psign-tool failed to sign $($MsiPackages[0].Name) with exit code $LASTEXITCODE."
+          }
+          & psign-tool portable verify-msi $MsiPackages[0].FullName
+          if ($LASTEXITCODE -ne 0) {
+            throw "psign-tool failed to verify $($MsiPackages[0].Name) with exit code $LASTEXITCODE."
+          }
+
+      - name: Upload PowerShell MSI
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: Devolutions-PowerShell-${{ inputs.release_tag || inputs.package_version }}-win-${{ matrix.arch }}-msi
+          path: output/msi/*.msi
+          if-no-files-found: error

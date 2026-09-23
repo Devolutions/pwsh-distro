@@ -53,6 +53,7 @@ env:
   SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
   SDK_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
   PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
+  PSIGN_TOOL_PACKAGE_VERSION: "0.7.0"
 
 jobs:
   sdk:
@@ -94,11 +95,98 @@ jobs:
       dotnet_runtime_run_id: ${{ inputs.dotnet_runtime_run_id || needs.dotnet-runtime.outputs.workflow-run-id }}
     secrets: inherit
 
+  prepare-cli:
+    name: Prepare release CLI archives
+    runs-on: ubuntu-24.04
+    needs: [sdk, cli]
+    if: ${{ always() && needs.cli.result == 'success' }}
+    environment: ${{ needs.sdk.outputs.package-env }}
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Clone project with PowerShell submodule
+        uses: actions/checkout@v7.0.0
+        with:
+          submodules: true
+
+      - name: Download PowerShell CLI packages
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: PowerShell-${{ needs.sdk.outputs.powershell-version }}-*
+          path: cli-assets
+          merge-multiple: true
+
+      - name: Validate PowerShell CLI packages
+        shell: pwsh
+        run: |
+          $CliArchives = @(Get-ChildItem -LiteralPath ./cli-assets -Filter 'PowerShell-*.tar.gz' -File)
+          if ($CliArchives.Count -ne 6) {
+            throw "Expected exactly six PowerShell CLI archives, found $($CliArchives.Count)."
+          }
+
+      - name: Install pinned psign tool
+        if: ${{ fromJSON(needs.sdk.outputs.code-signed) && inputs.ready_to_run }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $ToolRoot = Join-Path $Env:RUNNER_TEMP "psign-tool"
+          Remove-Item -LiteralPath $ToolRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $ToolRoot | Out-Null
+
+          dotnet tool install --tool-path $ToolRoot $Env:PSIGN_TOOL_PACKAGE_ID --version $Env:PSIGN_TOOL_PACKAGE_VERSION
+          if ($LASTEXITCODE -ne 0) {
+            throw "dotnet tool install failed for $Env:PSIGN_TOOL_PACKAGE_ID with exit code $LASTEXITCODE"
+          }
+
+          $ToolRoot >> $Env:GITHUB_PATH
+
+      - name: Code sign ReadyToRun PowerShell CLI archives
+        if: ${{ fromJSON(needs.sdk.outputs.code-signed) && inputs.ready_to_run }}
+        shell: pwsh
+        env:
+          CODE_SIGNING_KEYVAULT_URL: ${{ secrets.CODE_SIGNING_KEYVAULT_URL }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          CODE_SIGNING_CLIENT_ID: ${{ secrets.CODE_SIGNING_CLIENT_ID }}
+          CODE_SIGNING_CLIENT_SECRET: ${{ secrets.CODE_SIGNING_CLIENT_SECRET }}
+          CODE_SIGNING_CERTIFICATE_NAME: ${{ secrets.CODE_SIGNING_CERTIFICATE_NAME }}
+          CODE_SIGNING_TIMESTAMP_SERVER: ${{ vars.CODE_SIGNING_TIMESTAMP_SERVER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $SigningScript = Join-Path (Join-Path $PWD 'eng') 'Sign-PowerShellDistroArchive.ps1'
+          foreach ($CliArchive in @(Get-ChildItem -LiteralPath ./cli-assets -Filter 'PowerShell-*.tar.gz' -File | Sort-Object Name)) {
+            & $SigningScript -ArchivePath $CliArchive.FullName
+          }
+
+      - name: Upload release-ready CLI archives
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: PowerShell-Release-CLI-${{ needs.sdk.outputs.sdk-package-version }}
+          path: cli-assets/PowerShell-*.tar.gz
+          if-no-files-found: error
+
+  msi:
+    name: Build PowerShell MSI
+    needs: [sdk, prepare-cli]
+    if: ${{ always() && needs.prepare-cli.result == 'success' }}
+    uses: ./.github/workflows/powershell-msi.yml
+    permissions:
+      actions: read
+      contents: read
+    with:
+      package_version: ${{ needs.sdk.outputs.sdk-package-version }}
+      cli_artifact_name: PowerShell-Release-CLI-${{ needs.sdk.outputs.sdk-package-version }}
+      sign_msi: ${{ fromJSON(needs.sdk.outputs.code-signed) }}
+      github-env: ${{ needs.sdk.outputs.package-env }}
+    secrets: inherit
+
   publish:
     name: Publish PowerShell release
     runs-on: ubuntu-24.04
-    needs: [sdk, cli, dotnet-runtime]
-    if: ${{ always() && fromJSON(needs.sdk.outputs.skip-publish) == false && needs.cli.result == 'success' }}
+    needs: [sdk, cli, dotnet-runtime, prepare-cli, msi]
+    if: ${{ always() && fromJSON(needs.sdk.outputs.skip-publish) == false && needs.prepare-cli.result == 'success' && needs.msi.result == 'success' }}
     environment: ${{ needs.sdk.outputs.package-env }}
     permissions:
       actions: read
@@ -151,57 +239,15 @@ jobs:
       - name: Download PowerShell CLI packages
         uses: actions/download-artifact@v8.0.1
         with:
-          pattern: PowerShell-${{ needs.sdk.outputs.powershell-version }}-*
+          name: PowerShell-Release-CLI-${{ needs.sdk.outputs.sdk-package-version }}
+          path: release-assets
+
+      - name: Download PowerShell MSI packages
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-*-msi
           path: release-assets
           merge-multiple: true
-
-      - name: Install latest psign tool
-        if: ${{ fromJSON(needs.sdk.outputs.code-signed) && inputs.ready_to_run }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $ToolRoot = Join-Path $Env:RUNNER_TEMP "psign-tool"
-          Remove-Item -LiteralPath $ToolRoot -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path $ToolRoot | Out-Null
-
-          dotnet tool install --tool-path $ToolRoot $Env:PSIGN_TOOL_PACKAGE_ID
-          if ($LASTEXITCODE -ne 0) {
-            throw "dotnet tool install failed for $Env:PSIGN_TOOL_PACKAGE_ID with exit code $LASTEXITCODE"
-          }
-
-          $Env:PATH = "$ToolRoot$([System.IO.Path]::PathSeparator)$Env:PATH"
-          $ToolRoot >> $Env:GITHUB_PATH
-          $ToolCommand = Get-Command psign-tool -ErrorAction Stop
-          $ToolPath = $ToolCommand.Source
-          $VersionOutput = & $ToolPath --version 2>&1
-          if ($LASTEXITCODE -ne 0) {
-            throw "psign-tool --version failed with exit code $LASTEXITCODE"
-          }
-          Write-Host "Installed psign-tool version: $(($VersionOutput | Out-String).Trim())"
-
-      - name: Code sign ReadyToRun PowerShell CLI archives
-        if: ${{ fromJSON(needs.sdk.outputs.code-signed) && inputs.ready_to_run }}
-        shell: pwsh
-        env:
-          CODE_SIGNING_KEYVAULT_URL: ${{ secrets.CODE_SIGNING_KEYVAULT_URL }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          CODE_SIGNING_CLIENT_ID: ${{ secrets.CODE_SIGNING_CLIENT_ID }}
-          CODE_SIGNING_CLIENT_SECRET: ${{ secrets.CODE_SIGNING_CLIENT_SECRET }}
-          CODE_SIGNING_CERTIFICATE_NAME: ${{ secrets.CODE_SIGNING_CERTIFICATE_NAME }}
-          CODE_SIGNING_TIMESTAMP_SERVER: ${{ vars.CODE_SIGNING_TIMESTAMP_SERVER }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $SigningScript = Join-Path (Join-Path $PWD 'eng') 'Sign-PowerShellDistroArchive.ps1'
-          $CliArchives = @(Get-ChildItem -LiteralPath ./release-assets -File | Where-Object { $_.Name -like 'PowerShell-*.tar.gz' } | Sort-Object Name)
-          if ($CliArchives.Count -ne 6) {
-            throw "Expected exactly six PowerShell CLI archives for signing, found $($CliArchives.Count)."
-          }
-
-          foreach ($CliArchive in $CliArchives) {
-            & $SigningScript -ArchivePath $CliArchive.FullName
-          }
 
       - name: NuGet login (OIDC)
         if: ${{ fromJSON(needs.sdk.outputs.dry-run) == false }}
@@ -273,12 +319,17 @@ jobs:
             throw "Expected exactly six PowerShell CLI archives in the release package directory, found $($CliArchives.Count)."
           }
 
+          $MsiPackages = @(Get-ChildItem -File | Where-Object { $_.Name -like 'Devolutions-PowerShell-*.msi' } | Sort-Object Name)
+          if ($MsiPackages.Count -ne 2) {
+            throw "Expected exactly two PowerShell MSI installers in the release package directory, found $($MsiPackages.Count)."
+          }
+
           $PatchFiles = @(Get-ChildItem -File | Where-Object { $_.Name -like 'powershell-patch-*.patch' } | Sort-Object Name)
           if ($PatchFiles.Count -ne 1) {
             throw "Expected exactly one generated patch file in the release package directory, found $($PatchFiles.Count)."
           }
 
-          $ReleaseAssetFiles = @($NugetPackages) + @($CliArchives) + @($PatchFiles)
+          $ReleaseAssetFiles = @($NugetPackages) + @($CliArchives) + @($MsiPackages) + @($PatchFiles)
           $ReleaseAssetFiles = @($ReleaseAssetFiles | Sort-Object Name)
 
           $HashPath = 'checksums'
@@ -306,6 +357,7 @@ jobs:
             "| PowerShell source commit | $SourceCommit |",
             "| Code signed | $CodeSigned |",
             "| CLI archives | $($CliArchives.Count) |",
+            "| MSI installers | $($MsiPackages.Count) |",
             "| Patch file | $($PatchFiles[0].Name) |"
           )
           Set-Content -Path $NotesPath -Value $ReleaseNotes -Encoding utf8
