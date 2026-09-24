@@ -1,7 +1,11 @@
 pwsh-src-worktree/
 dotnet-runtime/
 output/
-package/
+/package/output/
+/package/**/obj/
+/package/**/bin/
 patchsets/
 *.nupkg
 *.tar.gz
+*.msi
+*.wixpdb

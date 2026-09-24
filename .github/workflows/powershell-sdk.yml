@@ -119,6 +119,7 @@ env:
   MULTI_PWSH_APPHOST_PACKAGE_VERSION: "0.14.2"
   MULTI_PWSH_APPHOST_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
   PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
+  PSIGN_TOOL_PACKAGE_VERSION: "0.7.0"
 jobs:
   preflight:
     name: Preflight
@@ -1268,7 +1269,7 @@ jobs:
           echo "::notice::SDKCodeSigningSignDryRun: $SignDryRun"
           echo "::notice::SDKPackageWillBeCodeSigned: $ShouldSign"
 
-      - name: Install latest psign tool
+      - name: Install pinned psign tool
         if: steps.signing-mode.outputs.should_sign == 'true'
         shell: pwsh
         run: |
@@ -1278,7 +1279,7 @@ jobs:
           Remove-Item -LiteralPath $ToolRoot -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $ToolRoot | Out-Null
 
-          dotnet tool install --tool-path $ToolRoot $Env:PSIGN_TOOL_PACKAGE_ID
+          dotnet tool install --tool-path $ToolRoot $Env:PSIGN_TOOL_PACKAGE_ID --version $Env:PSIGN_TOOL_PACKAGE_VERSION
           if ($LASTEXITCODE -ne 0) {
             throw "dotnet tool install failed for $Env:PSIGN_TOOL_PACKAGE_ID with exit code $LASTEXITCODE"
           }
