@@ -79,10 +79,12 @@ function Invoke-Msi {
   )
 
   $Log = Join-Path $LogDirectory "$([guid]::NewGuid().ToString('N')).log"
-  & msiexec.exe @($Action, $Msi, '/qn', '/norestart', '/l*v', $Log)
-  $ExitCode = $LASTEXITCODE
+  $Arguments = "$Action `"$Msi`" /qn /norestart /l*v `"$Log`""
+  $ExitCode = (Start-Process -FilePath msiexec.exe -ArgumentList $Arguments -Wait -PassThru).ExitCode
   if ($ExitCode -notin $ExpectedExitCodes) {
-    Get-Content -LiteralPath $Log -Tail 40 | ForEach-Object { Write-Host $_ }
+    if (Test-Path -LiteralPath $Log) {
+      Get-Content -LiteralPath $Log -Tail 40 | ForEach-Object { Write-Host $_ }
+    }
     throw "msiexec $Action $Msi returned $ExitCode; expected $($ExpectedExitCodes -join ', '). Log: $Log"
   }
   if ($ExpectArchitectureBlock -and
@@ -165,9 +167,9 @@ try {
   $CleanupFailures = @()
   foreach ($Msi in @($CurrentMsi, $LegacyMsi, $OppositeMsi, $LegacyOppositeMsi)) {
     if ($Msi) {
-      & msiexec.exe /x $Msi /qn /norestart
-      if ($LASTEXITCODE -notin @(0, 1605)) {
-        $CleanupFailures += "Cleanup of $Msi returned MSI exit code $LASTEXITCODE."
+      $ExitCode = (Start-Process -FilePath msiexec.exe -ArgumentList "/x `"$Msi`" /qn /norestart" -Wait -PassThru).ExitCode
+      if ($ExitCode -notin @(0, 1605)) {
+        $CleanupFailures += "Cleanup of $Msi returned MSI exit code $ExitCode."
       }
     }
   }
