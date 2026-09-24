@@ -43,9 +43,23 @@ if ([System.IO.Path]::GetFileName($CurrentMsi) -notmatch $NamePattern) {
   throw "Unexpected MSI filename: $CurrentMsi"
 }
 $Version = [version] $Matches.version
-if ([System.IO.Path]::GetFileName($LegacyMsi) -notmatch $NamePattern -or
-    [version] $Matches.version -ge $Version) {
+if ([System.IO.Path]::GetFileName($LegacyMsi) -notmatch $NamePattern) {
+  throw "Unexpected legacy MSI filename: $LegacyMsi"
+}
+$LegacyVersion = [version] $Matches.version
+if ($LegacyVersion -ge $Version) {
   throw 'The legacy MSI must have an earlier version of the same architecture.'
+}
+if ($OppositeMsi) {
+  $OppositeNamePattern = '^Devolutions-PowerShell-(?<version>\d+\.\d+\.\d+\.\d+)-win-x64\.msi$'
+  if ([System.IO.Path]::GetFileName($OppositeMsi) -notmatch $OppositeNamePattern -or
+      [version] $Matches.version -ne $Version) {
+    throw 'The opposite-architecture MSI must match the current package version.'
+  }
+  if ([System.IO.Path]::GetFileName($LegacyOppositeMsi) -notmatch $OppositeNamePattern -or
+      [version] $Matches.version -ne $LegacyVersion) {
+    throw 'The opposite-architecture legacy MSI must match the previous package version.'
+  }
 }
 
 $Installer = New-Object -ComObject WindowsInstaller.Installer
@@ -64,8 +78,8 @@ try {
 
 $ProgramFiles = [Environment]::GetFolderPath('ProgramFiles')
 $SharedPath = Join-Path $ProgramFiles "Devolutions\PowerShell\$($Version.Major)"
-$LegacyPath = "$SharedPath-$Architecture"
-$LegacyOppositePath = "$SharedPath-x64"
+$LegacyPath = Join-Path $ProgramFiles "Devolutions\PowerShell\$($LegacyVersion.Major)-$Architecture"
+$LegacyOppositePath = Join-Path $ProgramFiles "Devolutions\PowerShell\$($LegacyVersion.Major)-x64"
 $LogDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "pwsh-distro-msi-install-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $LogDirectory | Out-Null
 $Succeeded = $false
@@ -118,6 +132,18 @@ function Assert-PowerShell {
   }
 }
 
+function Assert-BlockedInstallation {
+  param([string] $IncomingMsi)
+
+  $Exe = Join-Path $SharedPath 'pwsh.exe'
+  $Before = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
+  Invoke-Msi '/i' $IncomingMsi -ExpectedExitCodes @(1603) -ExpectArchitectureBlock
+  if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash -ne $Before) {
+    throw "Blocked cross-architecture install changed the existing PowerShell executable: $IncomingMsi"
+  }
+  Assert-PowerShell $SharedPath
+}
+
 try {
   if (Test-Path -LiteralPath $SharedPath) {
     throw "Expected a clean runner, but the MSI directory already exists: $SharedPath"
@@ -142,11 +168,10 @@ try {
   Assert-PowerShell $SharedPath
 
   if ($OppositeMsi) {
-    Invoke-Msi '/i' $OppositeMsi -ExpectedExitCodes @(1603) -ExpectArchitectureBlock
-    Assert-PowerShell $SharedPath
+    Assert-BlockedInstallation $OppositeMsi
     Invoke-Msi '/i' $LegacyOppositeMsi
     Assert-PowerShell $LegacyOppositePath
-    Invoke-Msi '/i' $OppositeMsi -ExpectedExitCodes @(1603) -ExpectArchitectureBlock
+    Assert-BlockedInstallation $OppositeMsi
     Invoke-Msi '/fa' $CurrentProductCode
     Invoke-Msi '/x' $CurrentMsi
     if (Test-Path -LiteralPath (Join-Path $SharedPath 'pwsh.exe')) {
@@ -154,6 +179,11 @@ try {
     }
     Assert-PowerShell $LegacyOppositePath
     Invoke-Msi '/x' $LegacyOppositeMsi
+
+    Invoke-Msi '/i' $OppositeMsi
+    Assert-PowerShell $SharedPath
+    Assert-BlockedInstallation $CurrentMsi
+    Invoke-Msi '/x' $OppositeMsi
   } else {
     Invoke-Msi '/x' $CurrentMsi
   }

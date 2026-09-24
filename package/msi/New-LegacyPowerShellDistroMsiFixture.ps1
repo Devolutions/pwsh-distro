@@ -23,6 +23,10 @@ if ($Version.Revision -gt 0) {
   $LegacyVersion = "$($Version.Major).$($Version.Minor).$($Version.Build).$($Version.Revision - 1)"
 } elseif ($Version.Build -gt 0) {
   $LegacyVersion = "$($Version.Major).$($Version.Minor).$($Version.Build - 1).0"
+} elseif ($Version.Minor -gt 0) {
+  $LegacyVersion = "$($Version.Major).$($Version.Minor - 1).0.0"
+} elseif ($Version.Major -gt 1) {
+  $LegacyVersion = "$($Version.Major - 1).0.0.0"
 } else {
   throw "No prior MSI version can be generated for $PackageVersion."
 }
