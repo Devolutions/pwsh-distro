@@ -33,6 +33,31 @@ foreach ($File in 'pwsh.exe', 'LICENSE.txt', 'ThirdPartyNotices.txt') {
   }
 }
 
+$ExecutablePath = Join-Path $Payload 'pwsh.exe'
+$ExpectedMachine = if ($Architecture -eq 'x64') { 0x8664 } else { 0xAA64 }
+$Stream = [System.IO.File]::OpenRead($ExecutablePath)
+try {
+  $Reader = [System.IO.BinaryReader]::new($Stream)
+  if ($Stream.Length -lt 0x40 -or $Reader.ReadUInt16() -ne 0x5A4D) {
+    throw "MSI payload is not a valid PE executable: $ExecutablePath"
+  }
+  $Stream.Position = 0x3C
+  $PeOffset = $Reader.ReadInt32()
+  if ($PeOffset -lt 0x40 -or $PeOffset -gt $Stream.Length - 6) {
+    throw "MSI payload has an invalid PE header: $ExecutablePath"
+  }
+  $Stream.Position = $PeOffset
+  if ($Reader.ReadUInt32() -ne 0x00004550) {
+    throw "MSI payload is not a valid PE executable: $ExecutablePath"
+  }
+  $Machine = $Reader.ReadUInt16()
+  if ($Machine -ne $ExpectedMachine) {
+    throw "MSI payload pwsh.exe machine type 0x$($Machine.ToString('X4')) does not match $Architecture (expected 0x$($ExpectedMachine.ToString('X4')))."
+  }
+} finally {
+  $Stream.Dispose()
+}
+
 $Version = [version] $PackageVersion
 if ($Version.Revision -gt 99 -or $Version.Build -gt 655 -or
     ($Version.Build * 100 + $Version.Revision) -gt 65535) {

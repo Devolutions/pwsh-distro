@@ -13,6 +13,7 @@
     <?define ExplorerContextMenuDialogText = "&$(var.ProductName) $(var.SimpleProductVersion)"?>
     <?define UpgradeCodePreview = "d26b2030-fe59-4bbe-9cfc-8a5f5f934b38"?>
     <?define UpgradeCodeRelease = "d26b2030-fe59-4bbe-9cfc-8a5f5f934b38"?>
+    <?define OppositeArchitectureUpgradeCode = "cea78373-e1e6-425c-b8d9-cd7e18f6821e"?>
     <?if $(var.IsPreview)=True?>
       <?define UpgradeCode = $(var.UpgradeCodePreview)?>
     <?else?>
@@ -22,6 +23,7 @@
     <?define ExplorerContextMenuDialogText = "&$(var.ProductName) $(var.SimpleProductVersion) ($(sys.BUILDARCH))"?>
     <?define UpgradeCodePreview = "cea78373-e1e6-425c-b8d9-cd7e18f6821e"?>
     <?define UpgradeCodeRelease = "cea78373-e1e6-425c-b8d9-cd7e18f6821e"?>
+    <?define OppositeArchitectureUpgradeCode = "d26b2030-fe59-4bbe-9cfc-8a5f5f934b38"?>
     <?if $(var.IsPreview)=True?>
       <?define UpgradeCode = $(var.UpgradeCodePreview)?>
     <?else?>
@@ -222,10 +224,16 @@
       </DirectorySearchRef>
     </Property>
     <Launch Condition="Installed OR PWRSHPLUGIN_VERSION" Message="$(var.ProductName) requires the Windows Management Framework 4.0 or newer to be installed to enable remoting over WinRM. You can find download links here: https://aka.ms/pscore6-prereq" />
+    <?ifdef OppositeArchitectureUpgradeCode?>
+      <Upgrade Id="$(var.OppositeArchitectureUpgradeCode)">
+        <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" OnlyDetect="yes" Property="OPPOSITE_ARCHITECTURE_INSTALLED" />
+      </Upgrade>
+      <Launch Condition="Installed OR NOT OPPOSITE_ARCHITECTURE_INSTALLED" Message="Uninstall the other architecture of $(var.ProductName) $(var.SimpleProductVersion) before installing this MSI; both architectures use the same directory." />
+    <?endif?>
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Devolutions">
         <Directory Id="PowerShellFolder" Name="PowerShell">
-          <Directory Id="VersionFolder" Name="$(var.SimpleProductVersion)-$(sys.BUILDARCH)">
+          <Directory Id="VersionFolder" Name="$(var.SimpleProductVersion)">
             <Component Id="RegistryEntries">
               <!-- create key for easy detection of a particular version of a powershell core package
                     The upgrade code is used in the key because it will change when we allow SxS       -->
