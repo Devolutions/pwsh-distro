@@ -228,7 +228,7 @@
       <Upgrade Id="$(var.OppositeArchitectureUpgradeCode)">
         <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" OnlyDetect="yes" Property="OPPOSITE_ARCHITECTURE_INSTALLED" />
       </Upgrade>
-      <Launch Condition="NOT OPPOSITE_ARCHITECTURE_INSTALLED" Message="Uninstall the other architecture of $(var.ProductName) $(var.SimpleProductVersion) before installing this MSI; both architectures use the same directory." />
+      <Launch Condition="Installed OR NOT OPPOSITE_ARCHITECTURE_INSTALLED" Message="Uninstall the other architecture of $(var.ProductName) $(var.SimpleProductVersion) before installing this MSI; both architectures use the same directory." />
     <?endif?>
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Devolutions">
