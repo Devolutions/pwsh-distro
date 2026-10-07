@@ -1,7 +1,0 @@
-{
-  "schemaVersion": 1,
-  "providerId": "devolutions.wsman",
-  "assemblyFile": "Devolutions.MultiPwsh.Remoting.WSMan.dll",
-  "adapterType": "Devolutions.MultiPwsh.Remoting.WSMan.DevolutionsWsmanAdapter",
-  "optionsSchemaFile": "Devolutions.MultiPwsh.Remoting.Provider.options.schema.json"
-}

@@ -4,10 +4,6 @@ output/
 /package/output/
 /package/**/obj/
 /package/**/bin/
-/src/**/obj/
-/src/**/bin/
-/tests/**/obj/
-/tests/**/bin/
 patchsets/
 *.nupkg
 *.tar.gz

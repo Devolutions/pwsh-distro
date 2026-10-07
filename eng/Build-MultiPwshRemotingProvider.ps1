@@ -9,6 +9,8 @@ param(
   [Parameter(Mandatory)]
   [string] $OutputDirectory,
 
+  [string] $SourceRoot,
+
   [string] $Configuration = 'Release'
 )
 
@@ -16,8 +18,14 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 $RepositoryRoot = Split-Path $PSScriptRoot -Parent
-$ProjectRoot = Join-Path $RepositoryRoot 'src\Devolutions.MultiPwsh.Remoting.WSMan'
+if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
+  $SourceRoot = Join-Path $RepositoryRoot 'pwsh-src'
+}
+$ProjectRoot = Join-Path $SourceRoot 'src\Devolutions.MultiPwsh.Remoting.WSMan'
 $ProjectPath = Join-Path $ProjectRoot 'Devolutions.MultiPwsh.Remoting.WSMan.csproj'
+if (-not (Test-Path -LiteralPath $ProjectPath -PathType Leaf)) {
+  throw "The pinned PowerShell source is missing the devolutions.wsman provider project: $ProjectPath"
+}
 $ResolvedSdkAssemblyPath = (Resolve-Path -LiteralPath $PowerShellSdkAssemblyPath).Path
 
 dotnet build $ProjectPath `

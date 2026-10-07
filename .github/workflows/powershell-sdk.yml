@@ -1087,7 +1087,7 @@ jobs:
             }
           }
 
-          $AdapterTestProject = '../tests/Devolutions.MultiPwsh.Remoting.WSMan.Tests/Devolutions.MultiPwsh.Remoting.WSMan.Tests.csproj'
+          $AdapterTestProject = './test/Devolutions.MultiPwsh.Remoting.WSMan.Tests/Devolutions.MultiPwsh.Remoting.WSMan.Tests.csproj'
           $AdapterSdkAssemblyPath = Join-Path $PackageRuntimeRoots['unix'] 'System.Management.Automation.dll'
           dotnet test $AdapterTestProject `
             --configuration Release `
