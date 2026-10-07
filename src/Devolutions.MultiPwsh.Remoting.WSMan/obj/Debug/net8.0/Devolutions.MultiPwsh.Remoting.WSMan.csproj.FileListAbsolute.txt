@@ -1,6 +1,0 @@
-D:\dev\.copilot\copilot-worktrees\pwsh-distro\copilot-solid-meme\src\Devolutions.MultiPwsh.Remoting.WSMan\obj\Debug\net8.0\Devolutions.MultiPwsh.Remoting.WSMan.csproj.AssemblyReference.cache
-D:\dev\.copilot\copilot-worktrees\pwsh-distro\copilot-solid-meme\src\Devolutions.MultiPwsh.Remoting.WSMan\obj\Debug\net8.0\Devolutions.MultiPwsh.Remoting.WSMan.GeneratedMSBuildEditorConfig.editorconfig
-D:\dev\.copilot\copilot-worktrees\pwsh-distro\copilot-solid-meme\src\Devolutions.MultiPwsh.Remoting.WSMan\obj\Debug\net8.0\Devolutions.MultiPwsh.Remoting.WSMan.AssemblyInfoInputs.cache
-D:\dev\.copilot\copilot-worktrees\pwsh-distro\copilot-solid-meme\src\Devolutions.MultiPwsh.Remoting.WSMan\obj\Debug\net8.0\Devolutions.MultiPwsh.Remoting.WSMan.AssemblyInfo.cs
-D:\dev\.copilot\copilot-worktrees\pwsh-distro\copilot-solid-meme\src\Devolutions.MultiPwsh.Remoting.WSMan\obj\Debug\net8.0\Devolutions.MultiPwsh.Remoting.WSMan.csproj.CoreCompileInputs.cache
-D:\dev\.copilot\copilot-worktrees\pwsh-distro\copilot-solid-meme\src\Devolutions.MultiPwsh.Remoting.WSMan\obj\Debug\net8.0\Devolutions.MultiPwsh.Remoting.WSMan.sourcelink.json
