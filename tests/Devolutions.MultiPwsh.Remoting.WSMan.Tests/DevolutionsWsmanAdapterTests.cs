@@ -60,26 +60,72 @@ public sealed class DevolutionsWsmanAdapterTests
             """{"endpointUri":"https://server.example.test:5986/wsman"}""");
 
         Assert.Equal(new Uri("https://server.example.test:5986/wsman"), options.EndpointUri);
+        Assert.Equal("/wsman", options.AppName);
         Assert.Equal(DevolutionsWsmanAuthentication.Negotiate, options.Authentication);
         Assert.Equal("http://schemas.microsoft.com/powershell/Microsoft.PowerShell", options.ShellUri);
         Assert.Equal(1, options.MinRunspaces);
         Assert.Equal(1, options.MaxRunspaces);
+        Assert.Equal(20, options.MaxConnections);
+        Assert.Null(options.Domain);
+        Assert.Equal(DevolutionsWsmanSspiProvider.Default, options.SspiProvider);
         Assert.Equal(180_000, options.OpenTimeoutMilliseconds);
         Assert.Equal(180_000, options.OperationTimeoutMilliseconds);
-        Assert.Equal(500, options.MaxEnvelopeSizeKilobytes);
+        Assert.Equal(60_000, options.CancelTimeoutMilliseconds);
+        Assert.Equal(60_000, options.EffectiveCancelTimeoutMilliseconds);
+        Assert.Equal(512, options.MaxEnvelopeSizeKilobytes);
         Assert.False(options.SkipCertificateCheck);
-        Assert.Null(options.KdcProxyUri);
+        Assert.Null(options.KdcProxyName);
         Assert.Null(options.Spn);
+    }
+
+    [Fact]
+    public void Parse_ConnectionInfoOptions_PreservesWsmanSemantics()
+    {
+        DevolutionsWsmanOptions options = DevolutionsWsmanOptions.Parse(
+            """
+            {
+              "endpointUri": "http://server.example.test:5985/custom-wsman",
+              "maxConnections": 64,
+              "domain": "EXAMPLE",
+              "sspiProvider": "Platform",
+              "cancelTimeoutMilliseconds": 1000,
+              "kdcProxyName": "proxy.example.test:443:kdcproxy"
+            }
+            """);
+
+        Assert.Equal("/custom-wsman", options.AppName);
+        Assert.Equal(64, options.MaxConnections);
+        Assert.Equal("EXAMPLE", options.Domain);
+        Assert.Equal(DevolutionsWsmanSspiProvider.Platform, options.SspiProvider);
+        Assert.Equal(1_000, options.CancelTimeoutMilliseconds);
+        Assert.Equal(5_000, options.EffectiveCancelTimeoutMilliseconds);
+        Assert.Equal("proxy.example.test:443:kdcproxy", options.KdcProxyName);
     }
 
     [Theory]
     [InlineData("""{"endpointUri":"ftp://server.example.test/wsman"}""")]
     [InlineData("""{"endpointUri":"https://server.example.test/wsman","minRunspaces":2,"maxRunspaces":1}""")]
-    [InlineData("""{"endpointUri":"https://server.example.test/wsman","kdcProxyUri":"http://proxy.example.test"}""")]
+    [InlineData("""{"endpointUri":"https://server.example.test/wsman","maxConnections":0}""")]
+    [InlineData("""{"endpointUri":"https://server.example.test/wsman","maxConnections":65}""")]
+    [InlineData("""{"endpointUri":"https://server.example.test/wsman","sspiProvider":"Windows"}""")]
+    [InlineData("""{"endpointUri":"https://server.example.test/wsman","cancelTimeoutMilliseconds":-1}""")]
+    [InlineData("""{"endpointUri":"https://server.example.test/wsman","kdcProxyName":""}""")]
     [InlineData("""{"endpointUri":"https://server.example.test/wsman","unknown":true}""")]
     public void Parse_InvalidOptions_RejectsConfiguration(string optionsJson)
     {
         Assert.ThrowsAny<ArgumentException>(() => DevolutionsWsmanOptions.Parse(optionsJson));
+    }
+
+    [Fact]
+    public void Parse_OverlongConnectionInfoText_RejectsConfiguration()
+    {
+        string overlongDomain = new('d', DevolutionsWsmanOptions.MaxDomainLength + 1);
+        string overlongKdcProxyName = new('k', DevolutionsWsmanOptions.MaxKdcProxyNameLength + 1);
+
+        Assert.Throws<ArgumentException>(() => DevolutionsWsmanOptions.Parse(
+            $$"""{"endpointUri":"https://server.example.test/wsman","domain":"{{overlongDomain}}"}"""));
+        Assert.Throws<ArgumentException>(() => DevolutionsWsmanOptions.Parse(
+            $$"""{"endpointUri":"https://server.example.test/wsman","kdcProxyName":"{{overlongKdcProxyName}}"}"""));
     }
 
     private static void AssertStaticStringProperty(Type adapterType, string propertyName)

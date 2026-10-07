@@ -11,7 +11,8 @@
     "endpointUri": {
       "type": "string",
       "format": "uri",
-      "pattern": "^https?://"
+      "pattern": "^https?://",
+      "description": "Absolute WSMan endpoint. Its path component maps directly to DevoWSManConnectionInfo.AppName and is the complete HTTP request path."
     },
     "authentication": {
       "type": "string",
@@ -37,6 +38,30 @@
       "minimum": 1,
       "default": 1
     },
+    "maxConnections": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "default": 20
+    },
+    "domain": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "sspiProvider": {
+      "type": "string",
+      "enum": [
+        "Default",
+        "Platform",
+        "Rust"
+      ],
+      "default": "Default",
+      "description": "Default selects the platform provider; Platform explicitly selects the operating-system provider; Rust selects SSPI-rs."
+    },
     "openTimeoutMilliseconds": {
       "type": "integer",
       "minimum": 1,
@@ -47,22 +72,30 @@
       "minimum": 1,
       "default": 180000
     },
+    "cancelTimeoutMilliseconds": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 60000,
+      "description": "Shell cleanup uses max(5000, cancelTimeoutMilliseconds), matching DevoWSManConnectionInfo behavior."
+    },
     "maxEnvelopeSizeKilobytes": {
       "type": "integer",
       "minimum": 1,
-      "default": 500
+      "default": 512
     },
     "skipCertificateCheck": {
       "type": "boolean",
       "default": false
     },
-    "kdcProxyUri": {
+    "kdcProxyName": {
       "type": [
         "string",
         "null"
       ],
-      "format": "uri",
-      "pattern": "^https://"
+      "minLength": 1,
+      "maxLength": 2048,
+      "default": null,
+      "description": "SSPI KDC proxy name, for example host:port:path."
     },
     "spn": {
       "type": [
