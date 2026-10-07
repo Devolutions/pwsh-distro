@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Security;
 using System.Security.Cryptography;
 using System.Text;
 using System.Management.Automation;
@@ -102,11 +103,33 @@ public sealed class DevolutionsWsmanAdapterTests
         Assert.Equal("proxy.example.test:443:kdcproxy", options.KdcProxyName);
     }
 
+    [Fact]
+    public void CreateRunspacePool_ValidArguments_ThrowsUntilTransportIsOperational()
+    {
+        using SecureString password = new();
+        password.AppendChar('p');
+        password.MakeReadOnly();
+        PSCredential credential = new("user", password);
+        DevolutionsWsmanAdapter adapter = new();
+
+        NotSupportedException exception = Assert.Throws<NotSupportedException>(() => adapter.CreateRunspacePool(
+            """{"endpointUri":"https://server.example.test:5986/wsman"}""",
+            credential,
+            (_, _, _, _) => Task.FromResult<Stream>(new MemoryStream())));
+
+        Assert.Contains("managed WSMan transport is not yet included", exception.Message);
+    }
+
     [Theory]
+    [InlineData("""{"endpointUri":null}""")]
     [InlineData("""{"endpointUri":"ftp://server.example.test/wsman"}""")]
+    [InlineData("""{"endpointUri":"https://server.example.test/wsman","authentication":0}""")]
+    [InlineData("""{"endpointUri":"https://server.example.test/wsman","authentication":999}""")]
     [InlineData("""{"endpointUri":"https://server.example.test/wsman","minRunspaces":2,"maxRunspaces":1}""")]
     [InlineData("""{"endpointUri":"https://server.example.test/wsman","maxConnections":0}""")]
     [InlineData("""{"endpointUri":"https://server.example.test/wsman","maxConnections":65}""")]
+    [InlineData("""{"endpointUri":"https://server.example.test/wsman","sspiProvider":0}""")]
+    [InlineData("""{"endpointUri":"https://server.example.test/wsman","sspiProvider":999}""")]
     [InlineData("""{"endpointUri":"https://server.example.test/wsman","sspiProvider":"Windows"}""")]
     [InlineData("""{"endpointUri":"https://server.example.test/wsman","cancelTimeoutMilliseconds":-1}""")]
     [InlineData("""{"endpointUri":"https://server.example.test/wsman","kdcProxyName":""}""")]

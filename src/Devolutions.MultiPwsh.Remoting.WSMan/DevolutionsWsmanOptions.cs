@@ -14,13 +14,21 @@ public sealed record DevolutionsWsmanOptions
         AllowTrailingCommas = false,
         PropertyNameCaseInsensitive = false,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        Converters =
+        {
+            new JsonStringEnumConverter<DevolutionsWsmanAuthentication>(
+                namingPolicy: null,
+                allowIntegerValues: false),
+            new JsonStringEnumConverter<DevolutionsWsmanSspiProvider>(
+                namingPolicy: null,
+                allowIntegerValues: false),
+        },
     };
 
     [JsonPropertyName("endpointUri")]
     public required Uri EndpointUri { get; init; }
 
     [JsonPropertyName("authentication")]
-    [JsonConverter(typeof(JsonStringEnumConverter<DevolutionsWsmanAuthentication>))]
     public DevolutionsWsmanAuthentication Authentication { get; init; } = DevolutionsWsmanAuthentication.Negotiate;
 
     [JsonIgnore]
@@ -42,7 +50,6 @@ public sealed record DevolutionsWsmanOptions
     public string? Domain { get; init; }
 
     [JsonPropertyName("sspiProvider")]
-    [JsonConverter(typeof(JsonStringEnumConverter<DevolutionsWsmanSspiProvider>))]
     public DevolutionsWsmanSspiProvider SspiProvider { get; init; } = DevolutionsWsmanSspiProvider.Default;
 
     [JsonPropertyName("openTimeoutMilliseconds")]
@@ -90,7 +97,8 @@ public sealed record DevolutionsWsmanOptions
 
     private void Validate()
     {
-        if (!EndpointUri.IsAbsoluteUri ||
+        if (EndpointUri is null ||
+            !EndpointUri.IsAbsoluteUri ||
             (EndpointUri.Scheme != Uri.UriSchemeHttp && EndpointUri.Scheme != Uri.UriSchemeHttps))
         {
             throw new ArgumentException("endpointUri must be an absolute HTTP or HTTPS URI.");
@@ -154,7 +162,6 @@ public sealed record DevolutionsWsmanOptions
     }
 }
 
-[JsonConverter(typeof(JsonStringEnumConverter<DevolutionsWsmanAuthentication>))]
 public enum DevolutionsWsmanAuthentication
 {
     Negotiate,
@@ -162,7 +169,6 @@ public enum DevolutionsWsmanAuthentication
     Ntlm,
 }
 
-[JsonConverter(typeof(JsonStringEnumConverter<DevolutionsWsmanSspiProvider>))]
 public enum DevolutionsWsmanSspiProvider
 {
     Default,
