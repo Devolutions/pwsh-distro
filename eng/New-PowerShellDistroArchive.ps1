@@ -584,6 +584,14 @@ function Add-PowerShellDistroAncillaryFiles {
   $RuntimeGroup = Get-PackageRuntimeGroup -Rid $RuntimeIdentifier
   $DistroPayloadPackageRoot = Join-Path $PackageRoot "buildTransitive\powershell-distro-payload\$RuntimeIdentifier"
   Copy-FileIfPresent -SourcePath (Join-Path $DistroPayloadPackageRoot 'pwsh.xml') -DestinationPath (Join-Path $Root 'pwsh.xml')
+  foreach ($ProviderPayloadFile in @(
+      'Devolutions.MultiPwsh.Remoting.WSMan.dll',
+      'Devolutions.MultiPwsh.Remoting.Provider.json',
+      'Devolutions.MultiPwsh.Remoting.Provider.options.schema.json')) {
+    Copy-FileIfPresent `
+      -SourcePath (Join-Path $DistroPayloadPackageRoot $ProviderPayloadFile) `
+      -DestinationPath (Join-Path $Root $ProviderPayloadFile)
+  }
   if ($RuntimeIdentifier -like 'win-*') {
     $WindowsDesktopPayloadRoot = Join-Path $PackageRoot "buildTransitive\windows-desktop-payload\win\lib\$TargetFramework"
     Copy-FileIfPresent -SourcePath (Join-Path $WindowsDesktopPayloadRoot 'Microsoft.PowerShell.GraphicalHost.dll') -DestinationPath (Join-Path $Root 'Microsoft.PowerShell.GraphicalHost.dll')

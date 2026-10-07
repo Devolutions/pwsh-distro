@@ -1742,6 +1742,9 @@ foreach ($RuntimeNativeRid in $RuntimeNativeValidationRids) {
     "tools/apphost/$RuntimeNativeRid/pwsh.dll",
     "tools/apphost/$RuntimeNativeRid/pwsh.runtimeconfig.json",
     "buildTransitive/powershell-distro-payload/$RuntimeNativeRid/pwsh.xml",
+    "buildTransitive/powershell-distro-payload/$RuntimeNativeRid/Devolutions.MultiPwsh.Remoting.WSMan.dll",
+    "buildTransitive/powershell-distro-payload/$RuntimeNativeRid/Devolutions.MultiPwsh.Remoting.Provider.json",
+    "buildTransitive/powershell-distro-payload/$RuntimeNativeRid/Devolutions.MultiPwsh.Remoting.Provider.options.schema.json",
     "runtimes/$RuntimeNativeRid/native/$RuntimeNativeExecutableName"
   )
 }

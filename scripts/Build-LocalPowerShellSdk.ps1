@@ -527,6 +527,24 @@ try {
     -SourceDirectory ($SourceBuiltAssemblyDirectories + @($AppHostOutputPath)) `
     -DestinationDirectory $PackageRuntimePath
 
+  $RemotingProviderStagePath = Join-Path $OutputRootPath 'remoting-provider'
+  & (Join-Path $RepositoryRoot 'eng\Build-MultiPwshRemotingProvider.ps1') `
+    -PowerShellSdkAssemblyPath (Join-Path $AppHostOutputPath 'System.Management.Automation.dll') `
+    -TargetFramework $TargetFramework `
+    -OutputDirectory $RemotingProviderStagePath
+  if ($Validate) {
+    Invoke-Native dotnet @(
+      'test',
+      (Join-Path $RepositoryRoot 'tests\Devolutions.MultiPwsh.Remoting.WSMan.Tests\Devolutions.MultiPwsh.Remoting.WSMan.Tests.csproj'),
+      '--configuration',
+      'Release',
+      '--nologo',
+      "-p:AdapterTargetFramework=$TargetFramework",
+      '-p:PowerShellSdkVendor=Devolutions',
+      "-p:PowerShellSdkAssemblyPath=$(Join-Path $AppHostOutputPath 'System.Management.Automation.dll')"
+    )
+  }
+
   $SdkStagePath = Join-Path $PackageStageRoot $PackageId
   $SourceBuiltAssemblyDirectoriesByPackagePath = @{
     "ref/$TargetFramework" = $SourceBuiltAssemblyDirectories + @($PackageRuntimePath, $AppHostOutputPath)
@@ -618,6 +636,8 @@ try {
       }
       Copy-Item $SourcePath $DistroPayloadPackageRoot -Force
     }
+
+    Copy-Item -Path (Join-Path $RemotingProviderStagePath '*') -Destination $DistroPayloadPackageRoot -Recurse -Force
   }
 
   $BuildTransitivePath = Join-Path $SdkStagePath 'buildTransitive'

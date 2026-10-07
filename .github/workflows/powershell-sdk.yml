@@ -718,6 +718,11 @@ jobs:
           }
           Copy-Item -LiteralPath $PwshXmlPath -Destination (Join-Path $DistroPayloadStagePath 'pwsh.xml') -Force
 
+          ../eng/Build-MultiPwshRemotingProvider.ps1 `
+            -PowerShellSdkAssemblyPath (Join-Path $OutputPath 'System.Management.Automation.dll') `
+            -TargetFramework $TargetFramework `
+            -OutputDirectory $DistroPayloadStagePath
+
           $RuntimeNativeStagePath = Join-Path $StagePath "runtime-native"
           New-Item $RuntimeNativeStagePath -ItemType Directory -Force | Out-Null
           $RuntimeNativeAppHostPath = Join-Path $RuntimeNativeStagePath $AppHostAsset.AppHostFileName
@@ -1082,6 +1087,18 @@ jobs:
             }
           }
 
+          $AdapterTestProject = '../tests/Devolutions.MultiPwsh.Remoting.WSMan.Tests/Devolutions.MultiPwsh.Remoting.WSMan.Tests.csproj'
+          $AdapterSdkAssemblyPath = Join-Path $PackageRuntimeRoots['unix'] 'System.Management.Automation.dll'
+          dotnet test $AdapterTestProject `
+            --configuration Release `
+            --nologo `
+            -p:AdapterTargetFramework=$TargetFramework `
+            -p:PowerShellSdkVendor=Devolutions `
+            -p:PowerShellSdkAssemblyPath=$AdapterSdkAssemblyPath
+          if ($LASTEXITCODE -ne 0) {
+            throw "The devolutions.wsman provider tests failed with exit code $LASTEXITCODE."
+          }
+
           $SdkStagePath = Join-Path $PackageStageRoot $Env:SDK_PACKAGE_ID
           $SourceBuiltAssemblyDirectories = @(Get-PowerShellSdkSourceBuiltAssemblyDirectory -SourceRoot $PWD -TargetFramework $TargetFramework)
           $SourceBuiltAssemblyNames = @(Get-PowerShellSdkSourceBuiltAssemblyName -Directory (@($PackageRuntimeRoots.Values) + $SourceBuiltAssemblyDirectories))
@@ -1185,11 +1202,18 @@ jobs:
 
             $DistroPayloadDestinationPath = Join-Path $SdkStagePath "buildTransitive/powershell-distro-payload/$Rid"
             New-Item $DistroPayloadDestinationPath -ItemType Directory -Force | Out-Null
-            $PwshXmlPath = Join-Path $ArtifactPath "powershell-distro-payload/pwsh.xml"
-            if (-not (Test-Path $PwshXmlPath -PathType Leaf)) {
-              throw "Missing required PowerShell distro payload file for $Rid`: $PwshXmlPath"
+            $DistroPayloadSourcePath = Join-Path $ArtifactPath "powershell-distro-payload"
+            foreach ($RequiredDistroPayloadFile in @(
+                'pwsh.xml',
+                'Devolutions.MultiPwsh.Remoting.WSMan.dll',
+                'Devolutions.MultiPwsh.Remoting.Provider.json',
+                'Devolutions.MultiPwsh.Remoting.Provider.options.schema.json')) {
+              $RequiredDistroPayloadPath = Join-Path $DistroPayloadSourcePath $RequiredDistroPayloadFile
+              if (-not (Test-Path $RequiredDistroPayloadPath -PathType Leaf)) {
+                throw "Missing required PowerShell distro payload file for $Rid`: $RequiredDistroPayloadPath"
+              }
             }
-            Copy-Item -LiteralPath $PwshXmlPath -Destination (Join-Path $DistroPayloadDestinationPath 'pwsh.xml') -Force
+            Copy-Item -Path (Join-Path $DistroPayloadSourcePath '*') -Destination $DistroPayloadDestinationPath -Recurse -Force
           }
 
           $BuildTransitivePath = Join-Path $SdkStagePath "buildTransitive"
