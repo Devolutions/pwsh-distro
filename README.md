@@ -28,10 +28,10 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 
 | Component | Version |
 | --- | --- |
-| PowerShell upstream release | `7.6.6` / `v7.6.6` |
-| PowerShell downstream source ref | `downstream/v7.6.6` based on `upstream/v7.6.6` |
+| PowerShell upstream release | `7.6.7` / `v7.6.7` |
+| PowerShell downstream source ref | `downstream/v7.6.7` based on `upstream/v7.6.7` |
 | PowerShell target framework | `net10.0` |
-| PowerShell SDK package | `Devolutions.PowerShell.SDK` / `7.6.6.0` workflow default; `7.6.3.2` latest published package |
+| PowerShell SDK package | `Devolutions.PowerShell.SDK` / `7.6.7.0` workflow default; `7.6.3.2` latest published package |
 | Latest downstream release tag | `v7.6.3.2` |
 | Latest PowerShell CLI release assets | `PowerShell-7.6.3-<os>-<arch>.tar.gz` for Windows, macOS, and Linux on x64 and arm64 |
 | PowerShell SDK package source | `https://api.nuget.org/v3/index.json` |
@@ -42,6 +42,19 @@ The local script writes under `output\local-sdk\<rid>\` and produces a single-RI
 | llvm-prebuilt | `v2026.1.1` |
 | clang+llvm | `22.1.4` |
 | VsDevShell | `latest from PSGallery` |
+
+The `downstream/v7.6.7` source branch carries the existing downstream patches and
+updates `System.Security.Cryptography.Pkcs` and `System.Security.Cryptography.Xml`
+to `10.0.13`. Upstream PowerShell 7.6.7 still pins both SDK dependencies to the
+vulnerable `10.0.10` versions. The downstream SDK package uses the patched source
+dependency versions, and the engine also pins Pkcs to `10.0.13` for direct builds.
+These updates address [CVE-2026-70162](https://github.com/advisories/GHSA-2fmv-rv2c-59x7),
+[CVE-2026-84008](https://github.com/advisories/GHSA-846f-f764-76mx),
+[CVE-2026-96958](https://github.com/advisories/GHSA-r955-8q5j-3h83),
+[CVE-2026-96959](https://github.com/advisories/GHSA-c399-9853-6jmj), and
+[CVE-2026-96960](https://github.com/advisories/GHSA-7hqp-7c5m-4vq6).
+Framework-dependent applications must also use .NET 10.0.13 or later; updating
+package dependencies does not patch an installed shared runtime.
 
 ## Getting started with release artifacts
 
