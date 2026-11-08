@@ -143,3 +143,5 @@ exit 0
 } finally {
   Remove-Item -LiteralPath $WorkRoot -Recurse -Force
 }
+
+exit 0
