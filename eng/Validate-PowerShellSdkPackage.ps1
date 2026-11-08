@@ -23,6 +23,17 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+$RetainedSdkDependencies = @(
+  'System.Data.Odbc',
+  'System.Data.OleDb',
+  'System.Data.SqlClient',
+  'System.DirectoryServices.AccountManagement',
+  'System.IO.Ports',
+  'System.Runtime.Caching',
+  'System.ServiceModel.Http',
+  'System.Speech'
+)
+
 function Get-DefaultRuntimeIdentifier {
   $Architecture = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
     'X64' { 'x64'; break }
@@ -1787,18 +1798,28 @@ try {
     }
   }
 
-  if ($PackageVendorName) {
-    $NuspecEntry = $Zip.Entries |
-      Where-Object { $_.FullName -like '*.nuspec' -and $_.FullName -notlike '*/*' } |
-      Select-Object -First 1
-    if (-not $NuspecEntry) {
-      throw "SDK package is missing a root nuspec"
+  $NuspecEntry = $Zip.Entries |
+    Where-Object { $_.FullName -like '*.nuspec' -and $_.FullName -notlike '*/*' } |
+    Select-Object -First 1
+  if (-not $NuspecEntry) {
+    throw "SDK package is missing a root nuspec"
+  }
+
+  [xml] $Nuspec = Read-ZipEntryText -Entry $NuspecEntry
+  $NamespaceManager = [System.Xml.XmlNamespaceManager]::new($Nuspec.NameTable)
+  $NamespaceManager.AddNamespace('n', $Nuspec.DocumentElement.NamespaceURI)
+  $NuspecDependencies = @($Nuspec.SelectNodes('/n:package/n:metadata/n:dependencies//n:dependency', $NamespaceManager))
+  $NuspecDependencyIds = @($NuspecDependencies | ForEach-Object { [string] $_.id })
+  if ($NuspecDependencyIds -contains 'Microsoft.Windows.Compatibility') {
+    throw 'SDK package nuspec must not reference Microsoft.Windows.Compatibility.'
+  }
+  foreach ($DependencyId in $RetainedSdkDependencies) {
+    if ($NuspecDependencyIds -notcontains $DependencyId) {
+      throw "SDK package nuspec is missing retained dependency: $DependencyId"
     }
+  }
 
-    [xml] $Nuspec = Read-ZipEntryText -Entry $NuspecEntry
-    $NamespaceManager = [System.Xml.XmlNamespaceManager]::new($Nuspec.NameTable)
-    $NamespaceManager.AddNamespace('n', $Nuspec.DocumentElement.NamespaceURI)
-
+  if ($PackageVendorName) {
     $NuspecPackageId = Get-NuspecMetadataValue -Nuspec $Nuspec -NamespaceManager $NamespaceManager -Name 'id'
     if ($NuspecPackageId -ne $PackageId) {
       throw "SDK package nuspec id is '$NuspecPackageId', expected '$PackageId'"
@@ -1820,7 +1841,7 @@ try {
     }
 
     $OriginalDependencies = @(
-      $Nuspec.SelectNodes('/n:package/n:metadata/n:dependencies//n:dependency', $NamespaceManager) |
+      $NuspecDependencies |
         Where-Object { $EmbeddedPowerShellPackageIds -contains [string] $_.id } |
         ForEach-Object { [string] $_.id }
     )
@@ -1879,10 +1900,31 @@ using System;
 using System.Management.Automation;
 
 using PowerShell ps = PowerShell.Create();
-ps.AddScript("$PSVersionTable.PSVersion.ToString()");
+ps.AddScript(@"
+$ErrorActionPreference = 'Stop'
+if ($IsWindows) {
+    $null = [System.Data.Odbc.OdbcConnection]
+    $null = [System.Data.OleDb.OleDbConnection]
+    $null = [System.Data.SqlClient.SqlConnection]
+    $null = [System.DirectoryServices.AccountManagement.PrincipalContext]
+    $null = [System.IO.Ports.SerialPort]
+    $null = [System.Runtime.Caching.MemoryCache]
+    $null = [System.ServiceModel.BasicHttpBinding]
+    $null = [System.Speech.Synthesis.SpeechSynthesizer]
+}
+$PSVersionTable.PSVersion.ToString()
+");
 foreach (PSObject result in ps.Invoke())
 {
     Console.WriteLine(result);
+}
+if (ps.HadErrors)
+{
+    foreach (ErrorRecord error in ps.Streams.Error)
+    {
+        Console.Error.WriteLine(error);
+    }
+    Environment.Exit(1);
 }
 '@
   Set-Content -Path (Join-Path $SampleDirectory 'Program.cs') -Value $Program -Encoding utf8
@@ -1914,6 +1956,14 @@ foreach (PSObject result in ps.Invoke())
     $Assets.libraries.PSObject.Properties.Name |
       ForEach-Object { ($_ -split '/', 2)[0] }
   )
+  if ($RestoredPackageIds -contains 'Microsoft.Windows.Compatibility') {
+    throw 'SDK sample restore graph must not include Microsoft.Windows.Compatibility.'
+  }
+  foreach ($DependencyId in $RetainedSdkDependencies) {
+    if ($RestoredPackageIds -notcontains $DependencyId) {
+      throw "SDK sample restore graph is missing retained dependency: $DependencyId"
+    }
+  }
   $RestoredOriginalPowerShellPackageIds = @(
     $RestoredPackageIds |
       Where-Object { $EmbeddedPowerShellPackageIds -contains $_ }

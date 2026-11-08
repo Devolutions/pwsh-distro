@@ -765,6 +765,11 @@ try {
       -SourceBuiltDependencyVersions $SourceBuiltDependencyVersions
   }
 
+  # Retain the source project's full type catalog while omitting the meta-package from consumers.
+  foreach ($Dependencies in @($DependencyGroups.Values)) {
+    $Dependencies.Remove('Microsoft.Windows.Compatibility')
+  }
+
   Copy-PackagePayload -SourceRoot $ExtractedPackageRoots[$OriginalPackageId] -DestinationRoot $PackageRootPath
 
   $OriginalNuspecPath = Get-NuspecPath -PackageRootPath $PackageRootPath

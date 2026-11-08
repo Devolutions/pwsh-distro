@@ -162,6 +162,37 @@ function Get-PowerShellTargetFramework {
   return [string] $TargetFramework
 }
 
+function Get-PowerShellWindowsCompatibilityVersion {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Root
+  )
+
+  $SdkProjectPath = Join-Path $Root 'pwsh-src\src\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj'
+  if (-not (Test-Path -LiteralPath $SdkProjectPath -PathType Leaf)) {
+    throw "PowerShell SDK project was not found. Initialize the pwsh-src submodule first: $SdkProjectPath"
+  }
+
+  [xml] $SdkProject = Get-Content -LiteralPath $SdkProjectPath -Raw
+  $References = @($SdkProject.SelectNodes("//*[local-name()='PackageReference' and @Include='Microsoft.Windows.Compatibility']"))
+  if ($References.Count -ne 1) {
+    throw "Expected one Microsoft.Windows.Compatibility reference in $SdkProjectPath, found $($References.Count)."
+  }
+
+  $Version = $References[0].GetAttribute('Version')
+  if ([string]::IsNullOrWhiteSpace($Version)) {
+    $VersionElement = $References[0].SelectSingleNode("*[local-name()='Version']")
+    if ($VersionElement) {
+      $Version = $VersionElement.InnerText
+    }
+  }
+  if ([string]::IsNullOrWhiteSpace($Version) -or $Version.Contains('$(')) {
+    throw "Microsoft.Windows.Compatibility must have an explicit version in $SdkProjectPath."
+  }
+
+  return $Version
+}
+
 function Get-PowerShellExecutableName {
   param(
     [Parameter(Mandatory)]
@@ -624,6 +655,7 @@ function Get-RequiredDistroRelativePaths {
     'pwsh.xml',
     'System.Management.Automation.dll',
     'System.Management.Automation.xml',
+    'System.Web.Services.Description.dll',
     'Microsoft.PowerShell.Commands.Management.xml',
     'Microsoft.PowerShell.ConsoleHost.dll',
     'Schemas/PSMaml/Maml.xsd'
@@ -703,6 +735,11 @@ function Test-PowerShellDistroLayout {
   $ActualVersion = [string] ($PwshOutput | Select-Object -Last 1)
   if ($ActualVersion.Trim() -ne $ExpectedVersion) {
     throw "$PwshPath reported PowerShell version '$ActualVersion', expected '$ExpectedVersion'"
+  }
+
+  & $PwshPath -NoLogo -NoProfile -NonInteractive -Command '$ErrorActionPreference = "Stop"; $null = [System.Web.Services.Description.ServiceDescription]'
+  if ($LASTEXITCODE -ne 0) {
+    throw "$PwshPath failed the web-service compatibility type probe with exit code $LASTEXITCODE"
   }
 
   if ($Rid -like 'win-*') {
@@ -791,6 +828,7 @@ if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
 $RepositoryRootPath = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 Assert-SdkPackageVersion -ExpectedPowerShellVersion $PowerShellVersion -ActualPackageVersion $PackageVersion
 $TargetFramework = Get-PowerShellTargetFramework -Root $RepositoryRootPath
+$WindowsCompatibilityVersion = Get-PowerShellWindowsCompatibilityVersion -Root $RepositoryRootPath
 $ExecutableName = Get-PowerShellExecutableName -Rid $RuntimeIdentifier
 $OutputDirectoryPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
 if ([string]::IsNullOrWhiteSpace($ArchivePath)) {
@@ -824,6 +862,7 @@ try {
   $EscapedTargetFramework = ConvertTo-XmlAttributeValue $TargetFramework
   $EscapedRuntimeIdentifier = ConvertTo-XmlAttributeValue $RuntimeIdentifier
   $EscapedHostBaseName = ConvertTo-XmlAttributeValue $HostBaseName
+  $EscapedWindowsCompatibilityVersion = ConvertTo-XmlAttributeValue $WindowsCompatibilityVersion
   $EscapedConfigMode = if ($RuntimeIdentifier -like 'win-*') { 'Copy' } else { 'None' }
 
   $ProjectXml = @"
@@ -844,6 +883,7 @@ try {
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="$EscapedPackageId" Version="$EscapedPackageVersion" />
+    <PackageReference Include="Microsoft.Windows.Compatibility" Version="$EscapedWindowsCompatibilityVersion" />
   </ItemGroup>
 </Project>
 "@
