@@ -1260,8 +1260,8 @@ jobs:
           $RealPublish = -not $DryRun -and -not $SkipPublish
           $ShouldSign = $HasSigningSecrets -and ($RealPublish -or $SignDryRun)
 
-          if ($RealPublish -and -not $HasSigningSecrets) {
-            throw "Azure Key Vault code signing secrets are required for non-dry-run release signing."
+          if (($RealPublish -or $SignDryRun) -and -not $HasSigningSecrets) {
+            throw "Azure Key Vault code signing secrets and timestamp configuration are required for release signing or sign-dry-run. Configure the selected signing environment."
           }
 
           echo "should_sign=$($ShouldSign.ToString().ToLower())" >> $Env:GITHUB_OUTPUT

@@ -86,7 +86,30 @@ Remove-Item -LiteralPath $WorkRootPath -Recurse -Force -ErrorAction SilentlyCont
 New-Item -Path $ExtractRoot -ItemType Directory -Force | Out-Null
 
 try {
-  Invoke-NativeCommand tar @('-xzf', $ArchiveFullPath, '-C', $ExtractRoot)
+  $InputFile = [System.IO.File]::OpenRead($ArchiveFullPath)
+  $InputGzip = [System.IO.Compression.GZipStream]::new($InputFile, [System.IO.Compression.CompressionMode]::Decompress)
+  $Reader = [System.Formats.Tar.TarReader]::new($InputGzip)
+  try {
+    while ($Entry = $Reader.GetNextEntry()) {
+      $Name = $Entry.Name -replace '^(\./)+', ''
+      if ($Name.Contains('/') -or $Name.Contains('\') -or
+          $Entry.EntryType -notin @([System.Formats.Tar.TarEntryType]::RegularFile, [System.Formats.Tar.TarEntryType]::V7RegularFile) -or
+          [System.IO.Path]::GetExtension($Name).ToLowerInvariant() -notin @('.dll', '.exe') -or
+          @($IncludeFilter | Where-Object { $_ -and $Name -like $_ }).Count -eq 0) {
+        continue
+      }
+      $Target = [System.IO.File]::Create((Join-Path $ExtractRoot $Name))
+      try {
+        $Entry.DataStream.CopyTo($Target)
+      } finally {
+        $Target.Dispose()
+      }
+    }
+  } finally {
+    $Reader.Dispose()
+    $InputGzip.Dispose()
+    $InputFile.Dispose()
+  }
 
   $SigningTargets = @(
     Get-ChildItem -LiteralPath $ExtractRoot -File |
@@ -129,7 +152,43 @@ try {
   }
 
   Remove-Item -LiteralPath $SignedArchivePath -Force -ErrorAction SilentlyContinue
-  Invoke-NativeCommand tar @('-czf', $SignedArchivePath, '-C', $ExtractRoot, '.')
+  $InputFile = [System.IO.File]::OpenRead($ArchiveFullPath)
+  $InputGzip = [System.IO.Compression.GZipStream]::new($InputFile, [System.IO.Compression.CompressionMode]::Decompress)
+  $Reader = [System.Formats.Tar.TarReader]::new($InputGzip)
+  $OutputFile = [System.IO.File]::Create($SignedArchivePath)
+  $OutputGzip = [System.IO.Compression.GZipStream]::new($OutputFile, [System.IO.Compression.CompressionLevel]::Optimal)
+  $Writer = [System.Formats.Tar.TarWriter]::new($OutputGzip)
+  try {
+    while ($Entry = $Reader.GetNextEntry($true)) {
+      $OriginalStream = $Entry.DataStream
+      try {
+        $Name = $Entry.Name -replace '^(\./)+', ''
+        $SignedTarget = $SigningTargets | Where-Object { $_.Name -ceq $Name } | Select-Object -First 1
+        if ($SignedTarget) {
+          $SignedStream = [System.IO.File]::OpenRead($SignedTarget.FullName)
+          try {
+            $Entry.DataStream = $SignedStream
+            $Writer.WriteEntry($Entry)
+          } finally {
+            $SignedStream.Dispose()
+          }
+        } else {
+          $Writer.WriteEntry($Entry)
+        }
+      } finally {
+        if ($OriginalStream) {
+          $OriginalStream.Dispose()
+        }
+      }
+    }
+  } finally {
+    $Writer.Dispose()
+    $OutputGzip.Dispose()
+    $OutputFile.Dispose()
+    $Reader.Dispose()
+    $InputGzip.Dispose()
+    $InputFile.Dispose()
+  }
   Move-Item -LiteralPath $SignedArchivePath -Destination $ArchiveFullPath -Force
   Write-Host "Repacked signed CLI archive: $ArchiveFullPath"
 } finally {
