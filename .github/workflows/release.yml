@@ -96,8 +96,8 @@ jobs:
     secrets: inherit
 
   prepare-cli:
-    name: Prepare release CLI archives
-    runs-on: ubuntu-24.04
+    name: Prepare release CLI archives and MSI installers
+    runs-on: windows-2025
     needs: [sdk, cli]
     if: ${{ always() && needs.cli.result == 'success' }}
     environment: ${{ needs.sdk.outputs.package-env }}
@@ -105,10 +105,18 @@ jobs:
       actions: read
       contents: read
     steps:
+      - name: Enable Windows long path support
+        run: git config --system core.longpaths true
+
       - name: Clone project with PowerShell submodule
         uses: actions/checkout@v7.0.0
         with:
           submodules: true
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5.3.0
+        with:
+          global-json-file: pwsh-src/global.json
 
       - name: Download PowerShell CLI packages
         uses: actions/download-artifact@v8.0.1
@@ -125,8 +133,12 @@ jobs:
             throw "Expected exactly six PowerShell CLI archives, found $($CliArchives.Count)."
           }
 
+      - name: Test archive signing metadata preservation
+        shell: pwsh
+        run: ./eng/Test-SignPowerShellDistroArchive.ps1
+
       - name: Install pinned psign tool
-        if: ${{ fromJSON(needs.sdk.outputs.code-signed) && inputs.ready_to_run }}
+        if: ${{ fromJSON(needs.sdk.outputs.code-signed) }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -167,8 +179,52 @@ jobs:
           path: cli-assets/PowerShell-*.tar.gz
           if-no-files-found: error
 
+      - name: Build, sign, and verify PowerShell MSI installers
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ needs.sdk.outputs.sdk-package-version }}
+          SIGN_MSI: ${{ needs.sdk.outputs.code-signed }}
+          CODE_SIGNING_KEYVAULT_URL: ${{ secrets.CODE_SIGNING_KEYVAULT_URL }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          CODE_SIGNING_CLIENT_ID: ${{ secrets.CODE_SIGNING_CLIENT_ID }}
+          CODE_SIGNING_CLIENT_SECRET: ${{ secrets.CODE_SIGNING_CLIENT_SECRET }}
+          CODE_SIGNING_CERTIFICATE_NAME: ${{ secrets.CODE_SIGNING_CERTIFICATE_NAME }}
+          CODE_SIGNING_TIMESTAMP_SERVER: ${{ vars.CODE_SIGNING_TIMESTAMP_SERVER }}
+        run: |
+          & ./package/msi/New-ReleasePowerShellDistroMsi.ps1 `
+            -ArchiveDirectory ./cli-assets -PackageVersion $Env:PACKAGE_VERSION `
+            -SignMsi:([bool]::Parse($Env:SIGN_MSI))
+
+      - name: Upload x64 PowerShell MSI
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-x64-msi
+          path: output/msi/Devolutions-PowerShell-*-win-x64.msi
+          if-no-files-found: error
+
+      - name: Upload ARM64 PowerShell MSI
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-arm64-msi
+          path: output/msi/Devolutions-PowerShell-*-win-arm64.msi
+          if-no-files-found: error
+
+      - name: Upload x64 previous-layout MSI test fixture
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: Devolutions-PowerShell-legacy-${{ needs.sdk.outputs.sdk-package-version }}-win-x64-msi
+          path: output/legacy-msi/Devolutions-PowerShell-*-win-x64.msi
+          if-no-files-found: error
+
+      - name: Upload ARM64 previous-layout MSI test fixture
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: Devolutions-PowerShell-legacy-${{ needs.sdk.outputs.sdk-package-version }}-win-arm64-msi
+          path: output/legacy-msi/Devolutions-PowerShell-*-win-arm64.msi
+          if-no-files-found: error
+
   msi:
-    name: Build PowerShell MSI
+    name: Validate PowerShell MSI
     needs: [sdk, prepare-cli]
     if: ${{ always() && needs.prepare-cli.result == 'success' }}
     uses: ./.github/workflows/powershell-msi.yml
@@ -180,6 +236,7 @@ jobs:
       cli_artifact_name: PowerShell-Release-CLI-${{ needs.sdk.outputs.sdk-package-version }}
       sign_msi: ${{ fromJSON(needs.sdk.outputs.code-signed) }}
       github-env: ${{ needs.sdk.outputs.package-env }}
+      prepared_msi_artifacts: true
     secrets: inherit
 
   publish:

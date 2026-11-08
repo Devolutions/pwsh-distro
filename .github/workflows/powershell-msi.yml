@@ -45,6 +45,11 @@ on:
       github-env:
         required: true
         type: string
+      prepared_msi_artifacts:
+        description: Test current-run MSI artifacts already built and signed by release.yml
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -57,6 +62,7 @@ env:
 jobs:
   build:
     name: MSI [win-${{ matrix.arch }}]
+    if: ${{ !inputs.prepared_msi_artifacts }}
     runs-on: windows-2025
     environment: ${{ inputs.github-env }}
     strategy:
@@ -239,6 +245,7 @@ jobs:
   test:
     name: Test MSI install [${{ matrix.arch }}]
     needs: build
+    if: ${{ !cancelled() && (needs.build.result == 'success' || (inputs.prepared_msi_artifacts && needs.build.result == 'skipped')) }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
