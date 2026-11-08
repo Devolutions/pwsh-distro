@@ -15,7 +15,12 @@ param(
 
   [string] $PackageId = 'Devolutions.PowerShell.SDK',
 
+  [string] $StandardPackageId = 'Devolutions.PowerShell.SDK',
+
   [string] $PackageVendorName = 'Devolutions',
+
+  [ValidateSet('Standard', 'Slim')]
+  [string] $DependencyProfile = 'Standard',
 
   [switch] $SkipRuntimeExecution
 )
@@ -33,6 +38,64 @@ $RetainedSdkDependencies = @(
   'System.ServiceModel.Http',
   'System.Speech'
 )
+
+$SlimOmittedSdkDependencies = @(
+  'System.ComponentModel.Composition',
+  'System.ComponentModel.Composition.Registration',
+  'System.Data.Odbc',
+  'System.Data.OleDb',
+  'System.Data.SqlClient',
+  'System.DirectoryServices.AccountManagement',
+  'System.DirectoryServices.Protocols',
+  'System.IO.Ports',
+  'System.Net.Http.WinHttpHandler',
+  'System.Reflection.Context',
+  'System.Runtime.Caching',
+  'System.Security.Cryptography.Xml',
+  'System.ServiceModel.Http',
+  'System.ServiceModel.NetFramingBase',
+  'System.ServiceModel.NetTcp',
+  'System.ServiceModel.Primitives',
+  'System.ServiceModel.Syndication',
+  'System.Speech'
+)
+
+function Assert-SlimDependenciesAbsent {
+  param(
+    [Parameter(Mandatory)]
+    [AllowEmptyCollection()]
+    [string[]] $DependencyIds,
+
+    [Parameter(Mandatory)]
+    [string] $Description
+  )
+
+  $Unexpected = @(
+    $DependencyIds | Where-Object {
+      $_ -in $SlimOmittedSdkDependencies -or $_ -match '^runtime\..*System\.IO\.Ports$'
+    }
+  )
+  if ($Unexpected.Count -gt 0) {
+    throw "$Description contains optional dependencies omitted by the slim SDK: $($Unexpected -join ', ')"
+  }
+}
+
+function Assert-SlimOptionalAssembliesAbsent {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Directory,
+
+    [Parameter(Mandatory)]
+    [string] $Description
+  )
+
+  foreach ($DependencyId in $SlimOmittedSdkDependencies) {
+    $UnexpectedFiles = @(Get-ChildItem -LiteralPath $Directory -Filter "$DependencyId.dll" -Recurse -File)
+    if ($UnexpectedFiles.Count -gt 0) {
+      throw "$Description contains optional assembly '$($UnexpectedFiles[0].FullName)'."
+    }
+  }
+}
 
 function Get-DefaultRuntimeIdentifier {
   $Architecture = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
@@ -1667,7 +1730,106 @@ function Get-NormalizedNuGetPackageVersion {
     return "$($Version.Major).$($Version.Minor).$($Version.Build)"
   }
 
-  return $PackageVersion
+  return $Version.ToString()
+}
+
+function Invoke-SlimExplicitDependencyProbe {
+  param(
+    [Parameter(Mandatory)]
+    [string] $ProjectPath,
+
+    [Parameter(Mandatory)]
+    [string] $StandardPackagePath,
+
+    [Parameter(Mandatory)]
+    [string] $StandardPackageId,
+
+    [Parameter(Mandatory)]
+    [string] $NuGetConfigPath,
+
+    [Parameter(Mandatory)]
+    [string] $OutputDirectory,
+
+    [Parameter(Mandatory)]
+    [string] $ExpectedPowerShellVersion,
+
+    [switch] $SkipRuntimeExecution
+  )
+
+  $Zip = [System.IO.Compression.ZipFile]::OpenRead($StandardPackagePath)
+  try {
+    $NuspecEntry = $Zip.GetEntry("$StandardPackageId.nuspec")
+    if (-not $NuspecEntry) {
+      throw "Standard SDK package is missing '$StandardPackageId.nuspec'."
+    }
+    [xml] $StandardNuspec = Read-ZipEntryText -Entry $NuspecEntry
+    $Namespaces = [System.Xml.XmlNamespaceManager]::new($StandardNuspec.NameTable)
+    $Namespaces.AddNamespace('n', $StandardNuspec.DocumentElement.NamespaceURI)
+    foreach ($DependencyId in @('System.Data.SqlClient', 'System.ServiceModel.Http', 'System.Security.Cryptography.Xml')) {
+      $Dependencies = @($StandardNuspec.SelectNodes("/n:package/n:metadata/n:dependencies//n:dependency[@id='$DependencyId']", $Namespaces))
+      $Versions = @($Dependencies | ForEach-Object { $_.GetAttribute('version') } | Sort-Object -Unique)
+      if ($Versions.Count -ne 1 -or [string]::IsNullOrWhiteSpace($Versions[0])) {
+        throw "Expected one version of '$DependencyId' in the standard SDK package."
+      }
+      Invoke-DotNet @('add', $ProjectPath, 'package', $DependencyId, '--version', $Versions[0], '--no-restore')
+    }
+  } finally {
+    $Zip.Dispose()
+  }
+
+  $Program = @'
+using System;
+using System.Management.Automation;
+
+using PowerShell ps = PowerShell.Create();
+ps.AddScript(@"
+$ErrorActionPreference = 'Stop'
+$null = [System.Data.SqlClient.SqlConnection]
+$null = [System.ServiceModel.BasicHttpBinding]
+$null = [System.Security.Cryptography.Xml.SignedXml]
+$PSVersionTable.PSVersion.ToString()
+");
+foreach (PSObject result in ps.Invoke())
+{
+    Console.WriteLine(result);
+}
+if (ps.HadErrors)
+{
+    foreach (ErrorRecord error in ps.Streams.Error)
+    {
+        Console.Error.WriteLine(error);
+    }
+    Environment.Exit(1);
+}
+'@
+  Set-Content -LiteralPath (Join-Path (Split-Path $ProjectPath -Parent) 'Program.cs') -Value $Program -Encoding utf8
+  Invoke-DotNet @('restore', $ProjectPath, '--configfile', $NuGetConfigPath, '--verbosity', 'minimal')
+  $Assets = Get-Content -LiteralPath (Join-Path (Split-Path $ProjectPath -Parent) 'obj/project.assets.json') -Raw | ConvertFrom-Json
+  $RestoredPackageIds = @($Assets.libraries.PSObject.Properties.Name | ForEach-Object { ($_ -split '/', 2)[0] })
+  foreach ($DependencyId in @('System.Data.SqlClient', 'System.ServiceModel.Http', 'System.Security.Cryptography.Xml')) {
+    if ($RestoredPackageIds -notcontains $DependencyId) {
+      throw "Slim SDK consumer did not restore its explicit dependency '$DependencyId'."
+    }
+  }
+  if ($RestoredPackageIds -contains 'System.Data.Odbc') {
+    throw 'Adding selected dependencies unexpectedly restored System.Data.Odbc.'
+  }
+  Invoke-DotNet @('build', $ProjectPath, '--no-restore', '--nologo', '--verbosity', 'minimal')
+  foreach ($AssemblyName in @('System.Data.SqlClient.dll', 'System.ServiceModel.Http.dll', 'System.Security.Cryptography.Xml.dll')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $OutputDirectory $AssemblyName) -PathType Leaf)) {
+      throw "Slim SDK consumer output is missing explicitly referenced '$AssemblyName'."
+    }
+  }
+  if (-not $SkipRuntimeExecution) {
+    $Output = & dotnet run --project $ProjectPath --no-build
+    if ($LASTEXITCODE -ne 0) {
+      throw "Slim SDK explicit-dependency sample failed with exit code $LASTEXITCODE."
+    }
+    if ([string] ($Output | Select-Object -Last 1) -ne $ExpectedPowerShellVersion) {
+      throw 'Slim SDK explicit-dependency sample reported an unexpected PowerShell version.'
+    }
+  }
+  Write-Host 'PASS Invoke-SlimExplicitDependencyProbe: selected packages restore, build, and remain available to PowerShell.'
 }
 
 if (-not $RuntimeIdentifier) {
@@ -1680,11 +1842,23 @@ Assert-SdkPackageVersion -PowerShellVersion $PowerShellVersion -PackageVersion $
 $NormalizedPackageVersion = Get-NormalizedNuGetPackageVersion -PackageVersion $PackageVersion
 
 $PackageDirectoryPath = (Resolve-Path -LiteralPath $PackageDirectory).Path
-$Package = Get-ChildItem -LiteralPath $PackageDirectoryPath -Filter "$PackageId.$NormalizedPackageVersion*.nupkg" |
+$Package = Get-ChildItem -LiteralPath $PackageDirectoryPath -Filter "$PackageId.$NormalizedPackageVersion.nupkg" -File |
   Sort-Object LastWriteTime -Descending |
   Select-Object -First 1
 if (-not $Package) {
   throw "Unable to find $PackageId.$PackageVersion nupkg in $PackageDirectoryPath"
+}
+if ($DependencyProfile -eq 'Slim') {
+  $StandardPackage = Get-ChildItem -LiteralPath $PackageDirectoryPath -Filter "$StandardPackageId.$NormalizedPackageVersion.nupkg" -File |
+    Select-Object -First 1
+  if (-not $StandardPackage) {
+    throw "Unable to find standard SDK package $StandardPackageId.$PackageVersion in $PackageDirectoryPath."
+  }
+  & (Join-Path $PSScriptRoot 'Test-PowerShellSdkSlimPackage.ps1') `
+    -StandardPackagePath $StandardPackage.FullName `
+    -SlimPackagePath $Package.FullName `
+    -StandardPackageId $StandardPackageId `
+    -SlimPackageId $PackageId
 }
 
 $FallbackEmbeddedPowerShellPackageIds = @(
@@ -1813,9 +1987,16 @@ try {
   if ($NuspecDependencyIds -contains 'Microsoft.Windows.Compatibility') {
     throw 'SDK package nuspec must not reference Microsoft.Windows.Compatibility.'
   }
-  foreach ($DependencyId in $RetainedSdkDependencies) {
-    if ($NuspecDependencyIds -notcontains $DependencyId) {
-      throw "SDK package nuspec is missing retained dependency: $DependencyId"
+  if ($NuspecDependencyIds -notcontains 'System.Security.Cryptography.ProtectedData') {
+    throw 'SDK package nuspec must retain System.Security.Cryptography.ProtectedData for PowerShell secure-string encryption.'
+  }
+  if ($DependencyProfile -eq 'Slim') {
+    Assert-SlimDependenciesAbsent -DependencyIds $NuspecDependencyIds -Description 'Slim SDK package nuspec'
+  } else {
+    foreach ($DependencyId in $RetainedSdkDependencies) {
+      if ($NuspecDependencyIds -notcontains $DependencyId) {
+        throw "SDK package nuspec is missing retained dependency: $DependencyId"
+      }
     }
   }
 
@@ -1895,14 +2076,8 @@ try {
 "@
   Set-Content -Path (Join-Path $SampleDirectory 'nuget.config') -Value $NuGetConfig -Encoding utf8
 
-  $Program = @'
-using System;
-using System.Management.Automation;
-
-using PowerShell ps = PowerShell.Create();
-ps.AddScript(@"
-$ErrorActionPreference = 'Stop'
-if ($IsWindows) {
+  $CompatibilityTypeProbe = if ($DependencyProfile -eq 'Standard') {
+@'
     $null = [System.Data.Odbc.OdbcConnection]
     $null = [System.Data.OleDb.OleDbConnection]
     $null = [System.Data.SqlClient.SqlConnection]
@@ -1911,6 +2086,25 @@ if ($IsWindows) {
     $null = [System.Runtime.Caching.MemoryCache]
     $null = [System.ServiceModel.BasicHttpBinding]
     $null = [System.Speech.Synthesis.SpeechSynthesizer]
+'@
+  } else {
+    ''
+  }
+  $Program = @'
+using System;
+using System.Management.Automation;
+
+using PowerShell ps = PowerShell.Create();
+ps.AddScript(@"
+$ErrorActionPreference = 'Stop'
+if ($IsWindows) {
+__COMPATIBILITY_TYPE_PROBE__
+    $secret = ConvertTo-SecureString 'sdk-validation' -AsPlainText -Force
+    $encrypted = ConvertFrom-SecureString -SecureString $secret
+    $roundTrip = ConvertTo-SecureString -String $encrypted
+    if ([System.Net.NetworkCredential]::new('', $roundTrip).Password -ne 'sdk-validation') {
+        throw 'PowerShell secure-string encryption did not round-trip.'
+    }
 }
 $PSVersionTable.PSVersion.ToString()
 ");
@@ -1927,6 +2121,7 @@ if (ps.HadErrors)
     Environment.Exit(1);
 }
 '@
+  $Program = $Program.Replace('__COMPATIBILITY_TYPE_PROBE__', $CompatibilityTypeProbe)
   Set-Content -Path (Join-Path $SampleDirectory 'Program.cs') -Value $Program -Encoding utf8
 
   [xml] $Project = Get-Content -LiteralPath $ProjectPath
@@ -1959,9 +2154,16 @@ if (ps.HadErrors)
   if ($RestoredPackageIds -contains 'Microsoft.Windows.Compatibility') {
     throw 'SDK sample restore graph must not include Microsoft.Windows.Compatibility.'
   }
-  foreach ($DependencyId in $RetainedSdkDependencies) {
-    if ($RestoredPackageIds -notcontains $DependencyId) {
-      throw "SDK sample restore graph is missing retained dependency: $DependencyId"
+  if ($RestoredPackageIds -notcontains 'System.Security.Cryptography.ProtectedData') {
+    throw 'SDK sample restore graph is missing required System.Security.Cryptography.ProtectedData.'
+  }
+  if ($DependencyProfile -eq 'Slim') {
+    Assert-SlimDependenciesAbsent -DependencyIds $RestoredPackageIds -Description 'Slim SDK sample restore graph'
+  } else {
+    foreach ($DependencyId in $RetainedSdkDependencies) {
+      if ($RestoredPackageIds -notcontains $DependencyId) {
+        throw "SDK sample restore graph is missing retained dependency: $DependencyId"
+      }
     }
   }
   $RestoredOriginalPowerShellPackageIds = @(
@@ -1994,6 +2196,9 @@ if (ps.HadErrors)
   Invoke-DotNet @('build', $ProjectPath, '--no-restore', '--nologo', '--verbosity', 'minimal')
 
   $OutputDirectory = Join-Path $SampleDirectory (Join-Path 'bin' (Join-Path 'Debug' (Join-Path $SampleTargetFramework $RuntimeIdentifier)))
+  if ($DependencyProfile -eq 'Slim') {
+    Assert-SlimOptionalAssembliesAbsent -Directory $OutputDirectory -Description 'Slim SDK sample build output'
+  }
   Assert-SharedPowerShellOutput -Directory $OutputDirectory -SelfContained $FrameworkDependentAppHostSelfContained -Description 'Sample app output'
   Assert-XmlDocumentationFiles -Directory $OutputDirectory -RelativePaths $XmlDocumentationOutputRelativePaths -Present $false -Description 'Sample app output before XML documentation opt-in'
   Assert-PowerShellConfig -Directory $OutputDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample app output'
@@ -2088,6 +2293,9 @@ if (ps.HadErrors)
   Invoke-DotNet @('publish', $ProjectPath, '--nologo', '--verbosity', 'minimal', '-c', 'Release', '-r', $RuntimeIdentifier, '--self-contained', 'true')
 
   $PublishDirectory = Join-Path $SampleDirectory (Join-Path 'bin' (Join-Path 'Release' (Join-Path $SampleTargetFramework (Join-Path $RuntimeIdentifier 'publish'))))
+  if ($DependencyProfile -eq 'Slim') {
+    Assert-SlimOptionalAssembliesAbsent -Directory $PublishDirectory -Description 'Slim SDK sample self-contained publish output'
+  }
   Assert-SharedPowerShellOutput -Directory $PublishDirectory -SelfContained $true -Description 'Sample self-contained publish output'
   Assert-XmlDocumentationFiles -Directory $PublishDirectory -RelativePaths $XmlDocumentationOutputRelativePaths -Present $false -Description 'Sample self-contained publish output before XML documentation opt-in'
   Assert-PowerShellConfig -Directory $PublishDirectory -ExpectedExecutionPolicy 'Bypass' -Description 'Sample self-contained publish output'
@@ -2225,6 +2433,17 @@ if (ps.HadErrors)
   Assert-SharedPowerShellOutput -Directory $XmlPublishDirectory -SelfContained $FrameworkDependentAppHostSelfContained -Description 'Sample XML documentation publish output'
   Assert-XmlDocumentationFiles -Directory $XmlPublishDirectory -RelativePaths $XmlDocumentationOutputRelativePaths -Present $true -Description 'Sample XML documentation publish output'
   Assert-XmlDocumentationContentMatches -RestoredSdkPath $RestoredSdkPath -Directory $XmlPublishDirectory -RuntimeAssetGroup $RuntimeAssetGroup -TargetFramework $TargetFramework -RelativePaths $XmlDocumentationOutputRelativePaths -Description 'Sample XML documentation publish output'
+
+  if ($DependencyProfile -eq 'Slim') {
+    Invoke-SlimExplicitDependencyProbe `
+      -ProjectPath $ProjectPath `
+      -StandardPackagePath $StandardPackage.FullName `
+      -StandardPackageId $StandardPackageId `
+      -NuGetConfigPath (Join-Path $SampleDirectory 'nuget.config') `
+      -OutputDirectory $OutputDirectory `
+      -ExpectedPowerShellVersion $PowerShellVersion `
+      -SkipRuntimeExecution:$SkipRuntimeExecution
+  }
 
   Write-Host "Validated $PackageId $PackageVersion from $($Package.FullName)"
   if ($SkipRuntimeExecution) {
