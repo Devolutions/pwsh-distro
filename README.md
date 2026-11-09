@@ -1,6 +1,6 @@
 # pwsh-distro
 
-GitHub Actions workflows for building redistributable PowerShell artifacts from upstream or downstream-patched source. The primary targets are the standard and slim vendored PowerShell SDK packages, and the secondary target is a self-contained PowerShell distribution archive repackaged from the standard SDK.
+GitHub Actions workflows for building redistributable PowerShell artifacts from upstream or downstream-patched source. The primary target is the slim-by-default vendored PowerShell SDK package, and the secondary target is a self-contained PowerShell distribution archive repackaged from the SDK.
 
 ## Quick start
 
@@ -22,7 +22,7 @@ To build a local, current-RID SDK package for smoke testing outside Actions:
 .\scripts\Build-LocalPowerShellSdk.ps1 -Validate
 ```
 
-The local script writes under `output\local-sdk\<rid>\` and produces standard and slim single-RID validation packages. The GitHub Actions SDK workflow remains the authoritative multi-RID package build. Pass `-SdkPackageVersion 7.6.3.2` to smoke-test the latest published downstream package while the first 7.6.4 package is being prepared.
+The local script writes a single-RID validation package under `output\local-sdk\<rid>\`. The GitHub Actions SDK workflow remains the authoritative multi-RID package build. Pass `-SdkPackageVersion 7.6.9.1` to smoke-test the latest published downstream package while a newer release is being prepared.
 
 ## Current pins
 
@@ -31,9 +31,9 @@ The local script writes under `output\local-sdk\<rid>\` and produces standard an
 | PowerShell upstream release | `7.6.9` / `v7.6.9` |
 | PowerShell downstream source ref | `downstream/v7.6.9` based on `upstream/v7.6.9` |
 | PowerShell target framework | `net10.0` |
-| PowerShell SDK package | `Devolutions.PowerShell.SDK` / `7.6.9.0` workflow default; `7.6.3.2` latest published package |
-| Latest downstream release tag | `v7.6.3.2` |
-| Latest PowerShell CLI release assets | `PowerShell-7.6.3-<os>-<arch>.tar.gz` for Windows, macOS, and Linux on x64 and arm64 |
+| PowerShell SDK package | `Devolutions.PowerShell.SDK` / `7.6.9.2` workflow default; `7.6.9.1` latest published package |
+| Latest downstream release tag | `v7.6.9.1` |
+| Latest PowerShell CLI release assets | `PowerShell-7.6.9-<os>-<arch>.tar.gz` for Windows, macOS, and Linux on x64 and arm64 |
 | PowerShell SDK package source | `https://api.nuget.org/v3/index.json` |
 | multi-pwsh apphost package | `Devolutions.MultiPwsh.Cli` / `0.14.2` |
 | multi-pwsh apphost package source | `https://api.nuget.org/v3/index.json` |
@@ -168,10 +168,10 @@ SOFTWARE.
 
 | Workflow | Purpose | Output |
 | --- | --- | --- |
-| `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors and signs the source-built payload, and validates the standard and slim SDK packages in a sample .NET app with opt-in apphost import. It can run manually or as a reusable workflow. | `PowerShell-SDK-Release-X.Y.Z.R` artifact containing the standard and slim `.nupkg` files. |
+| `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors and signs the source-built payload, and validates the SDK package in a sample .NET app with opt-in apphost import. It can run manually or as a reusable workflow. | `PowerShell-SDK-Release-X.Y.Z.R` artifact containing the SDK `.nupkg`. |
 | `.github/workflows/powershell-cli.yml` | Restores a pinned or workflow-built `Devolutions.PowerShell.SDK` package, imports its apphost and module payload through MSBuild, publishes a self-contained PowerShell layout, and repackages it for Windows, macOS, and Linux on x64 and arm64. It can run manually or as a reusable workflow. | `PowerShell-7.6.3-<os>-<arch>` `.tar.gz` artifacts; the latest release includes Windows, macOS, and Linux archives for x64 and arm64. |
 | `.github/workflows/powershell-msi.yml` | Packages published Windows CLI archives, CLI workflow artifacts, or the current release's prepared CLI archives, then signs and verifies the MSI when enabled. | `Devolutions-PowerShell-<tag-or-version>-win-<arch>-msi` artifacts containing an x64 or ARM64 `.msi`. |
-| `.github/workflows/release.yml` | Orchestrates the SDK, CLI, and MSI workflows, signs release-ready CLI and MSI artifacts, publishes both SDK packages, and creates the GitHub release. | NuGet.org publish plus GitHub release `vX.Y.Z.R` containing both SDK `.nupkg` files, six CLI `.tar.gz` archives, two signed Windows `.msi` installers, the downstream PowerShell patch, and checksums. |
+| `.github/workflows/release.yml` | Orchestrates the SDK, CLI, and MSI workflows, signs release-ready CLI and MSI artifacts, publishes the SDK package, and creates the GitHub release. | NuGet.org publish plus GitHub release `vX.Y.Z.R` containing the SDK `.nupkg`, six CLI `.tar.gz` archives, two signed Windows `.msi` installers, the downstream PowerShell patch, and checksums. |
 | `.github/workflows/dotnet-runtime.yml` | Builds the .NET runtime tag used by this PowerShell release for Windows, macOS, and Linux on x86_64 and arm64 with prebuilt clang+llvm from `awakecoding/llvm-prebuilt`. It can run manually or as a reusable workflow and uploads a `DotNet-Runtime-<rid>` artifact per matrix entry containing the source-built `Microsoft.NETCore.App.Runtime.<rid>` runtime pack. | `DotNet-Runtime-<rid>` artifacts containing the source-built runtime packs. |
 
 All workflows are manual and can be started from the GitHub Actions **Run workflow** button.
@@ -195,7 +195,7 @@ Manual inputs:
 
 The standalone CLI workflow also has an opt-in `ready_to_run` input that runs a targeted crossgen2 pass over packaged PowerShell managed assemblies after the self-contained layout is assembled. It is disabled by default because ReadyToRun rewrites managed PE files and invalidates existing Authenticode signatures. For signed releases, use `.github/workflows/release.yml` with both signing and `ready_to_run` enabled so the CLI archives are signed after the R2R pass.
 
-Before validation and CLI packaging, the SDK workflow runs a signing stage that downloads the standard `.nupkg`, installs the pinned `Devolutions.Psign.Tool` .NET tool, extracts the package, signs the source-built payloads inside it with Azure Key Vault, and repacks the `.nupkg` without adding a NuGet package signature. The slim package is then derived from that package with the same signed payload and different dependency metadata. The signing pass covers the built PowerShell assemblies in `ref/` and `runtimes/*/lib/`, the apphost payloads in `tools/apphost/*` and `runtimes/*/native`, the Windows desktop payload, and the built-in module manifests/format/script files in `contentFiles/any/any/runtimes/**/Modules/**`. CLI archives use the standard package. A non-dry-run publish requires these environment secrets and variables:
+Before validation and CLI packaging, the SDK workflow runs a signing stage that downloads the `.nupkg`, installs the pinned `Devolutions.Psign.Tool` .NET tool, extracts the package, signs the source-built payloads inside it with Azure Key Vault, and repacks the `.nupkg` without adding a NuGet package signature. The signing pass covers the built PowerShell assemblies in `ref/` and `runtimes/*/lib/`, the apphost payloads in `tools/apphost/*` and `runtimes/*/native`, the Windows desktop payload, and the built-in module manifests/format/script files in `contentFiles/any/any/runtimes/**/Modules/**`. A non-dry-run publish requires these environment secrets and variables:
 
 | Name | Type |
 | --- | --- |
@@ -210,7 +210,7 @@ The complete release workflow uses the existing environments and secrets without
 
 CLI signing replaces only the selected PE entries in each archive, preserving the original tar permissions, ownership, timestamps, and symlinks on Windows as well as Unix hosts. Run `./eng/Test-SignPowerShellDistroArchive.ps1` to exercise payload replacement, Unix metadata preservation, and failure handling without signing credentials.
 
-Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The NuGet trusted publishing policy must include `Devolutions.PowerShell.SDK.Slim` in its scope and allow publishing new package IDs for its first release. The release workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation only in the publishing job. A real publish pushes both validated `.nupkg` files containing signed Windows payloads to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, both SDK package assets, every CLI archive, both signed MSI installers, the generated downstream PowerShell patch file, and a SHA256 checksum file covering all release assets.
+Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The release workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation only in the publishing job. A real publish pushes the validated `.nupkg` containing signed Windows payloads to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the SDK package, every CLI archive, both signed MSI installers, the generated downstream PowerShell patch file, and a SHA256 checksum file covering all release assets.
 
 ## Source-built .NET runtime option
 
@@ -247,13 +247,11 @@ The vendored SDK keeps upstream PowerShell build/runtime metadata separate from 
 
 The package keeps original assembly identities (`System.Management.Automation.dll`, `Microsoft.PowerShell.Commands.Utility.dll`, and related assemblies) so consumers only need to change the NuGet package reference. Source-built PowerShell assemblies are discovered from the current `pwsh-src` build outputs and embedded directly in `Devolutions.PowerShell.SDK`; the package records the embedded Microsoft package IDs and source-built package asset paths under `buildTransitive`, and validation fails if any of those package IDs appear in the restore graph. External packages that are not built by this repository, including `Microsoft.PowerShell.Native` and `Microsoft.PowerShell.MarkdownRender`, remain normal public NuGet dependencies.
 
-The SDK omits the `Microsoft.Windows.Compatibility` meta-package from its dependencies while retaining PowerShell's other explicit dependencies, including `System.Data.Odbc`, and its original type catalog. SDK-hosted scripts that need an assembly supplied only by the meta-package, such as `System.Web.Services.Description`, need the relevant package or an assembly supplied by their module. Hosts can also reference `Microsoft.Windows.Compatibility` directly to restore its full set of dependencies. The standalone CLI archives retain the compatibility payload independently by referencing the version pinned in the upstream SDK project.
+`Devolutions.PowerShell.SDK` built from this repository is slim by default; existing published versions retain their original dependency metadata. It omits `Microsoft.Windows.Compatibility` and direct dependencies on `System.ServiceModel.Http`, `NetTcp`, `NetFramingBase`, `Primitives`, and `Syndication`; `System.Data.SqlClient`, `Odbc`, and `OleDb`; `System.Speech`; `System.ComponentModel.Composition` and `Composition.Registration`; `System.Reflection.Context`; `System.DirectoryServices.AccountManagement` and `Protocols`; `System.Security.Cryptography.Xml`; `System.Net.Http.WinHttpHandler`; `System.Runtime.Caching`; and `System.IO.Ports` and its RID-specific native packages. It retains the original PowerShell assemblies, type catalog, apphosts, and modules, as well as `System.Security.Cryptography.ProtectedData`, which PowerShell uses for Windows secure-string encryption.
 
-Applications that do not need the compatibility libraries can reference `Devolutions.PowerShell.SDK.Slim` **instead of** `Devolutions.PowerShell.SDK`, using the same SDK package version. The standard package remains unchanged and both variants contain the same PowerShell assemblies, type catalog, apphosts, and modules.
+Applications upgrading from an earlier SDK must explicitly reference any omitted packages their application, modules, or scripts need; those references still work with PowerShell's existing type catalog. SDK-hosted scripts that need an assembly supplied by `Microsoft.Windows.Compatibility`, such as `System.Web.Services.Description`, need the relevant package or an assembly supplied by their module. Referencing `Microsoft.Windows.Compatibility` restores its compatibility dependencies, but other omitted packages may still need individual references. Opting packages back in can also resolve older transitive versions: for example, `System.ServiceModel.Http` can bring in an older `System.Security.Cryptography.Xml`, so reference a patched version explicitly and review NuGet security warnings. Reducing the dependency graph can reduce ReadyToRun and trimming work, but does not by itself make PowerShell Native AOT or trimming compatible.
 
-The slim package omits the direct dependencies on `System.ServiceModel.Http`, `NetTcp`, `NetFramingBase`, `Primitives`, and `Syndication`; `System.Data.SqlClient`, `Odbc`, and `OleDb`; `System.Speech`; `System.ComponentModel.Composition` and `Composition.Registration`; `System.Reflection.Context`; `System.DirectoryServices.AccountManagement` and `Protocols`; `System.Security.Cryptography.Xml`; `System.Net.Http.WinHttpHandler`; `System.Runtime.Caching`; and `System.IO.Ports` and its RID-specific native packages. It retains `System.Security.Cryptography.ProtectedData`, which PowerShell uses for Windows secure-string encryption.
-
-Slim consumers must reference any omitted packages their application, modules, or scripts need explicitly; those references still work with PowerShell's existing type catalog. Opting packages back in can also resolve older transitive versions: for example, `System.ServiceModel.Http` can bring in an older `System.Security.Cryptography.Xml`, so reference a patched version explicitly and review NuGet security warnings. Referencing `Microsoft.Windows.Compatibility` restores its compatibility dependencies, while choosing the standard SDK retains its original direct dependencies. Reducing the dependency graph can reduce ReadyToRun and trimming work, but does not by itself make PowerShell Native AOT or trimming compatible.
+Standalone CLI archives retain their compatibility payload independently by referencing the omitted packages and `Microsoft.Windows.Compatibility` at the versions pinned in the upstream SDK project.
 
 The SDK package also includes apphost files for `win-x64`, `win-arm64`, `linux-x64`, `linux-arm`, `linux-arm64`, `osx-x64`, and `osx-arm64`. These files are inert by default. A consuming project opts in by choosing an apphost layout. The root layout copies `pwsh`/`pwsh.exe`, `pwsh.dll`, `pwsh.runtimeconfig.json`, runtime assemblies, and built-in module manifests to the app root:
 

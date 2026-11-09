@@ -6,8 +6,6 @@ param(
 
   [string] $PackageId = 'Devolutions.PowerShell.SDK',
 
-  [string] $SlimPackageId = "$PackageId.Slim",
-
   [string] $SdkPackageVersion,
 
   [string] $VendorName = 'Devolutions',
@@ -640,12 +638,6 @@ try {
     throw "Failed to create $PackageId.$SdkPackageVersion package in $PackageOutputPath"
   }
 
-  $SlimPackagePath = & (Join-Path $RepositoryRoot 'eng\New-PowerShellSdkSlimPackage.ps1') `
-    -PackagePath $Package.FullName `
-    -OutputDirectory $PackageOutputPath `
-    -PackageId $PackageId `
-    -SlimPackageId $SlimPackageId
-
   if ($Validate) {
     & (Join-Path $RepositoryRoot 'eng\Validate-PowerShellSdkPackage.ps1') `
       -PackageDirectory $PackageOutputPath `
@@ -655,20 +647,9 @@ try {
       -RuntimeIdentifier $RuntimeIdentifier `
       -PackageId $PackageId `
       -PackageVendorName $VendorName
-    & (Join-Path $RepositoryRoot 'eng\Validate-PowerShellSdkPackage.ps1') `
-      -PackageDirectory $PackageOutputPath `
-      -PowerShellVersion $PowerShellVersion `
-      -PackageVersion $SdkPackageVersion `
-      -TargetFramework $TargetFramework `
-      -RuntimeIdentifier $RuntimeIdentifier `
-      -PackageId $SlimPackageId `
-      -StandardPackageId $PackageId `
-      -PackageVendorName $VendorName `
-      -DependencyProfile Slim
   }
 
   Write-Output "Package=$($Package.FullName)"
-  Write-Output "SlimPackage=$SlimPackagePath"
   Write-Output "RuntimeIdentifier=$RuntimeIdentifier"
   Write-Output "TargetFramework=$TargetFramework"
 } finally {

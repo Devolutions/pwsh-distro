@@ -65,7 +65,6 @@ $BuildArguments = @{
   PowerShellReleaseTag = Get-YamlScalar -Text $WorkflowText -Name 'POWERSHELL_RELEASE_TAG' -FileName $WorkflowPath
   SdkPackageVersion = "$PowerShellVersion.$SdkPackageRevision"
   PackageId = Get-YamlScalar -Text $WorkflowText -Name 'SDK_PACKAGE_ID' -FileName $WorkflowPath
-  SlimPackageId = Get-YamlScalar -Text $WorkflowText -Name 'SDK_SLIM_PACKAGE_ID' -FileName $WorkflowPath
   VendorName = Get-YamlScalar -Text $WorkflowText -Name 'SDK_VENDOR_NAME' -FileName $WorkflowPath
   MultiPwshPackageId = Get-YamlScalar -Text $WorkflowText -Name 'MULTI_PWSH_APPHOST_PACKAGE_ID' -FileName $WorkflowPath
   MultiPwshPackageVersion = Get-YamlScalar -Text $WorkflowText -Name 'MULTI_PWSH_APPHOST_PACKAGE_VERSION' -FileName $WorkflowPath

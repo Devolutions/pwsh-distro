@@ -28,6 +28,8 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'PowerShellSdkDependencyProfile.ps1')
+
 $OriginalPackageId = 'Microsoft.PowerShell.SDK'
 $DefaultEmbeddedPackageIds = @(
   'Microsoft.PowerShell.SDK',
@@ -765,9 +767,27 @@ try {
       -SourceBuiltDependencyVersions $SourceBuiltDependencyVersions
   }
 
-  # Retain the source project's full type catalog while omitting the meta-package from consumers.
+  # Retain the source project's full type catalog while omitting optional consumer dependencies.
+  $RemovedOptionalDependencyCount = 0
+  $HasProtectedData = $false
   foreach ($Dependencies in @($DependencyGroups.Values)) {
-    $Dependencies.Remove('Microsoft.Windows.Compatibility')
+    foreach ($DependencyId in @($Dependencies.Keys)) {
+      if ($DependencyId -eq 'System.Security.Cryptography.ProtectedData') {
+        $HasProtectedData = $true
+      }
+      if (Test-PowerShellSdkOptionalDependency -Id $DependencyId) {
+        $Dependencies.Remove($DependencyId)
+        $RemovedOptionalDependencyCount++
+      } elseif ($DependencyId -eq 'Microsoft.Windows.Compatibility') {
+        $Dependencies.Remove($DependencyId)
+      }
+    }
+  }
+  if ($RemovedOptionalDependencyCount -eq 0) {
+    throw 'No optional SDK dependencies were found to omit from the package.'
+  }
+  if (-not $HasProtectedData) {
+    throw 'The SDK package must retain System.Security.Cryptography.ProtectedData.'
   }
 
   Copy-PackagePayload -SourceRoot $ExtractedPackageRoots[$OriginalPackageId] -DestinationRoot $PackageRootPath
@@ -808,7 +828,7 @@ try {
     -PackageRelativePath 'buildTransitive/source-built-package-assets.txt' `
     -Value $SourceBuiltPackageAssets
 
-  Write-Host "Vendored $OriginalPackageId $PowerShellVersion as $PackageId $PackageVersion with embedded PowerShell assemblies"
+  Write-Host "Vendored $OriginalPackageId $PowerShellVersion as $PackageId $PackageVersion with embedded PowerShell assemblies and $RemovedOptionalDependencyCount optional dependency entries omitted"
 } finally {
   Remove-Item $WorkDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
