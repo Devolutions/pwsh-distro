@@ -26,16 +26,27 @@ function Get-MsiRows {
     [Parameter(Mandatory)] [int] $Columns
   )
 
-  $View = $Database.OpenView($Query)
-  $null = $View.Execute()
+  $View = $null
   try {
+    $View = $Database.OpenView($Query)
+    $null = $View.Execute()
     while ($Record = $View.Fetch()) {
-      [pscustomobject]@{
-        Fields = @(1..$Columns | ForEach-Object { $Record.StringData($_) })
+      try {
+        [pscustomobject]@{
+          Fields = @(1..$Columns | ForEach-Object { $Record.StringData($_) })
+        }
+      } finally {
+        [void] [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Record)
       }
     }
   } finally {
-    $null = $View.Close()
+    if ($null -ne $View) {
+      try {
+        $null = $View.Close()
+      } finally {
+        [void] [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($View)
+      }
+    }
   }
 }
 
@@ -57,56 +68,66 @@ $Version = [version] $PackageVersion
 $MsiVersion = "$($Version.Major).$($Version.Minor).$($Version.Build * 100 + $Version.Revision)"
 $File = (Resolve-Path -LiteralPath $MsiPath -ErrorAction Stop).Path
 $Installer = New-Object -ComObject WindowsInstaller.Installer
-$Database = $Installer.OpenDatabase($File, 0)
+$Database = $null
+try {
+  $Database = $Installer.OpenDatabase($File, 0)
 
-$Properties = @(Get-MsiRows $Database 'SELECT Property, Value FROM Property' 2)
-$ProductVersion = Assert-OneRow @($Properties | Where-Object { $_.Fields[0] -eq 'ProductVersion' }) 'ProductVersion'
-$UpgradeCode = Assert-OneRow @($Properties | Where-Object { $_.Fields[0] -eq 'UpgradeCode' }) 'UpgradeCode'
-$Secure = Assert-OneRow @($Properties | Where-Object { $_.Fields[0] -eq 'SecureCustomProperties' }) 'SecureCustomProperties'
-if ($ProductVersion[1] -ne $MsiVersion -or $UpgradeCode[1] -ine $Codes[$Architecture] -or
-    'OPPOSITE_ARCHITECTURE_INSTALLED' -notin ($Secure[1] -split ';')) {
-  throw "MSI version, own UpgradeCode, or secure cross-architecture property is incorrect in $File."
-}
-
-$Directories = @(Get-MsiRows $Database 'SELECT Directory, Directory_Parent, DefaultDir FROM Directory' 3)
-foreach ($Expected in @(
-  @('INSTALLFOLDER', 'ProgramFiles64Folder', 'Devolutions'),
-  @('PowerShellFolder', 'INSTALLFOLDER', 'PowerShell'),
-  @('VersionFolder', 'PowerShellFolder', "$($Version.Major)")
-)) {
-  $Directory = Assert-OneRow @($Directories | Where-Object { $_.Fields[0] -eq $Expected[0] }) "directory $($Expected[0])"
-  if ($Directory[1] -ne $Expected[1] -or ($Directory[2] -split '\|')[-1] -ne $Expected[2]) {
-    throw "MSI directory $($Expected[0]) is not below $($Expected[1]) as $($Expected[2])."
+  $Properties = @(Get-MsiRows $Database 'SELECT Property, Value FROM Property' 2)
+  $ProductVersion = Assert-OneRow @($Properties | Where-Object { $_.Fields[0] -eq 'ProductVersion' }) 'ProductVersion'
+  $UpgradeCode = Assert-OneRow @($Properties | Where-Object { $_.Fields[0] -eq 'UpgradeCode' }) 'UpgradeCode'
+  $Secure = Assert-OneRow @($Properties | Where-Object { $_.Fields[0] -eq 'SecureCustomProperties' }) 'SecureCustomProperties'
+  if ($ProductVersion[1] -ne $MsiVersion -or $UpgradeCode[1] -ine $Codes[$Architecture] -or
+      'OPPOSITE_ARCHITECTURE_INSTALLED' -notin ($Secure[1] -split ';')) {
+    throw "MSI version, own UpgradeCode, or secure cross-architecture property is incorrect in $File."
   }
-}
 
-$Upgrades = @(Get-MsiRows $Database 'SELECT UpgradeCode, VersionMin, VersionMax, Attributes, Remove, ActionProperty FROM Upgrade' 6)
-$Guard = Assert-OneRow @($Upgrades | Where-Object { $_.Fields[5] -eq 'OPPOSITE_ARCHITECTURE_INSTALLED' }) 'opposite-architecture upgrade'
-if ($Guard[0] -ine $Codes[$Opposite] -or $Guard[1] -ne '0.0.0' -or $Guard[2] -ne '' -or
-    [int] $Guard[3] -ne 258 -or $Guard[4] -ne '') {
-  throw "Opposite-architecture detection must cover all versions without removing the product: $File."
-}
-$SameArchitecture = Assert-OneRow @($Upgrades | Where-Object { $_.Fields[5] -eq 'WIX_UPGRADE_DETECTED' }) 'same-architecture upgrade'
-if ($SameArchitecture[0] -ine $Codes[$Architecture] -or $SameArchitecture[2] -ne $MsiVersion) {
-  throw "Same-architecture major upgrades are not enabled in $File."
-}
-
-$Conditions = @(Get-MsiRows $Database 'SELECT Condition, Description FROM LaunchCondition' 2)
-$null = Assert-OneRow @($Conditions | Where-Object { $_.Fields[0] -eq 'Installed OR NOT OPPOSITE_ARCHITECTURE_INSTALLED' }) 'cross-architecture launch condition'
-foreach ($Table in 'InstallUISequence', 'InstallExecuteSequence') {
-  $Actions = @(Get-MsiRows $Database "SELECT Action, Sequence FROM $Table" 2)
-  $Find = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'FindRelatedProducts' }) "$Table FindRelatedProducts"
-  $Launch = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'LaunchConditions' }) "$Table LaunchConditions"
-  if ([int] $Find[1] -ge [int] $Launch[1]) {
-    throw "FindRelatedProducts must run before LaunchConditions in $Table."
-  }
-  if ($Table -eq 'InstallExecuteSequence') {
-    $Remove = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'RemoveExistingProducts' }) 'RemoveExistingProducts'
-    $Initialize = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'InstallInitialize' }) 'InstallInitialize'
-    if ([int] $Remove[1] -ge [int] $Initialize[1]) {
-      throw 'Prior same-architecture installations must be removed before files are installed.'
+  $Directories = @(Get-MsiRows $Database 'SELECT Directory, Directory_Parent, DefaultDir FROM Directory' 3)
+  foreach ($Expected in @(
+    @('INSTALLFOLDER', 'ProgramFiles64Folder', 'Devolutions'),
+    @('PowerShellFolder', 'INSTALLFOLDER', 'PowerShell'),
+    @('VersionFolder', 'PowerShellFolder', "$($Version.Major)")
+  )) {
+    $Directory = Assert-OneRow @($Directories | Where-Object { $_.Fields[0] -eq $Expected[0] }) "directory $($Expected[0])"
+    if ($Directory[1] -ne $Expected[1] -or ($Directory[2] -split '\|')[-1] -ne $Expected[2]) {
+      throw "MSI directory $($Expected[0]) is not below $($Expected[1]) as $($Expected[2])."
     }
   }
-}
 
-Write-Host "Validated $Architecture MSI tables and upgrade guard: $File"
+  $Upgrades = @(Get-MsiRows $Database 'SELECT UpgradeCode, VersionMin, VersionMax, Attributes, Remove, ActionProperty FROM Upgrade' 6)
+  $Guard = Assert-OneRow @($Upgrades | Where-Object { $_.Fields[5] -eq 'OPPOSITE_ARCHITECTURE_INSTALLED' }) 'opposite-architecture upgrade'
+  if ($Guard[0] -ine $Codes[$Opposite] -or $Guard[1] -ne '0.0.0' -or $Guard[2] -ne '' -or
+      [int] $Guard[3] -ne 258 -or $Guard[4] -ne '') {
+    throw "Opposite-architecture detection must cover all versions without removing the product: $File."
+  }
+  $SameArchitecture = Assert-OneRow @($Upgrades | Where-Object { $_.Fields[5] -eq 'WIX_UPGRADE_DETECTED' }) 'same-architecture upgrade'
+  if ($SameArchitecture[0] -ine $Codes[$Architecture] -or $SameArchitecture[2] -ne $MsiVersion) {
+    throw "Same-architecture major upgrades are not enabled in $File."
+  }
+
+  $Conditions = @(Get-MsiRows $Database 'SELECT Condition, Description FROM LaunchCondition' 2)
+  $null = Assert-OneRow @($Conditions | Where-Object { $_.Fields[0] -eq 'Installed OR NOT OPPOSITE_ARCHITECTURE_INSTALLED' }) 'cross-architecture launch condition'
+  foreach ($Table in 'InstallUISequence', 'InstallExecuteSequence') {
+    $Actions = @(Get-MsiRows $Database "SELECT Action, Sequence FROM $Table" 2)
+    $Find = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'FindRelatedProducts' }) "$Table FindRelatedProducts"
+    $Launch = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'LaunchConditions' }) "$Table LaunchConditions"
+    if ([int] $Find[1] -ge [int] $Launch[1]) {
+      throw "FindRelatedProducts must run before LaunchConditions in $Table."
+    }
+    if ($Table -eq 'InstallExecuteSequence') {
+      $Remove = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'RemoveExistingProducts' }) 'RemoveExistingProducts'
+      $Initialize = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'InstallInitialize' }) 'InstallInitialize'
+      if ([int] $Remove[1] -ge [int] $Initialize[1]) {
+        throw 'Prior same-architecture installations must be removed before files are installed.'
+      }
+    }
+  }
+
+  Write-Host "Validated $Architecture MSI tables and upgrade guard: $File"
+} finally {
+  if ($null -ne $Database) {
+    [void] [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
+  }
+  if ($null -ne $Installer) {
+    [void] [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
+  }
+}
