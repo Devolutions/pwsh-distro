@@ -36,6 +36,8 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'PowerShellSdkDependencyProfile.ps1')
+
 function Invoke-NativeCommand {
   param(
     [Parameter(Mandatory)]
@@ -160,37 +162,6 @@ function Get-PowerShellTargetFramework {
   }
 
   return [string] $TargetFramework
-}
-
-function Get-PowerShellWindowsCompatibilityVersion {
-  param(
-    [Parameter(Mandatory)]
-    [string] $Root
-  )
-
-  $SdkProjectPath = Join-Path $Root 'pwsh-src\src\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj'
-  if (-not (Test-Path -LiteralPath $SdkProjectPath -PathType Leaf)) {
-    throw "PowerShell SDK project was not found. Initialize the pwsh-src submodule first: $SdkProjectPath"
-  }
-
-  [xml] $SdkProject = Get-Content -LiteralPath $SdkProjectPath -Raw
-  $References = @($SdkProject.SelectNodes("//*[local-name()='PackageReference' and @Include='Microsoft.Windows.Compatibility']"))
-  if ($References.Count -ne 1) {
-    throw "Expected one Microsoft.Windows.Compatibility reference in $SdkProjectPath, found $($References.Count)."
-  }
-
-  $Version = $References[0].GetAttribute('Version')
-  if ([string]::IsNullOrWhiteSpace($Version)) {
-    $VersionElement = $References[0].SelectSingleNode("*[local-name()='Version']")
-    if ($VersionElement) {
-      $Version = $VersionElement.InnerText
-    }
-  }
-  if ([string]::IsNullOrWhiteSpace($Version) -or $Version.Contains('$(')) {
-    throw "Microsoft.Windows.Compatibility must have an explicit version in $SdkProjectPath."
-  }
-
-  return $Version
 }
 
 function Get-PowerShellExecutableName {
@@ -737,9 +708,24 @@ function Test-PowerShellDistroLayout {
     throw "$PwshPath reported PowerShell version '$ActualVersion', expected '$ExpectedVersion'"
   }
 
-  & $PwshPath -NoLogo -NoProfile -NonInteractive -Command '$ErrorActionPreference = "Stop"; $null = [System.Web.Services.Description.ServiceDescription]'
+  $CompatibilityProbe = @'
+$ErrorActionPreference = 'Stop'
+$null = [System.Web.Services.Description.ServiceDescription]
+$null = [System.Data.SqlClient.SqlConnection]
+$null = [System.IO.Ports.SerialPort]
+$null = [System.ServiceModel.BasicHttpBinding]
+$null = [System.Security.Cryptography.Xml.SignedXml]
+if ($IsWindows) {
+  $null = [System.Data.Odbc.OdbcConnection]
+  $null = [System.Data.OleDb.OleDbConnection]
+  $null = [System.DirectoryServices.AccountManagement.PrincipalContext]
+  $null = [System.Runtime.Caching.MemoryCache]
+  $null = [System.Speech.Synthesis.SpeechSynthesizer]
+}
+'@
+  & $PwshPath -NoLogo -NoProfile -NonInteractive -Command $CompatibilityProbe
   if ($LASTEXITCODE -ne 0) {
-    throw "$PwshPath failed the web-service compatibility type probe with exit code $LASTEXITCODE"
+    throw "$PwshPath failed the compatibility type probe with exit code $LASTEXITCODE"
   }
 
   if ($Rid -like 'win-*') {
@@ -828,7 +814,8 @@ if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
 $RepositoryRootPath = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 Assert-SdkPackageVersion -ExpectedPowerShellVersion $PowerShellVersion -ActualPackageVersion $PackageVersion
 $TargetFramework = Get-PowerShellTargetFramework -Root $RepositoryRootPath
-$WindowsCompatibilityVersion = Get-PowerShellWindowsCompatibilityVersion -Root $RepositoryRootPath
+$SdkProjectPath = Join-Path $RepositoryRootPath 'pwsh-src\src\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj'
+$CliDependencyVersions = Get-PowerShellCliDependencyVersions -SdkProjectPath $SdkProjectPath
 $ExecutableName = Get-PowerShellExecutableName -Rid $RuntimeIdentifier
 $OutputDirectoryPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
 if ([string]::IsNullOrWhiteSpace($ArchivePath)) {
@@ -862,8 +849,14 @@ try {
   $EscapedTargetFramework = ConvertTo-XmlAttributeValue $TargetFramework
   $EscapedRuntimeIdentifier = ConvertTo-XmlAttributeValue $RuntimeIdentifier
   $EscapedHostBaseName = ConvertTo-XmlAttributeValue $HostBaseName
-  $EscapedWindowsCompatibilityVersion = ConvertTo-XmlAttributeValue $WindowsCompatibilityVersion
   $EscapedConfigMode = if ($RuntimeIdentifier -like 'win-*') { 'Copy' } else { 'None' }
+  $CliDependencyReferences = @(
+    foreach ($DependencyId in $CliDependencyVersions.Keys) {
+      $EscapedDependencyId = ConvertTo-XmlAttributeValue $DependencyId
+      $EscapedDependencyVersion = ConvertTo-XmlAttributeValue $CliDependencyVersions[$DependencyId]
+      "    <PackageReference Include=`"$EscapedDependencyId`" Version=`"$EscapedDependencyVersion`" />"
+    }
+  ) -join "`n"
 
   $ProjectXml = @"
 <Project Sdk="Microsoft.NET.Sdk">
@@ -883,7 +876,7 @@ try {
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="$EscapedPackageId" Version="$EscapedPackageVersion" />
-    <PackageReference Include="Microsoft.Windows.Compatibility" Version="$EscapedWindowsCompatibilityVersion" />
+$CliDependencyReferences
   </ItemGroup>
 </Project>
 "@
@@ -1020,6 +1013,14 @@ $CustomRuntimeMappingBlock
     $RestoreArguments += "/p:RuntimeFrameworkVersion=$EffectiveCustomRuntimePackageVersion"
   }
   Invoke-NativeCommand dotnet @RestoreArguments
+  $AssetsPath = Join-Path $ProjectDirectory 'obj\project.assets.json'
+  $Assets = Get-Content -LiteralPath $AssetsPath -Raw | ConvertFrom-Json
+  $RestoredPackageIds = @($Assets.libraries.PSObject.Properties.Name | ForEach-Object { ($_ -split '/', 2)[0] })
+  foreach ($DependencyId in $CliDependencyVersions.Keys) {
+    if ($RestoredPackageIds -notcontains $DependencyId) {
+      throw "PowerShell CLI restore graph is missing compatibility dependency '$DependencyId'."
+    }
+  }
   $PackageRoot = Get-RestoredSdkPackageRoot -PackagesDirectory $PackagesDirectory -PackageId $PackageId -PackageVersion $PackageVersion
   $RuntimeGroup = Get-PackageRuntimeGroup -Rid $RuntimeIdentifier
   $LocalizedResourceRoot = Join-Path $PackageRoot "buildTransitive\localized-resources\$RuntimeGroup\lib\$TargetFramework"

@@ -57,8 +57,7 @@ pwsh .\.agents\skills\powershell-sdk-package-validate\scripts\Build-AndValidateL
 The canonical build writes under `output\local-sdk\<rid>\` and emits:
 
 - `package\Devolutions.PowerShell.SDK.<version>.nupkg`
-- `package\Devolutions.PowerShell.SDK.Slim.<version>.nupkg`
 - `PowerShell-AppHost\` source-built apphost files
-- validation output for both dependency profiles proving restore, build, framework-dependent publish, self-contained publish, apphost execution, and built-in module loading
+- validation output proving the slim-by-default dependency profile, optional dependency opt-ins, restore, build, framework-dependent publish, self-contained publish, apphost execution, and built-in module loading
 
 Do not stage generated `output\` contents.

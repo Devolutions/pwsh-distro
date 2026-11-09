@@ -51,7 +51,6 @@ permissions:
 
 env:
   SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
-  SDK_SLIM_PACKAGE_ID: "Devolutions.PowerShell.SDK.Slim"
   SDK_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
   PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
   PSIGN_TOOL_PACKAGE_VERSION: "0.7.0"
@@ -327,7 +326,7 @@ jobs:
           } else {
             $PackageVersion.ToString()
           }
-          $ExpectedPackageNames = @("$($Env:SDK_PACKAGE_ID).$NormalizedVersion.nupkg", "$($Env:SDK_SLIM_PACKAGE_ID).$NormalizedVersion.nupkg")
+          $ExpectedPackageNames = @("$($Env:SDK_PACKAGE_ID).$NormalizedVersion.nupkg")
           $NugetPackages = @(Get-ChildItem -Path ./release-assets -Filter *.nupkg -File | Sort-Object Name)
           if ($NugetPackages.Count -ne $ExpectedPackageNames.Count -or @($ExpectedPackageNames | Where-Object { $_ -notin $NugetPackages.Name }).Count -gt 0) {
             throw "Expected SDK packages $($ExpectedPackageNames -join ', ') in ./release-assets; found $($NugetPackages.Name -join ', ')."
@@ -380,7 +379,7 @@ jobs:
           } else {
             $ParsedPackageVersion.ToString()
           }
-          $ExpectedPackageNames = @("$($Env:SDK_PACKAGE_ID).$NormalizedVersion.nupkg", "$($Env:SDK_SLIM_PACKAGE_ID).$NormalizedVersion.nupkg")
+          $ExpectedPackageNames = @("$($Env:SDK_PACKAGE_ID).$NormalizedVersion.nupkg")
           $NugetPackages = @(Get-ChildItem -Filter *.nupkg -File | Sort-Object Name)
           if ($NugetPackages.Count -ne $ExpectedPackageNames.Count -or @($ExpectedPackageNames | Where-Object { $_ -notin $NugetPackages.Name }).Count -gt 0) {
             throw "Expected SDK packages $($ExpectedPackageNames -join ', ') in the release package directory; found $($NugetPackages.Name -join ', ')."
@@ -421,7 +420,7 @@ jobs:
             "",
             "| Field | Value |",
             "| --- | --- |",
-            "| Package IDs | $Env:SDK_PACKAGE_ID, $Env:SDK_SLIM_PACKAGE_ID |",
+            "| Package ID | $Env:SDK_PACKAGE_ID |",
             "| Package version | $PackageVersion |",
             "| PowerShell upstream release | ${{ needs.sdk.outputs.powershell-release-tag }} |",
             "| PowerShell upstream source ref | ${{ needs.sdk.outputs.powershell-upstream-tag }} |",

@@ -70,8 +70,8 @@ env:
   POWERSHELL_SOURCE_REPOSITORY: ${{ github.repository }}
   POWERSHELL_SOURCE_REF: "downstream/v7.6.9"
   SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
-  SDK_PACKAGE_VERSION: "7.6.9.0"
-  SDK_PACKAGE_REVISION: "0"
+  SDK_PACKAGE_VERSION: "7.6.9.2"
+  SDK_PACKAGE_REVISION: "2"
   SDK_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
 jobs:
   build:
