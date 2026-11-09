@@ -263,7 +263,13 @@ jobs:
           $SdkArtifactName = '${{ inputs.sdk_artifact_name }}'.Trim()
           if ($SdkArtifactName -or $SdkArtifactRunId) {
             $PackageSource = Join-Path $PWD 'sdk-package-source'
-            $SdkPackages = @(Get-ChildItem -LiteralPath $PackageSource -Filter "$($Env:SDK_PACKAGE_ID).*nupkg" -File)
+            $SdkVersion = [version]::Parse($SdkPackageVersion)
+            $NormalizedSdkVersion = if ($SdkVersion.Revision -eq 0) {
+              "$($SdkVersion.Major).$($SdkVersion.Minor).$($SdkVersion.Build)"
+            } else {
+              $SdkVersion.ToString()
+            }
+            $SdkPackages = @(Get-ChildItem -LiteralPath $PackageSource -Filter "$($Env:SDK_PACKAGE_ID).$NormalizedSdkVersion.nupkg" -File)
             if ($SdkPackages.Count -ne 1) {
               $SourceDescription = if ($SdkArtifactRunId) { "SDK workflow run '$SdkArtifactRunId'" } else { "current workflow run artifact '$SdkArtifactName'" }
               throw "Expected exactly one $Env:SDK_PACKAGE_ID nupkg from $SourceDescription, found $($SdkPackages.Count)."
