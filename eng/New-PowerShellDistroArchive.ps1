@@ -30,13 +30,23 @@ param(
 
   [string] $CustomRuntimeSource,
 
-  [string] $CustomRuntimePackageVersion
+  [string] $CustomRuntimePackageVersion,
+
+  [string] $LinuxAppHostPath,
+
+  [string] $LinuxAppHostLicenseDirectory,
+
+  [string] $PowerShellNativeLibraryPath,
+
+  [string] $PowerShellNativeLicensePath
 )
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'PowerShellSdkDependencyProfile.ps1')
+. (Join-Path $PSScriptRoot 'LinuxElf.ps1')
+. (Join-Path $PSScriptRoot 'LinuxAppHost.ps1')
 
 function Invoke-NativeCommand {
   param(
@@ -254,6 +264,9 @@ function Get-CurrentRuntimeIdentifier {
     return "win-$Architecture"
   }
   if ($IsLinux) {
+    if ([System.Runtime.InteropServices.RuntimeInformation]::RuntimeIdentifier -like 'linux-musl-*') {
+      return "linux-musl-$Architecture"
+    }
     return "linux-$Architecture"
   }
   if ($IsMacOS) {
@@ -631,6 +644,9 @@ function Get-RequiredDistroRelativePaths {
     'Microsoft.PowerShell.ConsoleHost.dll',
     'Schemas/PSMaml/Maml.xsd'
   )
+  if ($Rid -like 'linux-*') {
+    $RequiredPaths += 'libpsl-native.so'
+  }
   if ($Rid -like 'win-*') {
     $RequiredPaths += @(
       'Microsoft.PowerShell.GraphicalHost.dll',
@@ -817,6 +833,43 @@ $TargetFramework = Get-PowerShellTargetFramework -Root $RepositoryRootPath
 $SdkProjectPath = Join-Path $RepositoryRootPath 'pwsh-src\src\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj'
 $CliDependencyVersions = Get-PowerShellCliDependencyVersions -SdkProjectPath $SdkProjectPath
 $ExecutableName = Get-PowerShellExecutableName -Rid $RuntimeIdentifier
+if ($RuntimeIdentifier -like 'linux-musl-*' -and [string]::IsNullOrWhiteSpace($LinuxAppHostPath)) {
+  throw "A musl-native LinuxAppHostPath is required for '$RuntimeIdentifier'."
+}
+if (-not [string]::IsNullOrWhiteSpace($LinuxAppHostPath)) {
+  if ([string]::IsNullOrWhiteSpace($LinuxAppHostLicenseDirectory)) {
+    throw 'LinuxAppHostLicenseDirectory is required when using a source-built Linux apphost.'
+  }
+  foreach ($LicenseName in 'LICENSE-MIT', 'LICENSE-APACHE') {
+    if (-not (Test-Path -LiteralPath (Join-Path $LinuxAppHostLicenseDirectory $LicenseName) -PathType Leaf)) {
+      throw "Linux apphost license was not found: $LinuxAppHostLicenseDirectory/$LicenseName"
+    }
+  }
+  $RustLicenses = Join-Path $LinuxAppHostLicenseDirectory 'pwsh-linux-apphost-third-party'
+  if (-not (Test-Path -LiteralPath $RustLicenses -PathType Container) -or
+      @(Get-ChildItem -LiteralPath $RustLicenses -Filter 'Cargo.toml' -File -Recurse).Count -eq 0 -or
+      -not (Test-Path -LiteralPath (Join-Path $RustLicenses 'rust-standard-library/COPYRIGHT-library.html') -PathType Leaf)) {
+    throw "Linux apphost third-party license metadata was not found: $RustLicenses"
+  }
+}
+if ($RuntimeIdentifier -eq 'linux-musl-arm64' -or
+    -not [string]::IsNullOrWhiteSpace($PowerShellNativeLibraryPath) -or
+    -not [string]::IsNullOrWhiteSpace($PowerShellNativeLicensePath)) {
+  if ($RuntimeIdentifier -notin 'linux-arm64', 'linux-musl-arm64') {
+    throw "PowerShellNativeLibraryPath is only supported for Linux ARM64, not '$RuntimeIdentifier'."
+  }
+  if ([string]::IsNullOrWhiteSpace($PowerShellNativeLibraryPath) -or [string]::IsNullOrWhiteSpace($PowerShellNativeLicensePath)) {
+    throw "PowerShellNativeLibraryPath and PowerShellNativeLicensePath are both required for '$RuntimeIdentifier'."
+  }
+  $NativeElf = Get-LinuxElfInfo -Path $PowerShellNativeLibraryPath
+  Assert-LinuxElfArchitecture -Elf $NativeElf -Architecture 'arm64'
+  if ($NativeElf.Type -ne 3) {
+    throw "PowerShell native library must be a shared ELF library: $($NativeElf.Path)"
+  }
+  if (-not (Test-Path -LiteralPath $PowerShellNativeLicensePath -PathType Leaf)) {
+    throw "PowerShell native library license was not found: $PowerShellNativeLicensePath"
+  }
+}
 $OutputDirectoryPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
 if ([string]::IsNullOrWhiteSpace($ArchivePath)) {
   $ArchivePath = "$OutputDirectoryPath.tar.gz"
@@ -1022,6 +1075,9 @@ $CustomRuntimeMappingBlock
     }
   }
   $PackageRoot = Get-RestoredSdkPackageRoot -PackagesDirectory $PackagesDirectory -PackageId $PackageId -PackageVersion $PackageVersion
+  if (-not [string]::IsNullOrWhiteSpace($LinuxAppHostPath)) {
+    Set-LinuxAppHost -PackageRoot $PackageRoot -Rid $RuntimeIdentifier -AppHostPath $LinuxAppHostPath
+  }
   $RuntimeGroup = Get-PackageRuntimeGroup -Rid $RuntimeIdentifier
   $LocalizedResourceRoot = Join-Path $PackageRoot "buildTransitive\localized-resources\$RuntimeGroup\lib\$TargetFramework"
   $PublishArguments = @(
@@ -1071,6 +1127,20 @@ $CustomRuntimeMappingBlock
 
   Remove-DisposableHostFiles -Root $OutputDirectoryPath -HostBaseName $HostBaseName
   Remove-UnneededDistroFiles -Root $OutputDirectoryPath
+  if (-not [string]::IsNullOrWhiteSpace($LinuxAppHostPath)) {
+    $LicenseDestination = Join-Path $OutputDirectoryPath 'licenses/multi-pwsh'
+    New-Item -ItemType Directory -Path $LicenseDestination -Force | Out-Null
+    foreach ($LicenseName in 'LICENSE-MIT', 'LICENSE-APACHE') {
+      Copy-Item -LiteralPath (Join-Path $LinuxAppHostLicenseDirectory $LicenseName) -Destination $LicenseDestination
+    }
+    Copy-Item -LiteralPath $RustLicenses -Destination (Join-Path $LicenseDestination 'third-party') -Recurse
+  }
+  if (-not [string]::IsNullOrWhiteSpace($PowerShellNativeLibraryPath)) {
+    Copy-Item -LiteralPath $NativeElf.Path -Destination (Join-Path $OutputDirectoryPath 'libpsl-native.so') -Force
+    $NativeLicenseDestination = Join-Path $OutputDirectoryPath 'licenses/PowerShell-Native'
+    New-Item -ItemType Directory -Path $NativeLicenseDestination -Force | Out-Null
+    Copy-Item -LiteralPath $PowerShellNativeLicensePath -Destination (Join-Path $NativeLicenseDestination 'LICENSE.txt')
+  }
   if ($ReadyToRun) {
     Optimize-PowerShellDistroReadyToRun `
       -Root $OutputDirectoryPath `

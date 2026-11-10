@@ -37,6 +37,9 @@ The local script writes a single-RID validation package under `output\local-sdk\
 | PowerShell SDK package source | `https://api.nuget.org/v3/index.json` |
 | multi-pwsh apphost package | `Devolutions.MultiPwsh.Cli` / `0.14.2` |
 | multi-pwsh apphost package source | `https://api.nuget.org/v3/index.json` |
+| Linux multi-pwsh launcher source | `0.14.2` / `77676d18baaf205ec36b1711d11bd386d4b15272`; Rust `1.90.0` |
+| Linux multi-pwsh bindings generator | PowerShell `7.4.0` |
+| Linux ARM64 PowerShell.Native source | `700.0.2` / `f24d5494b373de20ec3e3d2fdc7c3fc98af1f9f1` |
 | psign code signing tool | `Devolutions.Psign.Tool` / `0.7.0` |
 | .NET runtime workflow | `v10.0.5` |
 | llvm-prebuilt | `v2026.1.1` |
@@ -118,9 +121,9 @@ On Linux or macOS, use the matching `PowerShell-7.6.3-linux-<arch>.tar.gz` or `P
 | --- | --- |
 | Windows | `PowerShell-7.6.3-windows-x64.tar.gz`, `PowerShell-7.6.3-windows-arm64.tar.gz` |
 | macOS | `PowerShell-7.6.3-macos-x64.tar.gz`, `PowerShell-7.6.3-macos-arm64.tar.gz` |
-| Linux | `PowerShell-7.6.3-linux-x64.tar.gz`, `PowerShell-7.6.3-linux-arm64.tar.gz` |
+| Linux (glibc) | `PowerShell-7.6.3-linux-x64.tar.gz`, `PowerShell-7.6.3-linux-arm64.tar.gz` |
 
-The CLI archives are produced from the release-ready `Devolutions.PowerShell.SDK` package, so they include the same source-built PowerShell payloads. Windows archives also include the matching Windows Desktop runtime payload needed for WPF/WinForms assemblies under `$PSHOME`.
+New releases additionally include `PowerShell-<version>-linux-musl-x64.tar.gz` and `PowerShell-<version>-linux-musl-arm64.tar.gz` for Alpine Linux. The CLI archives are produced from the release-ready `Devolutions.PowerShell.SDK` package, so they include the same source-built PowerShell payloads. Windows archives also include the matching Windows Desktop runtime payload needed for WPF/WinForms assemblies under `$PSHOME`.
 
 ### Windows MSI installers
 
@@ -164,21 +167,54 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+### Linux packages
+
+The release workflow repackages the release-ready glibc Linux CLI archives into the PowerShell Linux package targets for both x64 and arm64:
+
+| Distribution | x64 | arm64 |
+| --- | --- | --- |
+| Debian / Ubuntu (`deb`) | `devolutions-powershell_7.6.9.2-1.deb_amd64.deb` | `devolutions-powershell_7.6.9.2-1.deb_arm64.deb` |
+| RHEL / Fedora (`rh`) | `devolutions-powershell-7.6.9.2-1.rh.x86_64.rpm` | `devolutions-powershell-7.6.9.2-1.rh.aarch64.rpm` |
+| Azure Linux 3 (`cm`) | `devolutions-powershell-7.6.9.2-1.cm.x86_64.rpm` | `devolutions-powershell-7.6.9.2-1.cm.aarch64.rpm` |
+| Azure Linux 4 (`azl4`) | `devolutions-powershell-7.6.9.2-1.azl4.x86_64.rpm` | `devolutions-powershell-7.6.9.2-1.azl4.aarch64.rpm` |
+
+These packages bundle the .NET runtime and declare their system dependencies, including certificates and timezone data. They install under `/opt/devolutions/powershell/7`, link `/usr/bin/pwsh`, and register the shell in `/etc/shells`. They conflict with Microsoft's `powershell` package because both own that link. The RHEL/Fedora RPM requires an OpenSSL 1.1 or 3 library; on Fedora versions that default to OpenSSL 4, the package manager installs the compatible OpenSSL 3 library. The packages are not GPG-signed or published to an apt or RPM repository.
+
+```bash
+sudo apt-get install ./devolutions-powershell_7.6.9.2-1.deb_amd64.deb
+sudo dnf install ./devolutions-powershell-7.6.9.2-1.rh.x86_64.rpm
+sudo tdnf install ./devolutions-powershell-7.6.9.2-1.cm.aarch64.rpm
+```
+
+Alpine uses the matching `linux-musl` CLI archive rather than an `.apk`, as in Microsoft's distribution. For example, on Alpine x64:
+
+```sh
+apk add --no-cache ca-certificates icu-libs krb5-libs libgcc libstdc++ openssl tzdata
+mkdir -p pwsh-cli
+tar -xzf PowerShell-7.6.9-linux-musl-x64.tar.gz -C pwsh-cli
+./pwsh-cli/pwsh
+```
+
+`package/linux/New-PowerShellDistroLinuxPackage.ps1` builds deb or RPM packages from an unpacked glibc CLI archive using `dpkg-deb` or `rpmbuild`. The Linux packaging workflow can use a published `release_tag`, a CLI `cli_run_id` plus `package_version`, or the current release's prepared archives. It installs, runs, and removes each package in Ubuntu, Debian, RHEL UBI, Fedora, and Azure Linux containers on native x64 and arm64 runners. Azure Linux 4 uses Microsoft's preview base image. Older CLI artifacts whose launcher requires a newer glibc will fail these tests; use a CLI run produced by the updated workflow.
+
+The CLI workflow builds the pinned multi-pwsh launcher from source for glibc 2.28 compatibility and for musl, includes its Rust dependencies' license metadata and standard-library notices, and tests both Alpine architectures in Alpine 3.22 and 3.23 containers. The release workflow repeats those Alpine tests on the release-ready archives, after any signing. The upstream PowerShell.Native package lacks a musl ARM64 library and its glibc ARM64 library requires a newer glibc than RHEL 8, so the workflow builds both ARM64 variants from pinned PowerShell.Native source. The musl launcher is staged into the CLI's temporary SDK restore; the published SDK's own apphost RID list remains unchanged. Keep the CLI launcher version and source ref aligned with the `MULTI_PWSH_APPHOST_PACKAGE_VERSION` pin in the SDK workflow, and update the native source pin when PowerShell's `Microsoft.PowerShell.Native` dependency changes.
+
 ## Workflows
 
 | Workflow | Purpose | Output |
 | --- | --- | --- |
 | `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors and signs the source-built payload, and validates the SDK package in a sample .NET app with opt-in apphost import. It can run manually or as a reusable workflow. | `PowerShell-SDK-Release-X.Y.Z.R` artifact containing the SDK `.nupkg`. |
-| `.github/workflows/powershell-cli.yml` | Restores a pinned or workflow-built `Devolutions.PowerShell.SDK` package, imports its apphost and module payload through MSBuild, publishes a self-contained PowerShell layout, and repackages it for Windows, macOS, and Linux on x64 and arm64. It can run manually or as a reusable workflow. | `PowerShell-7.6.3-<os>-<arch>` `.tar.gz` artifacts; the latest release includes Windows, macOS, and Linux archives for x64 and arm64. |
+| `.github/workflows/powershell-cli.yml` | Restores a pinned or workflow-built SDK package and builds self-contained Windows, macOS, glibc Linux, and Alpine Linux CLI archives for x64 and arm64. | `PowerShell-<version>-<os>-<arch>` `.tar.gz` artifacts, including `linux-musl` for Alpine. |
 | `.github/workflows/powershell-msi.yml` | Packages published Windows CLI archives, CLI workflow artifacts, or the current release's prepared CLI archives, then signs and verifies the MSI when enabled. | `Devolutions-PowerShell-<tag-or-version>-win-<arch>-msi` artifacts containing an x64 or ARM64 `.msi`. |
-| `.github/workflows/release.yml` | Orchestrates the SDK, CLI, and MSI workflows, signs release-ready CLI and MSI artifacts, publishes the SDK package, and creates the GitHub release. | NuGet.org publish plus GitHub release `vX.Y.Z.R` containing the SDK `.nupkg`, six CLI `.tar.gz` archives, two signed Windows `.msi` installers, the downstream PowerShell patch, and checksums. |
-| `.github/workflows/dotnet-runtime.yml` | Builds the .NET runtime tag used by this PowerShell release for Windows, macOS, and Linux on x86_64 and arm64 with prebuilt clang+llvm from `awakecoding/llvm-prebuilt`. It can run manually or as a reusable workflow and uploads a `DotNet-Runtime-<rid>` artifact per matrix entry containing the source-built `Microsoft.NETCore.App.Runtime.<rid>` runtime pack. | `DotNet-Runtime-<rid>` artifacts containing the source-built runtime packs. |
+| `.github/workflows/powershell-linux.yml` | Repackages Linux CLI archives as deb and RPM packages and tests installation, execution, and removal across supported distributions. | `Devolutions-PowerShell-<version>-linux-<arch>-packages` artifacts with one deb and three RPMs per architecture. |
+| `.github/workflows/release.yml` | Orchestrates the SDK, CLI, MSI, and Linux packaging workflows, signs release-ready CLI and MSI artifacts, publishes the SDK package, and creates the GitHub release. | GitHub release `vX.Y.Z.R` with the SDK `.nupkg`, eight CLI archives, two Windows MSIs, eight Linux packages, the downstream patch, and checksums. |
+| `.github/workflows/dotnet-runtime.yml` | Builds the .NET runtime for Windows, macOS, glibc Linux, and Alpine Linux on x64 and arm64. The existing native builds use `awakecoding/llvm-prebuilt`; musl builds use Microsoft's .NET 10 cross-build images. | `DotNet-Runtime-<rid>` artifacts containing the source-built runtime packs. |
 
 All workflows are manual and can be started from the GitHub Actions **Run workflow** button.
 
 ## Publishing PowerShell releases
 
-The release workflow publishes only after the SDK package has been built, had its source-built payloads signed for release, been validated on every RID in the validation matrix, and been repackaged into every CLI archive and both Windows MSI installers. ReadyToRun CLI archives are signed before MSI packaging, so the MSIs contain the final CLI payload. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`; the latest published release is `v7.6.3.2`, which carries downstream SDK package revision `2` for upstream PowerShell `7.6.3`.
+The release workflow publishes only after the SDK has been validated, every CLI archive and both MSI installers have been built, and the Linux packages and Alpine archives have passed their container tests. ReadyToRun CLI archives are signed before installer packaging, so installers contain the final CLI payload. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`.
 
 Manual inputs:
 
@@ -206,11 +242,11 @@ Before validation and CLI packaging, the SDK workflow runs a signing stage that 
 | `CODE_SIGNING_CERTIFICATE_NAME` | Secret |
 | `CODE_SIGNING_TIMESTAMP_SERVER` | Variable |
 
-The complete release workflow uses the existing environments and secrets without configuration changes. Production releases require **three approval rounds**: SDK signing; one Windows job that prepares/signs all six CLI archives and builds/signs both MSI installers; and final publishing after native x64 and ARM64 MSI installation tests succeed. Consolidating CLI preparation and MSI builds removes their previously separate approval round. SDK validation still runs on the signed package before CLI packaging, and MSI builds still consume the final post-ReadyToRun CLI payload. The reusable MSI workflow tests the prepared artifacts without starting its protected build jobs; standalone MSI runs retain their own build/signing stage. Production dry runs follow the same approval path when `skip-publish=false`; with `skip-publish=true`, the final publishing approval is omitted.
+The complete release workflow uses the existing environments and secrets without configuration changes. Production releases require **three approval rounds**: SDK signing; one Windows job that prepares/signs all eight CLI archives and builds/signs both MSI installers; and final publishing after the MSI and Linux installation tests succeed. SDK validation still runs on the signed package before CLI packaging, and MSI builds still consume the final post-ReadyToRun CLI payload. The reusable MSI workflow tests the prepared artifacts without starting its protected build jobs; standalone MSI runs retain their own build/signing stage. Production dry runs follow the same approval path when `skip-publish=false`; with `skip-publish=true`, the final publishing approval is omitted.
 
 CLI signing replaces only the selected PE entries in each archive, preserving the original tar permissions, ownership, timestamps, and symlinks on Windows as well as Unix hosts. Run `./eng/Test-SignPowerShellDistroArchive.ps1` to exercise payload replacement, Unix metadata preservation, and failure handling without signing credentials.
 
-Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The release workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation only in the publishing job. A real publish pushes the validated `.nupkg` containing signed Windows payloads to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the SDK package, every CLI archive, both signed MSI installers, the generated downstream PowerShell patch file, and a SHA256 checksum file covering all release assets.
+Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The release workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation only in the publishing job. A real publish pushes the validated `.nupkg` containing signed Windows payloads to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the SDK package, every CLI archive, both signed MSI installers, the Linux packages, the generated downstream PowerShell patch file, and a SHA256 checksum file covering all release assets.
 
 ## Source-built .NET runtime option
 
@@ -220,6 +256,10 @@ This is **off by default** and does not change existing behavior when unused. To
 
 - In `powershell-cli.yml` (manual or reusable), set `use_custom_dotnet_runtime` to `true` and provide `dotnet_runtime_run_id` pointing at a completed `dotnet-runtime.yml` run, or set it to `latest` to auto-pick the newest successful `.NET runtime` run. The CLI job for each RID downloads the matching `DotNet-Runtime-<rid>` artifact, stages it as a local NuGet folder feed, and repoints the self-contained restore/publish at that feed with `/p:RuntimeFrameworkVersion=<version>`.
 - In `release.yml`, set `use_custom_dotnet_runtime` to `true`. If `dotnet_runtime_run_id` is blank, the release workflow runs `dotnet-runtime.yml` first; otherwise it skips the build and forwards the supplied run ID (including `latest`) to the reusable CLI job so the whole chain produces CLI archives built from the custom runtime.
+
+Linux glibc runtime packs are cross-built against the .NET runtime workflow's Ubuntu 18.04 sysroot, and CI verifies their ELF dependencies require no newer than glibc 2.28 for RHEL 8 compatibility.
+
+An older runtime workflow run without `linux-musl-x64` and `linux-musl-arm64` artifacts cannot supply the Alpine archives; run the updated runtime workflow before reusing its run ID.
 
 `eng/New-PowerShellDistroArchive.ps1` accepts optional `-CustomRuntimeSource` and `-CustomRuntimePackageVersion` parameters that inject the local runtime feed (with `packageSourceMapping` patterns for `Microsoft.NETCore.App.*`) ahead of NuGet.org and pin the runtime pack version during restore and publish. When the parameters are omitted, the generated `nuget.config` and publish command are identical to the stock path.
 

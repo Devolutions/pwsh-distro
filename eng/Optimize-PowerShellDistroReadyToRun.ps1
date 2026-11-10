@@ -67,13 +67,14 @@ function Get-ReadyToRunTarget {
     [string] $Rid
   )
 
-  if ($Rid -notmatch '^(win|linux|osx)-(.+)$') {
+  if ($Rid -notmatch '^(win|linux(?:-musl)?|osx)-(.+)$') {
     throw "Unsupported ReadyToRun runtime identifier '$Rid'."
   }
 
   $TargetOS = switch ($Matches[1]) {
     'win' { 'windows'; break }
     'linux' { 'linux'; break }
+    'linux-musl' { 'linux'; break }
     'osx' { 'osx'; break }
   }
 
