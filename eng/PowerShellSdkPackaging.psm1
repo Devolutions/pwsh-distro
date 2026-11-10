@@ -307,8 +307,68 @@ function Copy-PowerShellSdkPSGalleryModules {
   }
 }
 
+function Invoke-PowerShellSourceBuild {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)]
+    [string] $SourceRoot,
+
+    [Parameter(Mandatory)]
+    [hashtable] $BuildParameters,
+
+    [scriptblock] $BuildAction = {
+      param([hashtable] $Parameters)
+      Start-PSBuild @Parameters
+    }
+  )
+
+  $EffectiveParameters = @{}
+  foreach ($Entry in $BuildParameters.GetEnumerator()) {
+    if ($Entry.Key -eq 'PSModuleRestore') {
+      continue
+    }
+    $EffectiveParameters[$Entry.Key] = $Entry.Value
+  }
+  $EffectiveParameters['NoPSModuleRestore'] = $true
+
+  $ResolvedSourceRoot = (Resolve-Path -LiteralPath $SourceRoot).Path
+  $PSGalleryProjectPath = Join-Path $ResolvedSourceRoot (Join-Path 'src' (Join-Path 'Modules' 'PSGalleryModules.csproj'))
+  $HadPSGalleryProject = Test-Path -LiteralPath $PSGalleryProjectPath -PathType Leaf
+  $OriginalBytes = if ($HadPSGalleryProject) { [System.IO.File]::ReadAllBytes($PSGalleryProjectPath) } else { $null }
+
+  try {
+    if ($HadPSGalleryProject) {
+      # Start-PSBuild unconditionally restores src/Modules via Restore-PSPackage even when
+      # -NoPSModuleRestore is passed. Strip PackageReferences during the source build so
+      # Copy-PowerShellSdkPSGalleryModules owns module staging (and archive fallback) afterward.
+      [xml] $ProjectXml = [System.Text.Encoding]::UTF8.GetString($OriginalBytes)
+      foreach ($Node in @($ProjectXml.SelectNodes("//*[local-name()='PackageReference']"))) {
+        if ($null -ne $Node.ParentNode) {
+          [void] $Node.ParentNode.RemoveChild($Node)
+        }
+      }
+      $WriterSettings = [System.Xml.XmlWriterSettings]::new()
+      $WriterSettings.Encoding = [System.Text.UTF8Encoding]::new($false)
+      $WriterSettings.Indent = $true
+      $Writer = [System.Xml.XmlWriter]::Create($PSGalleryProjectPath, $WriterSettings)
+      try {
+        $ProjectXml.Save($Writer)
+      } finally {
+        $Writer.Dispose()
+      }
+    }
+
+    & $BuildAction $EffectiveParameters
+  } finally {
+    if ($HadPSGalleryProject -and $null -ne $OriginalBytes) {
+      [System.IO.File]::WriteAllBytes($PSGalleryProjectPath, $OriginalBytes)
+    }
+  }
+}
+
 Export-ModuleMember -Function `
   Get-PowerShellSdkSourceBuiltAssemblyDirectory, `
   Get-PowerShellSdkSourceBuiltAssemblyName, `
   Copy-PowerShellSdkSourceBuiltFile, `
-  Copy-PowerShellSdkPSGalleryModules
+  Copy-PowerShellSdkPSGalleryModules, `
+  Invoke-PowerShellSourceBuild

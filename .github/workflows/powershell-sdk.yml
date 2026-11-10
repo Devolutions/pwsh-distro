@@ -719,7 +719,7 @@ jobs:
           }
 
           $MultiPwshAppHostAssets = Resolve-MultiPwshAppHostAssets -TargetFramework $TargetFramework
-          Start-PSBuild @PSBuildParams
+          Invoke-PowerShellSourceBuild -SourceRoot $PWD -BuildParameters $PSBuildParams
 
           $PackageRuntimeGroup = switch ($Rid) {
             'win-x64' { 'win'; break }
@@ -963,7 +963,13 @@ jobs:
               $env:TF_BUILD = $PreviousTfBuild
             }
           }
-          Start-PSBuild -Clean -NoPSModuleRestore -Configuration Release -ReleaseTag $Env:POWERSHELL_RELEASE_TAG -UseNuGetOrg
+          Invoke-PowerShellSourceBuild -SourceRoot $PWD -BuildParameters @{
+            Clean = $true
+            NoPSModuleRestore = $true
+            Configuration = 'Release'
+            ReleaseTag = $Env:POWERSHELL_RELEASE_TAG
+            UseNuGetOrg = $true
+          }
 
           [xml]$CommonProps = Get-Content ./PowerShell.Common.props
           $TargetFramework = $CommonProps.Project.PropertyGroup |
@@ -1490,7 +1496,7 @@ jobs:
             RuntimeIdentifier = '${{matrix.rid}}'
             PackageId = $Env:SDK_PACKAGE_ID
             PackageVendorName = $Env:SDK_VENDOR_NAME
-            SourceBuiltSdkProjectPath = "./$SubmodulePath/src/Microsoft.PowerShell.SDK/Microsoft.PowerShell.SDK.csproj"
+            SourceBuiltSdkProjectPath = (Join-Path $PWD "$SubmodulePath/src/Microsoft.PowerShell.SDK/Microsoft.PowerShell.SDK.csproj")
           }
           [bool] $SkipRuntimeExecution = $false
           if ([System.Boolean]::TryParse('${{matrix.skip-runtime-execution}}', [ref] $SkipRuntimeExecution) -and $SkipRuntimeExecution) {

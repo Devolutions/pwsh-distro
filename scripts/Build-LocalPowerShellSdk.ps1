@@ -464,7 +464,7 @@ try {
   if (-not $IsWindows) {
     $PSBuildParams.UseNuGetOrg = $true
   }
-  Start-PSBuild @PSBuildParams
+  Invoke-PowerShellSourceBuild -SourceRoot $PwshSourceRoot -BuildParameters $PSBuildParams
 
   $env:PowerShellVendor = $VendorName
   Invoke-Native dotnet @('build', '.\src\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj', '-c', 'Release', "/p:ReleaseTag=$PowerShellVersion")

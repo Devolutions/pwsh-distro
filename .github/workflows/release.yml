@@ -289,6 +289,9 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [sdk, cli, dotnet-runtime, prepare-cli, msi, linux, macos-pkg]
     if: ${{ always() && fromJSON(needs.sdk.outputs.skip-publish) == false && needs.prepare-cli.result == 'success' && needs.msi.result == 'success' && needs.linux.result == 'success' && needs.macos-pkg.result == 'success' }}
+    concurrency:
+      group: powershell-release-publish
+      cancel-in-progress: false
     environment: ${{ needs.sdk.outputs.package-env }}
     permissions:
       actions: read

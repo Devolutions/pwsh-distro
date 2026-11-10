@@ -150,6 +150,93 @@ try {
       -UpstreamReleaseArchivePath $FixtureZip
   } -ExpectedSubstring "expected '9.9.9'"
 
+  $FakeSourceRoot = Join-Path $WorkRoot 'fake-pwsh-src'
+  $FakeModulesDir = Join-Path $FakeSourceRoot 'src\Modules'
+  New-Item -ItemType Directory -Path $FakeModulesDir -Force | Out-Null
+  $FakePSGalleryCsproj = Join-Path $FakeModulesDir 'PSGalleryModules.csproj'
+  $OriginalFakeCsprojContent = @"
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.PowerShell.Archive" Version="1.2.7" />
+  </ItemGroup>
+</Project>
+"@
+  [System.IO.File]::WriteAllText($FakePSGalleryCsproj, $OriginalFakeCsprojContent, [System.Text.UTF8Encoding]::new($false))
+  $OriginalFakeBytes = [System.IO.File]::ReadAllBytes($FakePSGalleryCsproj)
+
+  $ObservedDuringBuild = @{}
+  Invoke-PowerShellSourceBuild `
+    -SourceRoot $FakeSourceRoot `
+    -BuildParameters @{ Clean = $true; PSModuleRestore = $true } `
+    -BuildAction {
+      param([hashtable] $Parameters)
+      [xml] $DuringXml = Get-Content -LiteralPath $FakePSGalleryCsproj -Raw
+      $ObservedDuringBuild['PackageRefCount'] = @($DuringXml.SelectNodes("//*[local-name()='PackageReference']")).Count
+      $ObservedDuringBuild['NoPSModuleRestore'] = [bool] $Parameters['NoPSModuleRestore']
+      $ObservedDuringBuild['HasPSModuleRestore'] = $Parameters.ContainsKey('PSModuleRestore')
+    }
+  Assert-True ($ObservedDuringBuild['PackageRefCount'] -eq 0) 'Invoke-PowerShellSourceBuild did not strip PackageReference items during build.'
+  Assert-True ($ObservedDuringBuild['NoPSModuleRestore'] -eq $true) 'Invoke-PowerShellSourceBuild did not enforce NoPSModuleRestore.'
+  Assert-True ($ObservedDuringBuild['HasPSModuleRestore'] -eq $false) 'Invoke-PowerShellSourceBuild did not remove PSModuleRestore.'
+  Assert-True ([System.Linq.Enumerable]::SequenceEqual($OriginalFakeBytes, [System.IO.File]::ReadAllBytes($FakePSGalleryCsproj))) 'Invoke-PowerShellSourceBuild did not restore PSGalleryModules.csproj after success.'
+
+  Assert-Throws -Action {
+    Invoke-PowerShellSourceBuild `
+      -SourceRoot $FakeSourceRoot `
+      -BuildParameters @{ Configuration = 'Release' } `
+      -BuildAction { throw 'simulated build failure' }
+  } -ExpectedSubstring 'simulated build failure'
+  Assert-True ([System.Linq.Enumerable]::SequenceEqual($OriginalFakeBytes, [System.IO.File]::ReadAllBytes($FakePSGalleryCsproj))) 'Invoke-PowerShellSourceBuild did not restore PSGalleryModules.csproj after failure.'
+
+  $ExportScript = Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts\Export-PowerShellPatch.ps1'
+  $PatchSandbox = Join-Path $WorkRoot 'patch-export-sandbox'
+  $OriginBare = Join-Path $PatchSandbox 'origin.git'
+  $SeedRepo = Join-Path $PatchSandbox 'seed'
+  New-Item -ItemType Directory -Path $PatchSandbox -Force | Out-Null
+  & git init --bare $OriginBare *> $null
+  & git clone $OriginBare $SeedRepo *> $null
+  & git -C $SeedRepo config user.name 'Test'
+  & git -C $SeedRepo config user.email 'test@example.invalid'
+  & git -C $SeedRepo checkout -b downstream/v7.7.0 *> $null
+  Set-Content -LiteralPath (Join-Path $SeedRepo 'file.txt') -Value 'base' -Encoding utf8
+  & git -C $SeedRepo add file.txt
+  & git -C $SeedRepo commit -m 'base' *> $null
+  & git -C $SeedRepo tag upstream/v7.7.0
+  Set-Content -LiteralPath (Join-Path $SeedRepo 'file.txt') -Value 'patched' -Encoding utf8
+  & git -C $SeedRepo commit -am 'patch' *> $null
+  & git -C $SeedRepo push origin downstream/v7.7.0 --tags *> $null
+  & git -C $SeedRepo checkout --detach *> $null
+
+  $DetachedSubmodule = Join-Path $PatchSandbox 'pwsh-src-7.7'
+  & git clone $OriginBare $DetachedSubmodule *> $null
+  $TipSha = (& git -C $DetachedSubmodule rev-parse origin/downstream/v7.7.0).Trim()
+  & git -C $DetachedSubmodule checkout --detach $TipSha *> $null
+  & git -C $DetachedSubmodule branch -D downstream/v7.7.0 *> $null 2>&1
+
+  Push-Location $PatchSandbox
+  try {
+    $RemoteExportOut = Join-Path $PatchSandbox 'out-remote'
+    $RemoteExportLines = @(& $ExportScript -Branch 'downstream/v7.7.0' -OutputDir $RemoteExportOut)
+    Assert-True ($RemoteExportLines -contains 'Branch=downstream/v7.7.0') 'Detached submodule export did not retain logical branch.'
+    Assert-True ($RemoteExportLines -contains 'BaseTag=upstream/v7.7.0') 'Detached submodule export did not infer upstream tag.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $RemoteExportOut 'powershell-patch-7.7.0.0.patch') -PathType Leaf) 'Detached submodule export did not write patch file.'
+
+    $ChannelWorktree = Join-Path $PatchSandbox 'pwsh-src-7.7-worktree'
+    & git -C $SeedRepo worktree add $ChannelWorktree downstream/v7.7.0 *> $null
+    $AutoExportOut = Join-Path $PatchSandbox 'out-auto'
+    $AutoExportLines = @(& $ExportScript -OutputDir $AutoExportOut)
+    Assert-True ($AutoExportLines -contains 'Branch=downstream/v7.7.0') 'No-arg export did not discover channel worktree.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $AutoExportOut 'powershell-patch-7.7.0.0.patch') -PathType Leaf) 'No-arg export did not write patch file.'
+
+    New-Item -ItemType Directory -Path (Join-Path $PatchSandbox 'pwsh-src-7.6-worktree') -Force | Out-Null
+    Assert-Throws -Action { & $ExportScript -OutputDir (Join-Path $PatchSandbox 'out-ambiguous') } -ExpectedSubstring 'Multiple PowerShell source worktrees were found'
+  } finally {
+    Pop-Location
+  }
+
   Write-Host 'PowerShell channel configuration and GitHub release Latest tests passed.'
 } finally {
   try {

@@ -37,6 +37,8 @@ if ([string]::IsNullOrWhiteSpace($SourceBuiltSdkProjectPath)) {
     -PowerShellVersion $PowerShellVersion `
     -RepositoryRoot $RepositoryRootPath
   $SourceBuiltSdkProjectPath = Join-Path $RepositoryRootPath (Join-Path $ResolvedChannelConfig.SubmodulePath 'src\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj')
+} else {
+  $SourceBuiltSdkProjectPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($SourceBuiltSdkProjectPath)
 }
 
 function Assert-OptionalSdkDependenciesAbsent {
