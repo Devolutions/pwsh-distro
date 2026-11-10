@@ -131,7 +131,8 @@ try {
     Assert-True ($Link.LinkType -eq 'SymbolicLink' -and $Link.LinkTarget -eq "$InstallDirectory/pwsh") "$LinkPath does not link to $InstallDirectory/pwsh."
     $InstalledPwsh = Join-Path $InstallDirectory 'pwsh'
     Assert-True ((Get-Item -LiteralPath $InstalledPwsh).UnixFileMode.HasFlag([System.IO.UnixFileMode]::UserExecute)) "$InstalledPwsh is not executable."
-    Invoke-NativeCommand ls @('-ldOe', $InstallDirectory, $InstalledPwsh, $LinkPath) | Write-Host
+    Invoke-NativeCommand ls @('-ldOe', '/usr/local', '/usr/local/devolutions', '/usr/local/devolutions/powershell', $InstallDirectory, $InstalledPwsh, $LinkPath) | Write-Host
+    Invoke-NativeCommand xattr @('-l', $InstalledPwsh) | Write-Host
     $Reported = Invoke-NativeCommand $LinkPath @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '"$($PSVersionTable.PSVersion)|$PSHOME|$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)"')
     Assert-True ("$Reported".Trim() -eq "$PowerShellVersion|$InstallDirectory|$($Architecture.Substring(0,1).ToUpperInvariant())$($Architecture.Substring(1))") "Installed pwsh reported '$Reported'."
     Assert-True (@(Get-Content -LiteralPath /etc/shells) -contains $LinkPath) "/etc/shells does not contain $LinkPath."
