@@ -303,7 +303,7 @@ jobs:
           }
 
           $ReleaseTag = "v$SdkPackageVersion"
-          $ReleaseTitle = "$Env:SDK_PACKAGE_ID v$SdkPackageVersion"
+          $ReleaseTitle = "Devolutions PowerShell v$SdkPackageVersion"
           $SdkPackageArtifact = "PowerShell-SDK-$SdkPackageVersion"
           $ReleaseSdkPackageArtifact = "PowerShell-SDK-Release-$SdkPackageVersion"
           $ReleaseTagExists = [bool](git tag -l $ReleaseTag)
