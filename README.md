@@ -141,6 +141,32 @@ The MSI build rejects a `pwsh.exe` whose PE architecture does not match the requ
 
 The installer uses Devolutions product names, architecture-specific upgrade codes, registry keys, and Start menu entries rather than Microsoft's MSI identity. Both x64 and ARM64 now default to `C:\Program Files\Devolutions\PowerShell\7`; they cannot be installed side by side because they share that directory. The MSI detects the opposite architecture and blocks installation instead of overwriting its files. Each architecture retains its own upgrade code, so installing a higher-version MSI of the same architecture upgrades an existing installation in `7-x64` or `7-arm64` to the shared `7` directory. An already installed `7.6.6.1` MSI needs a higher revision (for example, `7.6.6.2`); reinstalling the same version will not migrate its path. Optional PATH integration and event-manifest registration are off by default; Microsoft Update enrollment, shared App Paths registration, and machine-wide telemetry changes from the upstream installer are intentionally omitted. Other optional context-menu and remoting features remain. MSI versions encode `X.Y.Z.R` as `X.Y.(Z * 100 + R)` so revision bumps are upgrades (`R` must be 0–99). The `package/msi/` sources do not need an upstream MSI target and remain on the distro branch when PowerShell 7.7 removes upstream packaging.
 
+### macOS pkg installers
+
+The release workflow also builds x64 (Intel) and arm64 (Apple silicon) macOS `.pkg` installers from its release-ready macOS CLI archives, modeled on Microsoft's `powershell-<version>-osx-<arch>.pkg`, and includes `Devolutions-PowerShell-X.Y.Z.R-osx-x64.pkg` and `Devolutions-PowerShell-X.Y.Z.R-osx-arm64.pkg` in release assets and checksums. Install from a terminal with:
+
+```bash
+sudo installer -pkg ./Devolutions-PowerShell-7.6.9.2-osx-arm64.pkg -target /
+pwsh -NoLogo -Command '$PSVersionTable'
+```
+
+Like Microsoft's package, it installs PowerShell to a versioned directory, `/usr/local/devolutions/powershell/7`, links `/usr/local/bin/pwsh` to it, registers `/usr/local/bin/pwsh` in `/etc/shells`, installs the `pwsh(1)` man page to `/usr/local/share/man/man1/pwsh.1.gz`, and adds a `/Applications/Devolutions PowerShell.app` launcher that opens `pwsh` in Terminal. It uses the `com.devolutions.powershell` package identifier and a separate install directory, so it does not modify Microsoft's `/usr/local/microsoft/powershell/7` installation, but whichever package was installed last owns the `/usr/local/bin/pwsh` link and man page. A `preinstall` script removes the previous `/usr/local/devolutions/powershell/7` payload so upgrades do not leave stale files. Each package declares its host architecture and requires macOS 11 or later; Intel Macs refuse the arm64 package, while Apple silicon can install the x64 package under Rosetta. The packages are **not** Developer ID signed or notarized: install them with `installer` as shown, or, when opened from a browser download, approve them in **System Settings > Privacy & Security**. As with Microsoft's package, there is no uninstaller; remove an installation with:
+
+```bash
+sudo rm -rf /usr/local/devolutions/powershell/7 "/Applications/Devolutions PowerShell.app"
+[ "$(readlink /usr/local/bin/pwsh)" = /usr/local/devolutions/powershell/7/pwsh ] && sudo rm /usr/local/bin/pwsh
+sudo pkgutil --forget com.devolutions.powershell
+```
+
+You can also run `.github/workflows/powershell-macos-pkg.yml` separately with a **published** release tag such as `v7.6.9.2`, or leave `release_tag` blank and provide a CLI workflow `cli_run_id` plus `package_version`. `package/macos/New-PowerShellDistroMacPkg.ps1` repackages an unpacked macOS CLI archive with `pkgbuild` and `productbuild`, normalizes permissions so only `pwsh` and `createdump` are executable, and rejects a `pwsh` whose Mach-O CPU type does not match the requested architecture. It can be run locally on macOS:
+
+```powershell
+./package/macos/New-PowerShellDistroMacPkg.ps1 -PayloadDirectory ./pwsh-cli -PackageVersion 7.6.9.2 -Architecture arm64 -OutputDirectory ./output/pkg
+./package/macos/Test-PowerShellDistroMacPkg.ps1 -PkgPath ./output/pkg/Devolutions-PowerShell-7.6.9.2-osx-arm64.pkg -Architecture arm64 -PackageVersion 7.6.9.2
+```
+
+`Test-PowerShellDistroMacPkg.ps1` validates the expanded distribution, component metadata, and payload. CI additionally passes `-Install`, which uses `sudo installer` on native Intel and Apple silicon runners to verify the receipt, `/usr/local/bin/pwsh`, `$PSHOME`, process architecture, `/etc/shells`, man page, launcher, and stale-file removal on reinstall, and, on Intel, refusal of the arm64 package. Do not pass `-Install` on a workstation you do not want modified. The launcher icon, installer background, and man page in `package/macos/assets/` were copied from PowerShell's MIT-licensed 7.6.9 sources.
+
 The copied PowerShell installer source and artwork carry this MIT license notice:
 
 ```text
@@ -207,14 +233,15 @@ The CLI workflow builds the pinned multi-pwsh launcher from source for glibc 2.2
 | `.github/workflows/powershell-cli.yml` | Restores a pinned or workflow-built SDK package and builds self-contained Windows, macOS, glibc Linux, and Alpine Linux CLI archives for x64 and arm64. | `PowerShell-<version>-<os>-<arch>` `.tar.gz` artifacts, including `linux-musl` for Alpine. |
 | `.github/workflows/powershell-msi.yml` | Packages published Windows CLI archives, CLI workflow artifacts, or the current release's prepared CLI archives, then signs and verifies the MSI when enabled. | `Devolutions-PowerShell-<tag-or-version>-win-<arch>-msi` artifacts containing an x64 or ARM64 `.msi`. |
 | `.github/workflows/powershell-linux.yml` | Repackages Linux CLI archives as deb and RPM packages and tests installation, execution, and removal across supported distributions. | `Devolutions-PowerShell-<version>-linux-<arch>-packages` artifacts with one deb and three RPMs per architecture. |
-| `.github/workflows/release.yml` | Orchestrates the SDK, CLI, MSI, and Linux packaging workflows, signs release-ready CLI and MSI artifacts, publishes the SDK package, and creates the GitHub release. | GitHub release `vX.Y.Z.R` with the SDK `.nupkg`, eight CLI archives, two Windows MSIs, eight Linux packages, the downstream patch, and checksums. |
+| `.github/workflows/powershell-macos-pkg.yml` | Packages published macOS CLI archives, CLI workflow artifacts, or the current release's prepared CLI archives into macOS installer packages, then tests installation on native Intel and Apple silicon runners. | `Devolutions-PowerShell-<tag-or-version>-osx-<arch>-pkg` artifacts containing an x64 or arm64 `.pkg`. |
+| `.github/workflows/release.yml` | Orchestrates the SDK, CLI, MSI, Linux, and macOS pkg workflows, signs release-ready CLI and MSI artifacts, publishes the SDK package, and creates the GitHub release. | GitHub release `vX.Y.Z.R` with the SDK `.nupkg`, eight CLI archives, two Windows MSIs, eight Linux packages, two macOS pkgs, the downstream patch, and checksums. |
 | `.github/workflows/dotnet-runtime.yml` | Builds the .NET runtime for Windows, macOS, glibc Linux, and Alpine Linux on x64 and arm64. The existing native builds use `awakecoding/llvm-prebuilt`; musl builds use Microsoft's .NET 10 cross-build images. | `DotNet-Runtime-<rid>` artifacts containing the source-built runtime packs. |
 
 All workflows are manual and can be started from the GitHub Actions **Run workflow** button.
 
 ## Publishing PowerShell releases
 
-The release workflow publishes only after the SDK has been validated, every CLI archive and both MSI installers have been built, and the Linux packages and Alpine archives have passed their container tests. ReadyToRun CLI archives are signed before installer packaging, so installers contain the final CLI payload. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`.
+The release workflow publishes only after the SDK has been validated, every CLI archive, both MSI installers, and both macOS pkg installers have been built, and the Linux packages, Alpine archives, and macOS installers have passed their tests. ReadyToRun CLI archives are signed before installer packaging, so installers contain the final CLI payload. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`.
 
 Manual inputs:
 
@@ -242,11 +269,11 @@ Before validation and CLI packaging, the SDK workflow runs a signing stage that 
 | `CODE_SIGNING_CERTIFICATE_NAME` | Secret |
 | `CODE_SIGNING_TIMESTAMP_SERVER` | Variable |
 
-The complete release workflow uses the existing environments and secrets without configuration changes. Production releases require **three approval rounds**: SDK signing; one Windows job that prepares/signs all eight CLI archives and builds/signs both MSI installers; and final publishing after the MSI and Linux installation tests succeed. SDK validation still runs on the signed package before CLI packaging, and MSI builds still consume the final post-ReadyToRun CLI payload. The reusable MSI workflow tests the prepared artifacts without starting its protected build jobs; standalone MSI runs retain their own build/signing stage. Production dry runs follow the same approval path when `skip-publish=false`; with `skip-publish=true`, the final publishing approval is omitted.
+The complete release workflow uses the existing environments and secrets without configuration changes. Production releases require **three approval rounds**: SDK signing; one Windows job that prepares/signs all eight CLI archives and builds/signs both MSI installers; and final publishing after the MSI, Linux, and macOS installation tests succeed. SDK validation still runs on the signed package before CLI packaging, and MSI builds still consume the final post-ReadyToRun CLI payload. The reusable MSI workflow tests the prepared artifacts without starting its protected build jobs; standalone MSI runs retain their own build/signing stage. Production dry runs follow the same approval path when `skip-publish=false`; with `skip-publish=true`, the final publishing approval is omitted.
 
 CLI signing replaces only the selected PE entries in each archive, preserving the original tar permissions, ownership, timestamps, and symlinks on Windows as well as Unix hosts. Run `./eng/Test-SignPowerShellDistroArchive.ps1` to exercise payload replacement, Unix metadata preservation, and failure handling without signing credentials.
 
-Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The release workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation only in the publishing job. A real publish pushes the validated `.nupkg` containing signed Windows payloads to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the SDK package, every CLI archive, both signed MSI installers, the Linux packages, the generated downstream PowerShell patch file, and a SHA256 checksum file covering all release assets.
+Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The release workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation only in the publishing job. A real publish pushes the validated `.nupkg` containing signed Windows payloads to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the SDK package, every CLI archive, both signed MSI installers, the Linux packages, both macOS pkg installers, the generated downstream PowerShell patch file, and a SHA256 checksum file covering all release assets.
 
 ## Source-built .NET runtime option
 

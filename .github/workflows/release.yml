@@ -259,11 +259,23 @@ jobs:
       package_version: ${{ needs.sdk.outputs.sdk-package-version }}
       cli_artifact_name: PowerShell-Release-CLI-${{ needs.sdk.outputs.sdk-package-version }}
 
+  macos-pkg:
+    name: Build PowerShell macOS pkg
+    needs: [sdk, prepare-cli]
+    if: ${{ always() && needs.prepare-cli.result == 'success' }}
+    uses: ./.github/workflows/powershell-macos-pkg.yml
+    permissions:
+      actions: read
+      contents: read
+    with:
+      package_version: ${{ needs.sdk.outputs.sdk-package-version }}
+      cli_artifact_name: PowerShell-Release-CLI-${{ needs.sdk.outputs.sdk-package-version }}
+
   publish:
     name: Publish PowerShell release
     runs-on: ubuntu-24.04
-    needs: [sdk, cli, dotnet-runtime, prepare-cli, msi, linux]
-    if: ${{ always() && fromJSON(needs.sdk.outputs.skip-publish) == false && needs.prepare-cli.result == 'success' && needs.msi.result == 'success' && needs.linux.result == 'success' }}
+    needs: [sdk, cli, dotnet-runtime, prepare-cli, msi, linux, macos-pkg]
+    if: ${{ always() && fromJSON(needs.sdk.outputs.skip-publish) == false && needs.prepare-cli.result == 'success' && needs.msi.result == 'success' && needs.linux.result == 'success' && needs.macos-pkg.result == 'success' }}
     environment: ${{ needs.sdk.outputs.package-env }}
     permissions:
       actions: read
@@ -330,6 +342,13 @@ jobs:
         uses: actions/download-artifact@v8.0.1
         with:
           pattern: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-linux-*-packages
+          path: release-assets
+          merge-multiple: true
+
+      - name: Download PowerShell macOS pkg installers
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-osx-*-pkg
           path: release-assets
           merge-multiple: true
 
@@ -445,12 +464,17 @@ jobs:
             throw "Expected Linux packages $($ExpectedLinuxPackages -join ', '); found $($LinuxPackages.Name -join ', ')."
           }
 
+          $MacPackages = @(Get-ChildItem -File | Where-Object { $_.Name -like 'Devolutions-PowerShell-*-osx-*.pkg' } | Sort-Object Name)
+          if ($MacPackages.Count -ne 2) {
+            throw "Expected exactly two PowerShell macOS pkg installers in the release package directory, found $($MacPackages.Count)."
+          }
+
           $PatchFiles = @(Get-ChildItem -File | Where-Object { $_.Name -like 'powershell-patch-*.patch' } | Sort-Object Name)
           if ($PatchFiles.Count -ne 1) {
             throw "Expected exactly one generated patch file in the release package directory, found $($PatchFiles.Count)."
           }
 
-          $ReleaseAssetFiles = @($NugetPackages) + @($CliArchives) + @($MsiPackages) + @($LinuxPackages) + @($PatchFiles)
+          $ReleaseAssetFiles = @($NugetPackages) + @($CliArchives) + @($MsiPackages) + @($LinuxPackages) + @($MacPackages) + @($PatchFiles)
           $ReleaseAssetFiles = @($ReleaseAssetFiles | Sort-Object Name)
 
           $HashPath = 'checksums'
@@ -480,6 +504,7 @@ jobs:
             "| CLI archives | $($CliArchives.Count) |",
             "| MSI installers | $($MsiPackages.Count) |",
             "| Linux packages | $($LinuxPackages.Count) |",
+            "| macOS pkg installers | $($MacPackages.Count) |",
             "| Patch file | $($PatchFiles[0].Name) |"
           )
           Set-Content -Path $NotesPath -Value $ReleaseNotes -Encoding utf8

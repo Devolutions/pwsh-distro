@@ -1,0 +1,173 @@
+name: PowerShell macOS pkg
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published release tag with macOS CLI archives (vX.Y.Z.R); leave blank to use a CLI run
+        required: false
+        default: ""
+        type: string
+      cli_run_id:
+        description: CLI workflow run ID to package before publishing a release (requires package_version)
+        required: false
+        default: ""
+        type: string
+      package_version:
+        description: X.Y.Z.R version when using cli_run_id (for example, 7.6.9.0)
+        required: false
+        default: ""
+        type: string
+  workflow_call:
+    inputs:
+      package_version:
+        required: true
+        type: string
+      cli_artifact_name:
+        description: Current-run artifact containing release-ready CLI archives
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  build:
+    name: macOS pkg [osx-${{ matrix.arch }}]
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - name: Clone project
+        uses: actions/checkout@v7.0.0
+
+      - name: Download current-run release-ready CLI archives
+        if: ${{ inputs.cli_artifact_name != '' }}
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: ${{ inputs.cli_artifact_name }}
+          path: archives
+
+      - name: Download and package macOS CLI
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          CLI_RUN_ID: ${{ inputs.cli_run_id }}
+          CLI_ARTIFACT_NAME: ${{ inputs.cli_artifact_name }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
+          ARCHITECTURE: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($Env:CLI_ARTIFACT_NAME) {
+            if ($Env:RELEASE_TAG -or $Env:CLI_RUN_ID -or $Env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+              throw 'Current-run CLI artifact requires package_version and cannot be combined with release_tag or cli_run_id.'
+            }
+            $PackageVersion = $Env:PACKAGE_VERSION
+          } elseif ($Env:RELEASE_TAG) {
+            if ($Env:CLI_RUN_ID -or $Env:PACKAGE_VERSION) {
+              throw 'Specify release_tag OR cli_run_id and package_version, not both.'
+            }
+            if ($Env:RELEASE_TAG -notmatch '^v(?<version>\d+\.\d+\.\d+\.\d+)$') {
+              throw "Release tag must be vX.Y.Z.R: $Env:RELEASE_TAG"
+            }
+            $PackageVersion = $Matches.version
+          } else {
+            if ($Env:CLI_RUN_ID -notmatch '^\d+$' -or $Env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+              throw 'Specify a numeric cli_run_id and an X.Y.Z.R package_version when release_tag is blank.'
+            }
+            $PackageVersion = $Env:PACKAGE_VERSION
+          }
+
+          $PowerShellVersion = $PackageVersion -replace '\.\d+$', ''
+          $ArchiveName = "PowerShell-$PowerShellVersion-macos-$Env:ARCHITECTURE.tar.gz"
+          $ArchiveDirectory = Join-Path $PWD 'archives'
+          $PayloadDirectory = Join-Path $PWD 'payload'
+          New-Item -ItemType Directory -Path $ArchiveDirectory, $PayloadDirectory -Force | Out-Null
+
+          if ($Env:CLI_ARTIFACT_NAME) {
+            Write-Host "Using current-run CLI artifact $Env:CLI_ARTIFACT_NAME."
+          } elseif ($Env:RELEASE_TAG) {
+            & gh release download $Env:RELEASE_TAG --repo $Env:GITHUB_REPOSITORY --pattern $ArchiveName --dir $ArchiveDirectory
+            if ($LASTEXITCODE -ne 0) {
+              throw "Unable to download $ArchiveName from $Env:RELEASE_TAG."
+            }
+          } else {
+            $ArtifactName = "PowerShell-$PowerShellVersion-macos-$Env:ARCHITECTURE"
+            & gh run download $Env:CLI_RUN_ID --repo $Env:GITHUB_REPOSITORY --name $ArtifactName --dir $ArchiveDirectory
+            if ($LASTEXITCODE -ne 0) {
+              throw "Unable to download $ArchiveName from CLI run $Env:CLI_RUN_ID."
+            }
+          }
+          $ArchivePath = Join-Path $ArchiveDirectory $ArchiveName
+          if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
+            throw "CLI archive was not found: $ArchivePath"
+          }
+
+          & tar -xzf $ArchivePath -C $PayloadDirectory
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to extract $ArchivePath"
+          }
+          $OutputDirectory = Join-Path $PWD 'output/pkg'
+          & ./package/macos/New-PowerShellDistroMacPkg.ps1 -PayloadDirectory $PayloadDirectory -PackageVersion $PackageVersion -Architecture $Env:ARCHITECTURE -OutputDirectory $OutputDirectory
+          & ./package/macos/Test-PowerShellDistroMacPkg.ps1 `
+            -PkgPath (Join-Path $OutputDirectory "Devolutions-PowerShell-$PackageVersion-osx-$Env:ARCHITECTURE.pkg") `
+            -Architecture $Env:ARCHITECTURE -PackageVersion $PackageVersion
+
+      - name: Upload PowerShell macOS pkg
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: Devolutions-PowerShell-${{ inputs.release_tag || inputs.package_version }}-osx-${{ matrix.arch }}-pkg
+          path: output/pkg/*.pkg
+          if-no-files-found: error
+
+  test:
+    name: Test macOS pkg install [${{ matrix.arch }}]
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    steps:
+      - name: Clone project
+        uses: actions/checkout@v7.0.0
+
+      - name: Download macOS pkg installers
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: Devolutions-PowerShell-${{ inputs.release_tag || inputs.package_version }}-osx-*-pkg
+          path: pkgs
+          merge-multiple: true
+
+      - name: Exercise pkg install, reinstall, and architecture guard
+        shell: pwsh
+        env:
+          ARCHITECTURE: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Pkg = @(Get-ChildItem -LiteralPath ./pkgs -Filter "Devolutions-PowerShell-*-osx-$Env:ARCHITECTURE.pkg" -File)
+          if ($Pkg.Count -ne 1 -or $Pkg[0].Name -notmatch '^Devolutions-PowerShell-(?<version>\d+\.\d+\.\d+\.\d+)-osx-') {
+            throw "Expected one macOS pkg for $Env:ARCHITECTURE."
+          }
+          $TestArguments = @{
+            PkgPath = $Pkg[0].FullName
+            Architecture = $Env:ARCHITECTURE
+            PackageVersion = $Matches.version
+            Install = $true
+          }
+          # Apple silicon can install x86_64 packages through Rosetta, so only Intel hosts must refuse the other architecture.
+          if ($Env:ARCHITECTURE -eq 'x64') {
+            $OppositePkg = @(Get-ChildItem -LiteralPath ./pkgs -Filter '*-osx-arm64.pkg' -File)
+            if ($OppositePkg.Count -ne 1) {
+              throw 'Expected one arm64 pkg for the Intel cross-architecture test.'
+            }
+            $TestArguments.OppositePkgPath = $OppositePkg[0].FullName
+          }
+          & ./package/macos/Test-PowerShellDistroMacPkg.ps1 @TestArguments
