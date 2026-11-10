@@ -195,6 +195,10 @@ fi
   $PostInstall = Join-Path $Scripts 'postinstall'
   Set-Content -LiteralPath $PostInstall -Encoding ascii -Value @"
 #!/bin/bash
+chmod 755 "$InstallDirectory/pwsh"
+if [ -f "$InstallDirectory/createdump" ] ; then
+    chmod 755 "$InstallDirectory/createdump"
+fi
 if [ ! -f /etc/shells ] ; then
     echo "$LinkPath" > /etc/shells
 else

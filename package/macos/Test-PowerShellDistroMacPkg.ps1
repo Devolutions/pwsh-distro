@@ -129,6 +129,9 @@ try {
     Assert-True (($Receipt -match "^version: $([regex]::Escape($PackageVersion))$").Count -eq 1) "pkgutil receipt does not report version $PackageVersion."
     $Link = Get-Item -LiteralPath $LinkPath
     Assert-True ($Link.LinkType -eq 'SymbolicLink' -and $Link.LinkTarget -eq "$InstallDirectory/pwsh") "$LinkPath does not link to $InstallDirectory/pwsh."
+    $InstalledPwsh = Join-Path $InstallDirectory 'pwsh'
+    Assert-True ((Get-Item -LiteralPath $InstalledPwsh).UnixFileMode.HasFlag([System.IO.UnixFileMode]::UserExecute)) "$InstalledPwsh is not executable."
+    Invoke-NativeCommand ls @('-ldOe', $InstallDirectory, $InstalledPwsh, $LinkPath) | Write-Host
     $Reported = Invoke-NativeCommand $LinkPath @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '"$($PSVersionTable.PSVersion)|$PSHOME|$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)"')
     Assert-True ("$Reported".Trim() -eq "$PowerShellVersion|$InstallDirectory|$($Architecture.Substring(0,1).ToUpperInvariant())$($Architecture.Substring(1))") "Installed pwsh reported '$Reported'."
     Assert-True (@(Get-Content -LiteralPath /etc/shells) -contains $LinkPath) "/etc/shells does not contain $LinkPath."
