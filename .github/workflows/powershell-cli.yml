@@ -73,6 +73,14 @@ env:
   SDK_PACKAGE_VERSION: "7.6.9.2"
   SDK_PACKAGE_REVISION: "2"
   SDK_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
+  MULTI_PWSH_APPHOST_VERSION: "0.14.2"
+  MULTI_PWSH_APPHOST_SOURCE_REF: "77676d18baaf205ec36b1711d11bd386d4b15272"
+  MULTI_PWSH_BINDINGS_POWERSHELL_VERSION: "7.4.0"
+  MULTI_PWSH_RUST_TOOLCHAIN: "1.90.0"
+  MULTI_PWSH_ALPINE_BUILD_IMAGE: "rust:1.90.0-alpine3.22"
+  MULTI_PWSH_GLIBC_BUILD_IMAGE: "registry.access.redhat.com/ubi8/ubi:latest"
+  POWERSHELL_NATIVE_PACKAGE_VERSION: "700.0.2"
+  POWERSHELL_NATIVE_SOURCE_REF: "f24d5494b373de20ec3e3d2fdc7c3fc98af1f9f1"
 jobs:
   build:
     name: PowerShell [${{matrix.arch}}-${{matrix.os}}]
@@ -105,6 +113,14 @@ jobs:
             arch: arm64
             runner: ubuntu-24.04-arm
             rid: linux-arm64
+          - os: linux-musl
+            arch: x64
+            runner: ubuntu-24.04
+            rid: linux-musl-x64
+          - os: linux-musl
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            rid: linux-musl-arm64
 
     steps:
       - name: Enable Windows long path support
@@ -189,6 +205,128 @@ jobs:
         uses: actions/setup-dotnet@v5.3.0
         with:
           global-json-file: pwsh-src/global.json
+
+      - name: Test Linux apphost validation
+        if: runner.os == 'Linux'
+        shell: pwsh
+        run: ./eng/Test-LinuxAppHost.ps1
+
+      - name: Clone pinned MultiPwsh launcher source
+        if: runner.os == 'Linux'
+        uses: actions/checkout@v7.0.0
+        with:
+          repository: Devolutions/multi-pwsh
+          ref: ${{ env.MULTI_PWSH_APPHOST_SOURCE_REF }}
+          path: multi-pwsh-source
+
+      - name: Setup MultiPwsh .NET SDK
+        if: runner.os == 'Linux'
+        uses: actions/setup-dotnet@v5.3.0
+        with:
+          global-json-file: multi-pwsh-source/global.json
+
+      - name: Clone PowerShell.Native source
+        if: matrix.rid == 'linux-arm64' || matrix.rid == 'linux-musl-arm64'
+        uses: actions/checkout@v7.0.0
+        with:
+          repository: PowerShell/PowerShell-Native
+          ref: ${{ env.POWERSHELL_NATIVE_SOURCE_REF }}
+          path: powershell-native-source
+
+      - name: Verify PowerShell.Native version
+        if: matrix.rid == 'linux-arm64' || matrix.rid == 'linux-musl-arm64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [xml] $Project = Get-Content -LiteralPath 'pwsh-src/src/System.Management.Automation/System.Management.Automation.csproj' -Raw
+          $References = @($Project.Project.ItemGroup.PackageReference | Where-Object { $_.Include -eq 'Microsoft.PowerShell.Native' })
+          if ($References.Count -ne 1 -or $References[0].Version -ne $Env:POWERSHELL_NATIVE_PACKAGE_VERSION) {
+            throw "PowerShell.Native source pin does not match version $Env:POWERSHELL_NATIVE_PACKAGE_VERSION in PowerShell source."
+          }
+
+      - name: Build Linux MultiPwsh launcher
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_version="$(sed -n 's/^version = "\(.*\)"/\1/p' multi-pwsh-source/crates/multi-pwsh/Cargo.toml | head -n 1)"
+          if [[ "$source_version" != "$MULTI_PWSH_APPHOST_VERSION" ]]; then
+            echo "MultiPwsh source version $source_version does not match $MULTI_PWSH_APPHOST_VERSION" >&2
+            exit 1
+          fi
+          if [[ "$(git -C multi-pwsh-source rev-parse HEAD)" != "$MULTI_PWSH_APPHOST_SOURCE_REF" ]]; then
+            echo "MultiPwsh source commit does not match $MULTI_PWSH_APPHOST_SOURCE_REF" >&2
+            exit 1
+          fi
+
+          bindings_pwsh_dir="$RUNNER_TEMP/multi-pwsh-bindings-pwsh"
+          mkdir -p "$bindings_pwsh_dir"
+          curl --fail --location --retry 3 --silent --show-error \
+            "https://github.com/PowerShell/PowerShell/releases/download/v${MULTI_PWSH_BINDINGS_POWERSHELL_VERSION}/powershell-${MULTI_PWSH_BINDINGS_POWERSHELL_VERSION}-linux-${{ matrix.arch }}.tar.gz" \
+            -o "$RUNNER_TEMP/multi-pwsh-bindings-pwsh.tar.gz"
+          tar -xzf "$RUNNER_TEMP/multi-pwsh-bindings-pwsh.tar.gz" -C "$bindings_pwsh_dir"
+          chmod +x "$bindings_pwsh_dir/pwsh"
+          bindings_pwsh_version="$("$bindings_pwsh_dir/pwsh" -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')"
+          if [[ "$bindings_pwsh_version" != "$MULTI_PWSH_BINDINGS_POWERSHELL_VERSION" ]]; then
+            echo "MultiPwsh bindings require PowerShell $MULTI_PWSH_BINDINGS_POWERSHELL_VERSION, got $bindings_pwsh_version" >&2
+            exit 1
+          fi
+
+          (cd multi-pwsh-source && dotnet build dotnet/bindings/Devolutions.PowerShell.SDK.Bindings.csproj -c Release "/p:PwshExePath=$bindings_pwsh_dir/pwsh")
+          (cd multi-pwsh-source && dotnet build dotnet/startup-hook/Devolutions.PowerShell.SDK.StartupHook.csproj -c Release)
+
+          if [[ "${{ matrix.os }}" == "linux-musl" ]]; then
+            abi=musl
+            image="$MULTI_PWSH_ALPINE_BUILD_IMAGE"
+          else
+            abi=glibc
+            image="$MULTI_PWSH_GLIBC_BUILD_IMAGE"
+          fi
+          docker run --rm \
+            -v "$PWD/multi-pwsh-source:/src" \
+            -v "$PWD/eng:/eng:ro" \
+            -w /src -e RUST_TOOLCHAIN_VERSION="$MULTI_PWSH_RUST_TOOLCHAIN" \
+            "$image" sh /eng/Build-LinuxMultiPwshAppHost.sh "$abi"
+
+          if [[ "$abi" == "glibc" ]]; then
+            max_glibc="$(readelf --version-info multi-pwsh-source/pwsh-linux-apphost | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -Vu | tail -n 1)"
+            if [[ -z "$max_glibc" || "$(printf '%s\n' 2.28 "${max_glibc#GLIBC_}" | sort -V | tail -n 1)" != "2.28" ]]; then
+              echo "Linux launcher requires $max_glibc; RHEL 8 requires glibc 2.28 or older" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Build ARM64 PowerShell native library
+        if: matrix.rid == 'linux-arm64' || matrix.rid == 'linux-musl-arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(git -C powershell-native-source rev-parse HEAD)" != "$POWERSHELL_NATIVE_SOURCE_REF" ]]; then
+            echo "PowerShell.Native source commit does not match $POWERSHELL_NATIVE_SOURCE_REF" >&2
+            exit 1
+          fi
+          if [[ "${{ matrix.rid }}" == "linux-musl-arm64" ]]; then
+            abi=musl
+            image="$MULTI_PWSH_ALPINE_BUILD_IMAGE"
+          else
+            abi=glibc
+            image="$MULTI_PWSH_GLIBC_BUILD_IMAGE"
+          fi
+          docker run --rm \
+            -v "$PWD/powershell-native-source:/native" \
+            -v "$PWD/eng:/eng:ro" \
+            "$image" sh /eng/Build-LinuxPowerShellNative.sh "$abi"
+          native_library="powershell-native-source/pwsh-native-$abi-arm64.so"
+          readelf -h "$native_library" | grep -q 'AArch64'
+          if [[ "$abi" == "musl" ]]; then
+            readelf -d "$native_library" | grep -F 'Shared library: [libc.musl-aarch64.so.1]'
+          else
+            max_glibc="$(readelf --version-info "$native_library" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -Vu | tail -n 1)"
+            if [[ -z "$max_glibc" || "$(printf '%s\n' 2.28 "${max_glibc#GLIBC_}" | sort -V | tail -n 1)" != "2.28" ]]; then
+              echo "PowerShell native library requires $max_glibc; RHEL 8 requires glibc 2.28 or older" >&2
+              exit 1
+            fi
+          fi
 
       - name: Download current-run SDK package
         if: ${{ inputs.sdk_artifact_name != '' && inputs.sdk_artifact_run_id == '' }}
@@ -292,6 +430,15 @@ jobs:
           if ('${{ inputs.ready_to_run }}' -eq 'true') {
             $PackageArguments.ReadyToRun = $true
           }
+          if ('${{ matrix.os }}' -like 'linux*') {
+            $PackageArguments.LinuxAppHostPath = Join-Path $PWD 'multi-pwsh-source/pwsh-linux-apphost'
+            $PackageArguments.LinuxAppHostLicenseDirectory = Join-Path $PWD 'multi-pwsh-source'
+          }
+          if ('${{ matrix.rid }}' -in 'linux-arm64', 'linux-musl-arm64') {
+            $NativeAbi = if ('${{ matrix.rid }}' -eq 'linux-musl-arm64') { 'musl' } else { 'glibc' }
+            $PackageArguments.PowerShellNativeLibraryPath = Join-Path $PWD "powershell-native-source/pwsh-native-$NativeAbi-arm64.so"
+            $PackageArguments.PowerShellNativeLicensePath = Join-Path $PWD 'powershell-native-source/LICENSE.txt'
+          }
           $UseCustomRuntime = '${{ inputs.use_custom_dotnet_runtime }}' -ieq 'true'
           if ($UseCustomRuntime) {
             $CustomRuntimeSource = Join-Path $PWD 'custom-runtime-source'
@@ -323,3 +470,30 @@ jobs:
           name: PowerShell-${{env.POWERSHELL_VERSION}}-${{matrix.os}}-${{matrix.arch}}
           path: PowerShell-${{env.POWERSHELL_VERSION}}-${{matrix.os}}-${{matrix.arch}}.tar.gz
           if-no-files-found: error
+
+  test-alpine:
+    name: Test Alpine ${{ matrix.alpine }} [${{ matrix.arch }}]
+    needs: build
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+        alpine: ["3.22", "3.23"]
+    steps:
+      - name: Clone project
+        uses: actions/checkout@v7.0.0
+
+      - name: Download Alpine CLI archive
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: PowerShell-${{ env.POWERSHELL_VERSION }}-linux-musl-${{ matrix.arch }}
+          path: archives
+
+      - name: Run Alpine archive
+        shell: bash
+        run: |
+          docker run --rm -v "$PWD:/work:ro" "alpine:${{ matrix.alpine }}" \
+            sh /work/package/linux/Test-PowerShellDistroAlpineArchive.sh \
+            "/work/archives/PowerShell-$POWERSHELL_VERSION-linux-musl-${{ matrix.arch }}.tar.gz" \
+            "$POWERSHELL_VERSION" "${{ matrix.arch }}"

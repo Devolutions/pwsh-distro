@@ -12,6 +12,8 @@ env:
   CLANG_LLVM_VERSION: "22.1.4"
   CLANG_LLVM_RELEASE: "v2026.1.1"
   VSDEVSHELL_MODULE_NAME: "VsDevShell"
+  DOTNET_MUSL_CROSS_IMAGE_X64: "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-amd64-musl"
+  DOTNET_MUSL_CROSS_IMAGE_ARM64: "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-arm64-musl"
 jobs:
   build:
     name: .NET runtime [${{matrix.arch}}-${{matrix.os}}]
@@ -268,4 +270,70 @@ jobs:
         with:
           name: DotNet-Runtime-${{matrix.rid}}
           path: ${{ runner.temp }}/dotnet-runtime-pack-${{matrix.rid}}/*.nupkg
+          if-no-files-found: error
+
+  build-musl:
+    name: .NET runtime [linux-musl-${{ matrix.arch }}]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - name: Clone .NET runtime ${{ env.DOTNET_RUNTIME_VERSION }}
+        uses: actions/checkout@v7.0.0
+        with:
+          repository: dotnet/runtime
+          ref: ${{ env.DOTNET_RUNTIME_REF }}
+          path: dotnet-runtime
+
+      - name: Build Linux-musl runtime packs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            image="$DOTNET_MUSL_CROSS_IMAGE_ARM64"
+          else
+            image="$DOTNET_MUSL_CROSS_IMAGE_X64"
+          fi
+          # Ninja can rerun CMake after the initial configure, so keep its toolchain architecture in scope.
+          docker run --rm \
+            -v "$PWD/dotnet-runtime:/runtime" \
+            -w /runtime -e ROOTFS_DIR="/crossrootfs/${{ matrix.arch }}" \
+            -e TARGET_BUILD_ARCH="${{ matrix.arch }}" \
+            "$image" bash -euc '
+              git config --global --add safe.directory /runtime
+              ./build.sh -arch "${{ matrix.arch }}" -os linux-musl -cross -restore
+              ./build.sh -arch "${{ matrix.arch }}" -os linux-musl -cross -c Release -ninja -pack
+            '
+
+      - name: Stage Linux-musl runtime packs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Rid = 'linux-musl-${{ matrix.arch }}'
+          $ShippingDir = Join-Path $PWD 'dotnet-runtime/artifacts/packages/Release/Shipping'
+          if (-not (Test-Path -LiteralPath $ShippingDir -PathType Container)) {
+            throw "Runtime pack output directory was not found: $ShippingDir"
+          }
+          $StageDir = Join-Path $Env:RUNNER_TEMP "dotnet-runtime-pack-$Rid"
+          New-Item -Path $StageDir -ItemType Directory -Force | Out-Null
+          $Packs = @(Get-ChildItem -LiteralPath $ShippingDir -Recurse -File -Filter '*.nupkg' |
+            Where-Object {
+              $_.Name -notmatch '\.symbols\.nupkg$' -and
+                $_.Name -match ('^Microsoft\.NETCore\.App\.(Ref|Runtime\.' + [regex]::Escape($Rid) + ')\.')
+            })
+          if (@($Packs | Where-Object { $_.Name -like "Microsoft.NETCore.App.Runtime.$Rid.*" }).Count -eq 0) {
+            throw "No Microsoft.NETCore.App runtime pack for RID '$Rid' was found under $ShippingDir"
+          }
+          foreach ($Pack in $Packs) {
+            Copy-Item -LiteralPath $Pack.FullName -Destination $StageDir -Force
+            Write-Host "Staged runtime pack: $($Pack.Name)"
+          }
+
+      - name: Upload Linux-musl runtime pack
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: DotNet-Runtime-linux-musl-${{ matrix.arch }}
+          path: ${{ runner.temp }}/dotnet-runtime-pack-linux-musl-${{ matrix.arch }}/*.nupkg
           if-no-files-found: error
