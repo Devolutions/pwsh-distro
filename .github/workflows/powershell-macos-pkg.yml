@@ -17,6 +17,19 @@ on:
         required: false
         default: ""
         type: string
+      sign_pkg:
+        description: Developer ID sign and notarize the pkg (requires Apple signing secrets)
+        required: true
+        type: boolean
+        default: true
+      github-env:
+        description: GitHub environment containing Apple signing secrets
+        required: true
+        type: choice
+        options:
+          - publish-prod
+          - publish-test
+        default: publish-prod
   workflow_call:
     inputs:
       package_version:
@@ -24,6 +37,12 @@ on:
         type: string
       cli_artifact_name:
         description: Current-run artifact containing release-ready CLI archives
+        required: true
+        type: string
+      sign_pkg:
+        required: true
+        type: boolean
+      github-env:
         required: true
         type: string
 
@@ -35,6 +54,7 @@ jobs:
   build:
     name: macOS pkg [osx-${{ matrix.arch }}]
     runs-on: macos-15
+    environment: ${{ inputs.sign_pkg && inputs.github-env || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -50,7 +70,68 @@ jobs:
           name: ${{ inputs.cli_artifact_name }}
           path: archives
 
+      - name: Import Apple Developer ID certificates
+        id: signing
+        if: ${{ inputs.sign_pkg }}
+        shell: bash
+        env:
+          APPLICATION_CERTIFICATE: ${{ secrets.APPLE_APP_DEV_ID_APP_CERTIFICATE }}
+          APPLICATION_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_APP_DEV_ID_APP_CERTIFICATE_PASSWORD }}
+          INSTALLER_CERTIFICATE: ${{ secrets.APPLE_DEV_ID_INSTALLER_CERTIFICATE }}
+          INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEV_ID_INSTALLER_CERTIFICATE_PASSWORD }}
+          APPLE_BOT_PASSWORD: ${{ secrets.APPLE_BOT_PASSWORD }}
+          DEVOLUTIONSBOT_TOKEN: ${{ secrets.DEVOLUTIONSBOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          for name in APPLICATION_CERTIFICATE APPLICATION_CERTIFICATE_PASSWORD INSTALLER_CERTIFICATE INSTALLER_CERTIFICATE_PASSWORD APPLE_BOT_PASSWORD DEVOLUTIONSBOT_TOKEN; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::$name is required to sign and notarize the macOS pkg. Configure the Apple signing secrets in the ${{ inputs.github-env }} environment."
+              exit 1
+            fi
+          done
+
+          keychain="$RUNNER_TEMP/pwsh-distro-signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          echo "::add-mask::$keychain_password"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+
+          certificate="$RUNNER_TEMP/pwsh-distro-signing.p12"
+          trap 'rm -f "$certificate"' EXIT
+          printf '%s' "$APPLICATION_CERTIFICATE" | base64 --decode > "$certificate"
+          security import "$certificate" -k "$keychain" -P "$APPLICATION_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild -T /usr/bin/security
+          printf '%s' "$INSTALLER_CERTIFICATE" | base64 --decode > "$certificate"
+          security import "$certificate" -k "$keychain" -P "$INSTALLER_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild -T /usr/bin/security
+          rm -f "$certificate"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+
+          # productbuild resolves identities through the user keychain search list.
+          existing_keychains=()
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            existing_keychains+=("${line//\"/}")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$keychain" "${existing_keychains[@]}"
+
+          identities="$(security find-identity -v "$keychain")"
+          application_identity="$(sed -nE 's/^ *[0-9]+\) [0-9A-F]{40} "(Developer ID Application: [^"]+)"$/\1/p' <<< "$identities" | head -n 1)"
+          installer_identity="$(sed -nE 's/^ *[0-9]+\) [0-9A-F]{40} "(Developer ID Installer: [^"]+)"$/\1/p' <<< "$identities" | head -n 1)"
+          if [[ -z "$application_identity" || -z "$installer_identity" ]]; then
+            echo '::error::The Apple certificates must contain valid Developer ID Application and Developer ID Installer identities.'
+            security find-identity -v "$keychain"
+            exit 1
+          fi
+          echo "Application identity: $application_identity"
+          echo "Installer identity: $installer_identity"
+          {
+            echo "keychain=$keychain"
+            echo "application-identity=$application_identity"
+            echo "installer-identity=$installer_identity"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Download and package macOS CLI
+        id: package
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -59,6 +140,9 @@ jobs:
           CLI_ARTIFACT_NAME: ${{ inputs.cli_artifact_name }}
           PACKAGE_VERSION: ${{ inputs.package_version }}
           ARCHITECTURE: ${{ matrix.arch }}
+          SIGNING_KEYCHAIN: ${{ steps.signing.outputs.keychain }}
+          CODE_SIGNING_IDENTITY: ${{ steps.signing.outputs.application-identity }}
+          INSTALLER_SIGNING_IDENTITY: ${{ steps.signing.outputs.installer-identity }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($Env:CLI_ARTIFACT_NAME) {
@@ -111,10 +195,57 @@ jobs:
             throw "Unable to extract $ArchivePath"
           }
           $OutputDirectory = Join-Path $PWD 'output/pkg'
-          & ./package/macos/New-PowerShellDistroMacPkg.ps1 -PayloadDirectory $PayloadDirectory -PackageVersion $PackageVersion -Architecture $Env:ARCHITECTURE -OutputDirectory $OutputDirectory
-          & ./package/macos/Test-PowerShellDistroMacPkg.ps1 `
-            -PkgPath (Join-Path $OutputDirectory "Devolutions-PowerShell-$PackageVersion-osx-$Env:ARCHITECTURE.pkg") `
-            -Architecture $Env:ARCHITECTURE -PackageVersion $PackageVersion
+          $PackageArguments = @{
+            PayloadDirectory = $PayloadDirectory
+            PackageVersion = $PackageVersion
+            Architecture = $Env:ARCHITECTURE
+            OutputDirectory = $OutputDirectory
+          }
+          if ($Env:CODE_SIGNING_IDENTITY) {
+            $PackageArguments.CodeSigningIdentity = $Env:CODE_SIGNING_IDENTITY
+            $PackageArguments.InstallerSigningIdentity = $Env:INSTALLER_SIGNING_IDENTITY
+            $PackageArguments.Keychain = $Env:SIGNING_KEYCHAIN
+          }
+          & ./package/macos/New-PowerShellDistroMacPkg.ps1 @PackageArguments
+          $PkgPath = Join-Path $OutputDirectory "Devolutions-PowerShell-$PackageVersion-osx-$Env:ARCHITECTURE.pkg"
+          & ./package/macos/Test-PowerShellDistroMacPkg.ps1 -PkgPath $PkgPath -Architecture $Env:ARCHITECTURE -PackageVersion $PackageVersion -RequireSignature:([bool] $Env:CODE_SIGNING_IDENTITY)
+          "pkg-path=$PkgPath" >> $Env:GITHUB_OUTPUT
+          "package-version=$PackageVersion" >> $Env:GITHUB_OUTPUT
+
+      - name: Checkout DevOps Apple notarization action
+        if: ${{ inputs.sign_pkg }}
+        uses: actions/checkout@v7.0.0
+        with:
+          repository: Devolutions/actions
+          ref: v1
+          token: ${{ secrets.DEVOLUTIONSBOT_TOKEN }}
+          path: .ci/devolutions-actions
+          persist-credentials: false
+
+      - name: Notarize and staple macOS pkg
+        if: ${{ inputs.sign_pkg }}
+        uses: ./.ci/devolutions-actions/macos-notarize
+        with:
+          apple_password: ${{ secrets.APPLE_BOT_PASSWORD }}
+          package_path: ${{ steps.package.outputs.pkg-path }}
+
+      - name: Verify notarized macOS pkg
+        if: ${{ inputs.sign_pkg }}
+        shell: pwsh
+        env:
+          PKG_PATH: ${{ steps.package.outputs.pkg-path }}
+          PACKAGE_VERSION: ${{ steps.package.outputs.package-version }}
+          ARCHITECTURE: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./package/macos/Test-PowerShellDistroMacPkg.ps1 -PkgPath $Env:PKG_PATH -Architecture $Env:ARCHITECTURE -PackageVersion $Env:PACKAGE_VERSION -RequireNotarization
+
+      - name: Remove Apple signing keychain
+        if: ${{ always() && steps.signing.outputs.keychain != '' }}
+        shell: bash
+        env:
+          SIGNING_KEYCHAIN: ${{ steps.signing.outputs.keychain }}
+        run: security delete-keychain "$SIGNING_KEYCHAIN" || true
 
       - name: Upload PowerShell macOS pkg
         uses: actions/upload-artifact@v7.0.1
@@ -150,6 +281,7 @@ jobs:
         shell: pwsh
         env:
           ARCHITECTURE: ${{ matrix.arch }}
+          REQUIRE_NOTARIZATION: ${{ inputs.sign_pkg }}
         run: |
           $ErrorActionPreference = 'Stop'
           $Pkg = @(Get-ChildItem -LiteralPath ./pkgs -Filter "Devolutions-PowerShell-*-osx-$Env:ARCHITECTURE.pkg" -File)
@@ -161,6 +293,7 @@ jobs:
             Architecture = $Env:ARCHITECTURE
             PackageVersion = $Matches.version
             Install = $true
+            RequireNotarization = [System.Boolean]::Parse($Env:REQUIRE_NOTARIZATION)
           }
           # Apple silicon can install x86_64 packages through Rosetta, so only Intel hosts must refuse the other architecture.
           if ($Env:ARCHITECTURE -eq 'x64') {

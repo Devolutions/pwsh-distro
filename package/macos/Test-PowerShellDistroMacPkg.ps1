@@ -15,7 +15,13 @@ param(
   [switch] $Install,
 
   # Package for the other architecture; with -Install, verifies that Installer refuses it on this host.
-  [string] $OppositePkgPath
+  [string] $OppositePkgPath,
+
+  # Requires a Developer ID Installer signature and Developer ID Application, hardened-runtime signatures on payload Mach-O files.
+  [switch] $RequireSignature,
+
+  # Requires a stapled notarization ticket accepted by Gatekeeper; implies -RequireSignature.
+  [switch] $RequireNotarization
 )
 
 Set-StrictMode -Version 3.0
@@ -52,6 +58,58 @@ function Assert-True {
   if (-not $Condition) {
     throw $Message
   }
+}
+
+function Test-MachOFile {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Path
+  )
+
+  $Stream = [System.IO.File]::OpenRead($Path)
+  try {
+    $Header = [byte[]]::new(8)
+    if ($Stream.Read($Header, 0, 8) -ne 8) {
+      return $false
+    }
+  } finally {
+    $Stream.Dispose()
+  }
+  $Magic = [System.BitConverter]::ToUInt32($Header, 0)
+  if ($Magic -in 0xFEEDFACEu, 0xFEEDFACFu) {
+    return $true
+  }
+  if ($Magic -in 0xBEBAFECAu, 0xBFBAFECAu) {
+    $SliceCount = ([uint32] $Header[4] -shl 24) -bor ([uint32] $Header[5] -shl 16) -bor ([uint32] $Header[6] -shl 8) -bor [uint32] $Header[7]
+    return ($SliceCount -gt 0 -and $SliceCount -lt 32)
+  }
+  return $false
+}
+
+function Assert-DeveloperIdCodeSignature {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Path,
+
+    [switch] $RequireEntitlements
+  )
+
+  Invoke-NativeCommand codesign @('--verify', '--strict', $Path) | Out-Null
+  $Details = (& codesign --display --verbose=4 $Path 2>&1) -join "`n"
+  Assert-True ($LASTEXITCODE -eq 0) "Unable to read the code signature of $Path."
+  Assert-True ($Details -match '(?m)^Authority=Developer ID Application: ') "$Path is not signed with a Developer ID Application certificate."
+  Assert-True ($Details -match '(?m)^Timestamp=') "$Path does not have a secure timestamp."
+  Assert-True ($Details -match '(?m)^CodeDirectory .*flags=0x[0-9a-f]*\(.*runtime.*\)') "$Path is not signed with the hardened runtime."
+  if ($RequireEntitlements) {
+    $Entitlements = (& codesign --display --entitlements - --xml $Path 2>$null) -join ''
+    foreach ($Entitlement in 'com.apple.security.cs.allow-jit', 'com.apple.security.cs.allow-unsigned-executable-memory', 'com.apple.security.cs.allow-dyld-environment-variables', 'com.apple.security.cs.disable-library-validation') {
+      Assert-True ($Entitlements.Contains("<key>$Entitlement</key>")) "$Path is missing the $Entitlement entitlement."
+    }
+  }
+}
+
+if ($RequireNotarization) {
+  $RequireSignature = $true
 }
 
 $Pkg = (Resolve-Path -LiteralPath $PkgPath).Path
@@ -126,6 +184,23 @@ try {
   Assert-True ((Get-Item -LiteralPath "$PayloadApp/Contents/MacOS/PowerShell.sh").UnixFileMode.HasFlag([System.IO.UnixFileMode]::UserExecute)) 'Launcher script is not executable.'
   Write-Host "Validated pkg structure: $Pkg"
 
+  if ($RequireSignature) {
+    $PkgSignature = (& pkgutil --check-signature $Pkg 2>&1) -join "`n"
+    Assert-True ($LASTEXITCODE -eq 0 -and $PkgSignature -match 'Status: signed by a developer certificate issued by Apple' -and $PkgSignature -match '\d+\. Developer ID Installer: ') "The pkg is not signed with a Developer ID Installer certificate:`n$PkgSignature"
+    $PayloadInstallRoot = Join-Path $PayloadRoot $InstallDirectory.TrimStart('/')
+    $PayloadMachOFiles = @(Get-ChildItem -LiteralPath $PayloadInstallRoot -Recurse -File | Where-Object { -not $_.LinkType -and (Test-MachOFile $_.FullName) })
+    foreach ($MachOFile in $PayloadMachOFiles) {
+      Assert-DeveloperIdCodeSignature -Path $MachOFile.FullName -RequireEntitlements:($MachOFile.FullName -eq $PayloadPwsh)
+    }
+    Write-Host "Validated Developer ID signatures on the pkg and $($PayloadMachOFiles.Count) payload Mach-O files."
+  }
+  if ($RequireNotarization) {
+    Invoke-NativeCommand xcrun @('stapler', 'validate', $Pkg) | Write-Host
+    $Assessment = (& spctl --assess --type install --verbose=2 $Pkg 2>&1) -join "`n"
+    Assert-True ($LASTEXITCODE -eq 0 -and $Assessment -match 'source=Notarized Developer ID') "Gatekeeper did not accept the pkg as notarized:`n$Assessment"
+    Write-Host 'Validated the stapled notarization ticket.'
+  }
+
   if (-not $Install) {
     return
   }
@@ -150,6 +225,9 @@ try {
     Assert-True (@(Get-Content -LiteralPath /etc/shells) -contains $LinkPath) "/etc/shells does not contain $LinkPath."
     Assert-True (Test-Path -LiteralPath $ManPagePath -PathType Leaf) "$ManPagePath was not installed."
     Assert-True (Test-Path -LiteralPath "$AppPath/Contents/MacOS/PowerShell.sh" -PathType Leaf) "$AppPath was not installed."
+    if ($RequireSignature) {
+      Assert-DeveloperIdCodeSignature -Path $InstalledPwsh -RequireEntitlements
+    }
   }
 
   Invoke-NativeCommand sudo @('installer', '-pkg', $Pkg, '-target', '/') | Write-Host

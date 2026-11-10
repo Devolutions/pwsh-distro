@@ -270,6 +270,9 @@ jobs:
     with:
       package_version: ${{ needs.sdk.outputs.sdk-package-version }}
       cli_artifact_name: PowerShell-Release-CLI-${{ needs.sdk.outputs.sdk-package-version }}
+      sign_pkg: ${{ fromJSON(needs.sdk.outputs.code-signed) }}
+      github-env: ${{ needs.sdk.outputs.package-env }}
+    secrets: inherit
 
   publish:
     name: Publish PowerShell release

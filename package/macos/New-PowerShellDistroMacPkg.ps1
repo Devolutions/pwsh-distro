@@ -12,7 +12,16 @@ param(
   [string] $Architecture,
 
   [Parameter(Mandatory)]
-  [string] $OutputDirectory
+  [string] $OutputDirectory,
+
+  # Developer ID Application identity used to sign every Mach-O payload file with the hardened runtime.
+  [string] $CodeSigningIdentity,
+
+  # Developer ID Installer identity used to sign the product archive.
+  [string] $InstallerSigningIdentity,
+
+  # Keychain containing the signing identities; defaults to the keychain search list.
+  [string] $Keychain
 )
 
 Set-StrictMode -Version 3.0
@@ -21,6 +30,11 @@ $ErrorActionPreference = 'Stop'
 if (-not $IsMacOS) {
   throw 'macOS pkg packaging requires macOS (pkgbuild and productbuild).'
 }
+if ([string]::IsNullOrWhiteSpace($CodeSigningIdentity) -ne [string]::IsNullOrWhiteSpace($InstallerSigningIdentity)) {
+  throw 'Specify both -CodeSigningIdentity and -InstallerSigningIdentity, or neither.'
+}
+$Sign = -not [string]::IsNullOrWhiteSpace($CodeSigningIdentity)
+$KeychainArguments = if ($Keychain) { @('--keychain', $Keychain) } else { @() }
 
 function Invoke-NativeCommand {
   param(
@@ -34,6 +48,33 @@ function Invoke-NativeCommand {
   if ($LASTEXITCODE -ne 0) {
     throw "$FilePath $($ArgumentList -join ' ') failed with exit code $LASTEXITCODE"
   }
+}
+
+function Test-MachOFile {
+  param(
+    [Parameter(Mandatory)]
+    [string] $Path
+  )
+
+  $Stream = [System.IO.File]::OpenRead($Path)
+  try {
+    $Header = [byte[]]::new(8)
+    if ($Stream.Read($Header, 0, 8) -ne 8) {
+      return $false
+    }
+  } finally {
+    $Stream.Dispose()
+  }
+  $Magic = [System.BitConverter]::ToUInt32($Header, 0)
+  if ($Magic -in 0xFEEDFACEu, 0xFEEDFACFu) {
+    return $true
+  }
+  # Universal binaries share the CAFEBABE magic with Java class files, which store a class version instead of a small slice count.
+  if ($Magic -in 0xBEBAFECAu, 0xBFBAFECAu) {
+    $SliceCount = ([uint32] $Header[4] -shl 24) -bor ([uint32] $Header[5] -shl 16) -bor ([uint32] $Header[6] -shl 8) -bor [uint32] $Header[7]
+    return ($SliceCount -gt 0 -and $SliceCount -lt 32)
+  }
+  return $false
 }
 
 $AssetsRoot = Join-Path $PSScriptRoot 'assets'
@@ -107,6 +148,21 @@ try {
     if (Test-Path -LiteralPath $ExecutableFile -PathType Leaf) {
       Invoke-NativeCommand chmod @('755', $ExecutableFile)
     }
+  }
+
+  if ($Sign) {
+    # Notarization requires every Mach-O file to carry a Developer ID signature, secure timestamp, and hardened runtime.
+    $ApphostPath = Join-Path $InstallRoot 'pwsh'
+    $MachOFiles = @(Get-ChildItem -LiteralPath $InstallRoot -Recurse -File |
+      Where-Object { -not $_.LinkType -and $_.FullName -ne $ApphostPath -and (Test-MachOFile $_.FullName) } |
+      Sort-Object FullName)
+    foreach ($MachOFile in $MachOFiles) {
+      Invoke-NativeCommand codesign (@('--force', '--timestamp', '--options', 'runtime', '--sign', $CodeSigningIdentity) + $KeychainArguments + @($MachOFile.FullName))
+    }
+    # The apphost is signed last with the entitlements PowerShell requires for JIT and loading unsigned native modules.
+    Invoke-NativeCommand codesign (@('--force', '--timestamp', '--options', 'runtime', '--entitlements', (Join-Path $AssetsRoot 'pwsh-entitlements.plist'), '--sign', $CodeSigningIdentity) + $KeychainArguments + @($ApphostPath))
+    Invoke-NativeCommand codesign @('--verify', '--strict', '--verbose=2', $ApphostPath)
+    Write-Host "Signed $($MachOFiles.Count + 1) Mach-O payload files with $CodeSigningIdentity."
   }
 
   # A wrapper preserves the apphost's payload location; a symlink is treated as a multi-pwsh manager shim.
@@ -259,12 +315,15 @@ fi
 </installer-gui-script>
 "@
 
-  Invoke-NativeCommand productbuild @(
+  $ProductBuildArguments = @(
     '--distribution', $Distribution,
     '--package-path', $Packages,
-    '--resources', $Resources,
-    $PkgPath
+    '--resources', $Resources
   )
+  if ($Sign) {
+    $ProductBuildArguments += @('--sign', $InstallerSigningIdentity, '--timestamp') + $KeychainArguments
+  }
+  Invoke-NativeCommand productbuild ($ProductBuildArguments + @($PkgPath))
   Write-Host "Built $PkgPath"
 } finally {
   Remove-Item -LiteralPath $Work -Recurse -Force
