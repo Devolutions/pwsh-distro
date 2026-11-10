@@ -103,8 +103,10 @@ try {
   Assert-True ((Invoke-NativeCommand lipo @('-archs', $PayloadPwsh)).Trim() -eq $ExpectedCpuType) "Payload pwsh is not $ExpectedCpuType."
   $PayloadDll = Join-Path $PayloadRoot "$($InstallDirectory.TrimStart('/'))/pwsh.dll"
   Assert-True (-not (Get-Item -LiteralPath $PayloadDll).UnixFileMode.HasFlag([System.IO.UnixFileMode]::UserExecute)) 'Managed payload files must not be executable.'
-  $PayloadLink = Get-Item -LiteralPath (Join-Path $PayloadRoot $LinkPath.TrimStart('/'))
-  Assert-True ($PayloadLink.LinkType -eq 'SymbolicLink' -and $PayloadLink.LinkTarget -eq "$InstallDirectory/pwsh") "Payload $LinkPath must link to $InstallDirectory/pwsh."
+  $PayloadLauncher = Join-Path $PayloadRoot $LinkPath.TrimStart('/')
+  Assert-True ((Get-Item -LiteralPath $PayloadLauncher).UnixFileMode.HasFlag([System.IO.UnixFileMode]::UserExecute)) "Payload $LinkPath is not executable."
+  $ExpectedLauncher = "#!/bin/sh`nexec `"$InstallDirectory/pwsh`" `"`$@`"`n"
+  Assert-True ((Get-Content -LiteralPath $PayloadLauncher -Raw) -eq $ExpectedLauncher) "Payload $LinkPath does not launch $InstallDirectory/pwsh."
   Assert-True (Test-Path -LiteralPath (Join-Path $PayloadRoot $ManPagePath.TrimStart('/')) -PathType Leaf) "Payload is missing $ManPagePath."
   $PayloadApp = Join-Path $PayloadRoot $AppPath.TrimStart('/')
   $BundleId = (Invoke-NativeCommand /usr/libexec/PlistBuddy @('-c', 'Print :CFBundleIdentifier', "$PayloadApp/Contents/Info.plist")).Trim()
@@ -127,12 +129,10 @@ try {
   function Test-Installation {
     $Receipt = Invoke-NativeCommand pkgutil @('--pkg-info', $PackageIdentifier)
     Assert-True (($Receipt -match "^version: $([regex]::Escape($PackageVersion))$").Count -eq 1) "pkgutil receipt does not report version $PackageVersion."
-    $Link = Get-Item -LiteralPath $LinkPath
-    Assert-True ($Link.LinkType -eq 'SymbolicLink' -and $Link.LinkTarget -eq "$InstallDirectory/pwsh") "$LinkPath does not link to $InstallDirectory/pwsh."
+    Assert-True ((Get-Item -LiteralPath $LinkPath).UnixFileMode.HasFlag([System.IO.UnixFileMode]::UserExecute)) "$LinkPath is not executable."
+    Assert-True ((Get-Content -LiteralPath $LinkPath -Raw) -eq $ExpectedLauncher) "$LinkPath does not launch $InstallDirectory/pwsh."
     $InstalledPwsh = Join-Path $InstallDirectory 'pwsh'
     Assert-True ((Get-Item -LiteralPath $InstalledPwsh).UnixFileMode.HasFlag([System.IO.UnixFileMode]::UserExecute)) "$InstalledPwsh is not executable."
-    Invoke-NativeCommand ls @('-ldOe', '/usr/local', '/usr/local/devolutions', '/usr/local/devolutions/powershell', $InstallDirectory, $InstalledPwsh, $LinkPath) | Write-Host
-    Invoke-NativeCommand xattr @('-l', $InstalledPwsh) | Write-Host
     $Reported = Invoke-NativeCommand $LinkPath @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '"$($PSVersionTable.PSVersion)|$PSHOME|$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)"')
     Assert-True ("$Reported".Trim() -eq "$PowerShellVersion|$InstallDirectory|$($Architecture.Substring(0,1).ToUpperInvariant())$($Architecture.Substring(1))") "Installed pwsh reported '$Reported'."
     Assert-True (@(Get-Content -LiteralPath /etc/shells) -contains $LinkPath) "/etc/shells does not contain $LinkPath."

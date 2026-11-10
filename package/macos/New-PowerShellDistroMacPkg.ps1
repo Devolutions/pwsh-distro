@@ -108,10 +108,12 @@ try {
     }
   }
 
-  # /usr/local/bin/pwsh symlink, as in the Microsoft pkg.
+  # A wrapper preserves the apphost's payload location; a symlink is treated as a multi-pwsh manager shim.
   $LinkDirectory = Join-Path $Root (Split-Path -Parent $LinkPath).TrimStart('/')
   New-Item -ItemType Directory -Path $LinkDirectory -Force | Out-Null
-  Invoke-NativeCommand ln @('-s', "$InstallDirectory/pwsh", (Join-Path $Root $LinkPath.TrimStart('/')))
+  $PwshLauncher = Join-Path $Root $LinkPath.TrimStart('/')
+  Set-Content -LiteralPath $PwshLauncher -Value "#!/bin/sh`nexec `"$InstallDirectory/pwsh`" `"`$@`"`n" -Encoding ascii -NoNewline
+  Invoke-NativeCommand chmod @('755', $PwshLauncher)
 
   # Compressed man page.
   $ManDirectory = Join-Path $Root (Split-Path -Parent $ManPagePath).TrimStart('/')
@@ -195,6 +197,7 @@ fi
   $PostInstall = Join-Path $Scripts 'postinstall'
   Set-Content -LiteralPath $PostInstall -Encoding ascii -Value @"
 #!/bin/bash
+chmod 755 "$LinkPath"
 chmod 755 "$InstallDirectory/pwsh"
 if [ -f "$InstallDirectory/createdump" ] ; then
     chmod 755 "$InstallDirectory/createdump"
