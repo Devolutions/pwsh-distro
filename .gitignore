@@ -8,4 +8,5 @@ patchsets/
 *.nupkg
 *.tar.gz
 *.msi
+*.pkg
 *.wixpdb
