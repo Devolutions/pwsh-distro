@@ -178,6 +178,8 @@ try {
         (Test-Path -LiteralPath $MissingNoticeRoot)) {
       throw 'Rust license collection did not reject a missing standard-library notice.'
     }
+    # The failure was expected; do not leak it to the GitHub Actions pwsh wrapper.
+    $global:LASTEXITCODE = 0
   }
 
   Write-Host 'Linux apphost ELF and SDK staging tests passed.'
