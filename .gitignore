@@ -1,4 +1,5 @@
 pwsh-src-worktree/
+pwsh-src-*-worktree/
 dotnet-runtime/
 output/
 /package/output/

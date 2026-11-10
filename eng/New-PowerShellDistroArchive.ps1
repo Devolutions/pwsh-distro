@@ -20,6 +20,10 @@ param(
 
   [string] $RepositoryRoot,
 
+  [string] $Channel,
+
+  [string] $PowerShellSourceRoot,
+
   [switch] $ReadyToRun,
 
   [string[]] $ReadyToRunIncludeFilter,
@@ -44,6 +48,7 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'PowerShellChannelConfig.ps1')
 . (Join-Path $PSScriptRoot 'PowerShellSdkDependencyProfile.ps1')
 . (Join-Path $PSScriptRoot 'LinuxElf.ps1')
 . (Join-Path $PSScriptRoot 'LinuxAppHost.ps1')
@@ -153,12 +158,12 @@ function New-CustomRuntimeFeed {
 function Get-PowerShellTargetFramework {
   param(
     [Parameter(Mandatory)]
-    [string] $Root
+    [string] $PowerShellSourceRoot
   )
 
-  $CommonPropsPath = Join-Path $Root 'pwsh-src\PowerShell.Common.props'
+  $CommonPropsPath = Join-Path $PowerShellSourceRoot 'PowerShell.Common.props'
   if (-not (Test-Path -LiteralPath $CommonPropsPath -PathType Leaf)) {
-    throw "PowerShell.Common.props was not found. Initialize the pwsh-src submodule first: $CommonPropsPath"
+    throw "PowerShell.Common.props was not found. Initialize the PowerShell source submodule first: $CommonPropsPath"
   }
 
   [xml] $CommonProps = Get-Content -LiteralPath $CommonPropsPath -Raw
@@ -557,7 +562,7 @@ function Add-PowerShellDistroAncillaryFiles {
     [string] $Root,
 
     [Parameter(Mandatory)]
-    [string] $RepositoryRoot,
+    [string] $PowerShellSourceRoot,
 
     [Parameter(Mandatory)]
     [string] $PackagesDirectory,
@@ -575,7 +580,6 @@ function Add-PowerShellDistroAncillaryFiles {
     [string] $RuntimeIdentifier
   )
 
-  $PowerShellSourceRoot = Join-Path $RepositoryRoot 'pwsh-src'
   Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'LICENSE.txt') -DestinationPath (Join-Path $Root 'LICENSE.txt')
   Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'ThirdPartyNotices.txt') -DestinationPath (Join-Path $Root 'ThirdPartyNotices.txt')
   Copy-FileIfPresent -SourcePath (Join-Path $PowerShellSourceRoot 'assets\default.help.txt') -DestinationPath (Join-Path $Root 'en-US\default.help.txt')
@@ -829,8 +833,16 @@ if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
 
 $RepositoryRootPath = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 Assert-SdkPackageVersion -ExpectedPowerShellVersion $PowerShellVersion -ActualPackageVersion $PackageVersion
-$TargetFramework = Get-PowerShellTargetFramework -Root $RepositoryRootPath
-$SdkProjectPath = Join-Path $RepositoryRootPath 'pwsh-src\src\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj'
+$ResolvedPowerShellSourceRoot = if ([string]::IsNullOrWhiteSpace($PowerShellSourceRoot)) {
+  $ChannelConfig = Resolve-PowerShellChannelConfig -Channel $Channel -PowerShellVersion $PowerShellVersion -RepositoryRoot $RepositoryRootPath
+  Join-Path $RepositoryRootPath $ChannelConfig.SubmodulePath
+} elseif ([System.IO.Path]::IsPathRooted($PowerShellSourceRoot)) {
+  $PowerShellSourceRoot
+} else {
+  Join-Path $RepositoryRootPath $PowerShellSourceRoot
+}
+$TargetFramework = Get-PowerShellTargetFramework -PowerShellSourceRoot $ResolvedPowerShellSourceRoot
+$SdkProjectPath = Join-Path $ResolvedPowerShellSourceRoot 'src\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj'
 $CliDependencyVersions = Get-PowerShellCliDependencyVersions -SdkProjectPath $SdkProjectPath
 $ExecutableName = Get-PowerShellExecutableName -Rid $RuntimeIdentifier
 if ($RuntimeIdentifier -like 'linux-musl-*' -and [string]::IsNullOrWhiteSpace($LinuxAppHostPath)) {
@@ -1118,7 +1130,7 @@ $CustomRuntimeMappingBlock
     -WorkRoot $WorkRoot
   Add-PowerShellDistroAncillaryFiles `
     -Root $OutputDirectoryPath `
-    -RepositoryRoot $RepositoryRootPath `
+    -PowerShellSourceRoot $ResolvedPowerShellSourceRoot `
     -PackagesDirectory $PackagesDirectory `
     -PackageId $PackageId `
     -PackageVersion $PackageVersion `

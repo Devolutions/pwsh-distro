@@ -35,7 +35,7 @@ function Get-PowerShellCliDependencyVersions {
   )
 
   if (-not (Test-Path -LiteralPath $SdkProjectPath -PathType Leaf)) {
-    throw "PowerShell SDK project was not found. Initialize the pwsh-src submodule first: $SdkProjectPath"
+    throw "PowerShell SDK project was not found. Initialize the PowerShell source submodule first: $SdkProjectPath"
   }
 
   [xml] $SdkProject = Get-Content -LiteralPath $SdkProjectPath -Raw

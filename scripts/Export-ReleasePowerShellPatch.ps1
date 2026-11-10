@@ -13,16 +13,43 @@ param(
   [string] $ReleaseVersion,
 
   [Parameter(Mandatory)]
-  [string] $OutputDir
+  [string] $OutputDir,
+
+  [string] $Channel,
+
+  [string] $SubmodulePath
 )
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot '..\eng\PowerShellChannelConfig.ps1')
+
 $ResolvedRepositoryRoot = (Resolve-Path -LiteralPath $RepositoryRoot).Path
-$PwshSourcePath = Join-Path $ResolvedRepositoryRoot 'pwsh-src'
-if (-not (Test-Path $PwshSourcePath -PathType Container)) {
-  throw "PowerShell source checkout not found at $PwshSourcePath."
+if ([string]::IsNullOrWhiteSpace($SubmodulePath)) {
+  try {
+    $ResolvedChannel = Resolve-PowerShellChannelConfig -Channel $Channel -PowerShellVersion $ReleaseVersion -RepositoryRoot $ResolvedRepositoryRoot
+    $SubmodulePath = $ResolvedChannel.SubmodulePath
+  } catch {
+    $SubmodulePath = $null
+  }
+}
+
+$GitTargetPath = $ResolvedRepositoryRoot
+if (-not [string]::IsNullOrWhiteSpace($SubmodulePath)) {
+  $CandidateSourcePath = if ([System.IO.Path]::IsPathRooted($SubmodulePath)) {
+    $SubmodulePath
+  } else {
+    Join-Path $ResolvedRepositoryRoot $SubmodulePath
+  }
+
+  if (Test-Path -LiteralPath (Join-Path $CandidateSourcePath 'PowerShell.Common.props') -PathType Leaf) {
+    $GitTargetPath = (Resolve-Path -LiteralPath $CandidateSourcePath).Path
+  }
+}
+
+if (-not (Test-Path $GitTargetPath -PathType Container)) {
+  throw "PowerShell git checkout not found at $GitTargetPath."
 }
 
 if ([System.IO.Path]::IsPathRooted($OutputDir)) {
@@ -106,24 +133,24 @@ $RemoteSourceRef = $SourceHead.RemoteRef
 $LocalUpstreamRef = $UpstreamTag.LocalRef
 
 try {
-  Push-Location $PwshSourcePath
+  Push-Location $GitTargetPath
 
   & git fetch --force origin $UpstreamFetchSpec $SourceFetchSpec | Out-Null
   if ($LASTEXITCODE -ne 0) {
-    throw "Unable to fetch mirrored PowerShell refs '$($UpstreamTag.TagName)' and '$($SourceHead.HeadName)' in pwsh-src."
+    throw "Unable to fetch mirrored PowerShell refs '$($UpstreamTag.TagName)' and '$($SourceHead.HeadName)' in $GitTargetPath."
   }
 
   & git rev-parse --verify "${LocalUpstreamRef}^{commit}" *> $null
   if ($LASTEXITCODE -ne 0) {
-    throw "Unable to resolve upstream ref '$LocalUpstreamRef' in pwsh-src."
+    throw "Unable to resolve upstream ref '$LocalUpstreamRef' in $GitTargetPath."
   }
 
   & git rev-parse --verify "${RemoteSourceRef}^{commit}" *> $null
   if ($LASTEXITCODE -ne 0) {
-    throw "Unable to resolve source ref '$RemoteSourceRef' in pwsh-src."
+    throw "Unable to resolve source ref '$RemoteSourceRef' in $GitTargetPath."
   }
 
-  & $PatchScript -RepoPath $PwshSourcePath -Branch $RemoteSourceRef -BaseTag $LocalUpstreamRef -ReleaseVersion $ReleaseVersion -OutputDir $ResolvedOutputDir
+  & $PatchScript -RepoPath $GitTargetPath -Branch $RemoteSourceRef -BaseTag $LocalUpstreamRef -ReleaseVersion $ReleaseVersion -OutputDir $ResolvedOutputDir
   if ($LASTEXITCODE -ne 0) {
     throw "Patch export failed with exit code $LASTEXITCODE."
   }

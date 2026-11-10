@@ -2,8 +2,16 @@ name: PowerShell Release
 on:
   workflow_dispatch:
     inputs:
+      channel:
+        description: PowerShell release channel
+        required: true
+        type: choice
+        options:
+          - "7.6"
+          - "7.7"
+        default: "7.6"
       sdk_package_revision:
-        description: Downstream SDK package revision override (blank = use SDK_PACKAGE_REVISION, auto = infer next release revision)
+        description: Downstream SDK package revision override (blank = use channel sdkPackageRevision, auto = infer next release revision)
         default: ""
         required: false
       github-env:
@@ -63,6 +71,7 @@ jobs:
       actions: read
       contents: read
     with:
+      channel: ${{ inputs.channel }}
       sdk_package_revision: ${{ inputs.sdk_package_revision }}
       github-env: ${{ inputs.github-env }}
       skip-publish: ${{ inputs.skip-publish }}
@@ -77,6 +86,8 @@ jobs:
     permissions:
       actions: read
       contents: read
+    with:
+      channel: ${{ inputs.channel }}
     secrets: inherit
 
   cli:
@@ -88,6 +99,7 @@ jobs:
       actions: read
       contents: read
     with:
+      channel: ${{ needs.sdk.outputs.channel }}
       sdk_package_version: ${{ needs.sdk.outputs.sdk-package-version }}
       sdk_artifact_name: ${{ needs.sdk.outputs.release-sdk-package-artifact }}
       ready_to_run: ${{ inputs.ready_to_run }}
@@ -108,15 +120,13 @@ jobs:
       - name: Enable Windows long path support
         run: git config --system core.longpaths true
 
-      - name: Clone project with PowerShell submodule
+      - name: Clone project
         uses: actions/checkout@v7.0.0
-        with:
-          submodules: true
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5.3.0
         with:
-          global-json-file: pwsh-src/global.json
+          dotnet-version: "10.0.x"
 
       - name: Download PowerShell CLI packages
         uses: actions/download-artifact@v8.0.1
@@ -289,12 +299,12 @@ jobs:
       - name: Clone project
         uses: actions/checkout@v7.0.0
         with:
-          submodules: true
           fetch-depth: 0
 
       - name: Export downstream PowerShell patch
         shell: pwsh
         env:
+          POWERSHELL_CHANNEL: ${{ needs.sdk.outputs.channel }}
           POWERSHELL_SOURCE_REF: ${{ needs.sdk.outputs.powershell-source-ref }}
           POWERSHELL_RELEASE_TAG: ${{ needs.sdk.outputs.powershell-release-tag }}
           POWERSHELL_UPSTREAM_TAG: ${{ needs.sdk.outputs.powershell-upstream-tag }}
@@ -317,7 +327,13 @@ jobs:
 
           $ReleaseAssetsDir = Join-Path $PWD 'release-assets'
           $PatchScript = Join-Path $PWD 'scripts/Export-ReleasePowerShellPatch.ps1'
-          & $PatchScript -RepositoryRoot $PWD -SourceRef $Env:POWERSHELL_SOURCE_REF -UpstreamRef $Env:POWERSHELL_UPSTREAM_TAG -ReleaseVersion $Env:SDK_PACKAGE_VERSION -OutputDir $ReleaseAssetsDir
+          & $PatchScript `
+            -RepositoryRoot $PWD `
+            -Channel $Env:POWERSHELL_CHANNEL `
+            -SourceRef $Env:POWERSHELL_SOURCE_REF `
+            -UpstreamRef $Env:POWERSHELL_UPSTREAM_TAG `
+            -ReleaseVersion $Env:SDK_PACKAGE_VERSION `
+            -OutputDir $ReleaseAssetsDir
           if ($LASTEXITCODE -ne 0) {
             throw "Patch export failed with exit code $LASTEXITCODE."
           }
@@ -499,6 +515,8 @@ jobs:
             "| --- | --- |",
             "| Package ID | $Env:SDK_PACKAGE_ID |",
             "| Package version | $PackageVersion |",
+            "| PowerShell channel | ${{ needs.sdk.outputs.channel }} |",
+            "| PowerShell target framework | ${{ needs.sdk.outputs.powershell-target-framework }} |",
             "| PowerShell upstream release | ${{ needs.sdk.outputs.powershell-release-tag }} |",
             "| PowerShell upstream source ref | ${{ needs.sdk.outputs.powershell-upstream-tag }} |",
             "| PowerShell downstream source ref | ${{ needs.sdk.outputs.powershell-source-ref }} |",
@@ -512,11 +530,27 @@ jobs:
           )
           Set-Content -Path $NotesPath -Value $ReleaseNotes -Encoding utf8
 
+          . ../eng/PowerShellChannelConfig.ps1
+          $ExistingReleasesLines = & gh api "repos/$Repository/releases?per_page=100" --paginate --jq '.[] | {tagName: .tag_name, isDraft: .draft, isPrerelease: .prerelease}'
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to query existing GitHub releases for $Repository."
+          }
+          $ExistingReleases = @(
+            $ExistingReleasesLines |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+              ForEach-Object { $_ | ConvertFrom-Json }
+          )
+          $MakeLatest = Test-ShouldMarkGitHubReleaseLatest `
+            -CandidateVersion $PackageVersion `
+            -ExistingReleases $ExistingReleases
+          $LatestFlagValue = $MakeLatest.ToString().ToLowerInvariant()
+          echo "::notice::MakeLatest: $LatestFlagValue"
+
           if ($DryRun) {
-            Write-Host "Dry Run: skipping GitHub release!"
+            Write-Host "Dry Run: skipping GitHub release (would pass --latest=$LatestFlagValue)!"
           } else {
             $ReleaseAssets = @($ReleaseAssetFiles | ForEach-Object { $_.Name }) + $HashPath
-            & gh release create $ReleaseTag --repo $Repository --target $Env:GITHUB_SHA --title $ReleaseTitle --notes-file $NotesPath @ReleaseAssets
+            & gh release create $ReleaseTag --repo $Repository --target $Env:GITHUB_SHA --title $ReleaseTitle --notes-file $NotesPath "--latest=$LatestFlagValue" @ReleaseAssets
             if ($LASTEXITCODE -ne 0) {
               throw "gh release create failed for $ReleaseTag with exit code $LASTEXITCODE"
             }

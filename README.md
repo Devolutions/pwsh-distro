@@ -4,7 +4,7 @@ GitHub Actions workflows for building redistributable PowerShell artifacts from 
 
 ## Quick start
 
-This repository builds PowerShell from source. The full PowerShell source tree is pulled in as a git submodule at `pwsh-src/`, so the checkout must initialize submodules, and on Windows it requires long-path support enabled in git.
+This repository builds PowerShell from source across two release channels (`7.6` LTS on `.NET 10` and `7.7` STS on `.NET 11`). Each channel's patched PowerShell source tree is pulled in as a git submodule (`pwsh-src-7.6/` and `pwsh-src-7.7/`), and on Windows it requires long-path support enabled in git.
 
 ```powershell
 git clone https://github.com/Devolutions/pwsh-distro.git
@@ -12,28 +12,39 @@ cd pwsh-distro
 .\scripts\Initialize-Repository.ps1
 ```
 
-All workflows are manual and start from the GitHub Actions **Run workflow** button (see the Workflows table below). The workflows are the authoritative release builds, and the SDK workflow can publish the validated NuGet package to NuGet.org and GitHub Releases.
+By default, `scripts\Initialize-Repository.ps1` initializes the default channel (`7.6` at `pwsh-src-7.6/`). Pass `-Channel 7.7` to initialize `pwsh-src-7.7/`, or `-Channel All` to initialize both submodules.
 
-> On Linux/macOS no long-path configuration is needed. On Windows, if `core.longpaths` is not enabled, the `pwsh-src` submodule checkout will fail with `Filename too long`. `scripts\Initialize-Repository.ps1` enables it before initializing the submodule. The workflows set this on their Windows runners automatically.
+All workflows are manual and start from the GitHub Actions **Run workflow** button (see the Workflows table below). Select `channel` (`7.6` or `7.7`) when dispatching `release.yml`, `powershell-sdk.yml`, `powershell-cli.yml`, or `dotnet-runtime.yml`. The workflows are the authoritative release builds, and `release.yml` publishes the validated NuGet package to NuGet.org and GitHub Releases.
+
+> On Linux/macOS no long-path configuration is needed. On Windows, if `core.longpaths` is not enabled, submodule checkouts will fail with `Filename too long`. `scripts\Initialize-Repository.ps1` enables it before initializing the submodule. The workflows set this on their Windows runners automatically.
 
 To build a local, current-RID SDK package for smoke testing outside Actions:
 
 ```powershell
 .\scripts\Build-LocalPowerShellSdk.ps1 -Validate
+# Or for PowerShell 7.7 (.NET 11):
+.\scripts\Build-LocalPowerShellSdk.ps1 -Channel 7.7 -Validate
 ```
 
-The local script writes a single-RID validation package under `output\local-sdk\<rid>\`. The GitHub Actions SDK workflow remains the authoritative multi-RID package build. Pass `-SdkPackageVersion 7.6.9.1` to smoke-test the latest published downstream package while a newer release is being prepared.
+The local script writes a single-RID validation package under `output\local-sdk\<channel>\<rid>\`. The GitHub Actions SDK workflow remains the authoritative multi-RID package build. Pass `-SdkPackageVersion 7.6.9.1` to smoke-test a specific published downstream package revision while a newer release is being prepared.
 
 ## Current pins
 
 | Component | Version |
 | --- | --- |
-| PowerShell upstream release | `7.6.9` / `v7.6.9` |
-| PowerShell downstream source ref | `downstream/v7.6.9` based on `upstream/v7.6.9` |
-| PowerShell target framework | `net10.0` |
-| PowerShell SDK package | `Devolutions.PowerShell.SDK` / `7.6.9.2` workflow default; `7.6.9.1` latest published package |
+| Default PowerShell channel | `7.6` (`eng/powershell-channels.json`) |
+| PowerShell 7.6 (LTS) upstream release | `7.6.10` / `v7.6.10` |
+| PowerShell 7.6 (LTS) downstream source ref | `downstream/v7.6.10` based on `upstream/v7.6.10` (`pwsh-src-7.6`) |
+| PowerShell 7.6 (LTS) target framework | `net10.0` |
+| PowerShell 7.6 (LTS) SDK package | `Devolutions.PowerShell.SDK` / `7.6.10.0` workflow default; `7.6.9.1` latest published package |
+| PowerShell 7.6 (LTS) .NET runtime workflow | `v10.0.5` |
+| PowerShell 7.7 (STS) upstream release | `7.7.0` / `v7.7.0` |
+| PowerShell 7.7 (STS) downstream source ref | `downstream/v7.7.0` based on `upstream/v7.7.0` (`pwsh-src-7.7`) |
+| PowerShell 7.7 (STS) target framework | `net11.0` |
+| PowerShell 7.7 (STS) SDK package | `Devolutions.PowerShell.SDK` / `7.7.0.0` workflow default |
+| PowerShell 7.7 (STS) .NET runtime workflow | `v11.0.0` |
 | Latest downstream release tag | `v7.6.9.1` |
-| Latest PowerShell CLI release assets | `PowerShell-7.6.9-<os>-<arch>.tar.gz` for Windows, macOS, and Linux on x64 and arm64 |
+| Latest PowerShell CLI release assets | `PowerShell-<version>-<os>-<arch>.tar.gz` for Windows, macOS, Linux, and Alpine Linux on x64 and arm64 |
 | PowerShell SDK package source | `https://api.nuget.org/v3/index.json` |
 | multi-pwsh apphost package | `Devolutions.MultiPwsh.Cli` / `0.14.2` |
 | multi-pwsh apphost package source | `https://api.nuget.org/v3/index.json` |
@@ -41,7 +52,6 @@ The local script writes a single-RID validation package under `output\local-sdk\
 | Linux multi-pwsh bindings generator | PowerShell `7.4.0` |
 | Linux ARM64 PowerShell.Native source | `700.0.2` / `f24d5494b373de20ec3e3d2fdc7c3fc98af1f9f1` |
 | psign code signing tool | `Devolutions.Psign.Tool` / `0.7.0` |
-| .NET runtime workflow | `v10.0.5` |
 | llvm-prebuilt | `v2026.1.1` |
 | clang+llvm | `22.1.4` |
 | VsDevShell | `latest from PSGallery` |
@@ -63,12 +73,12 @@ package dependencies does not patch an installed shared runtime.
 
 ### Devolutions PowerShell SDK
 
-Use `Devolutions.PowerShell.SDK` when a .NET application needs the source-built Devolutions PowerShell assemblies and, optionally, a bundled `pwsh` apphost payload.
+Use `Devolutions.PowerShell.SDK` when a .NET application needs the source-built Devolutions PowerShell assemblies and, optionally, a bundled `pwsh` apphost payload. Both `7.6.x` (`net10.0`, LTS) and `7.7.x` (`net11.0`, STS) publish under `Devolutions.PowerShell.SDK` (matching `Microsoft.PowerShell.SDK`). Applications remaining on `.NET 10` (such as Remote Desktop Manager) should constrain their package version range to `[7.6.*, 7.7.0)` until moving to `.NET 11`.
 
 ```powershell
 dotnet new console -n PwshSdkSample -f net10.0
 cd PwshSdkSample
-dotnet add package Devolutions.PowerShell.SDK --version 7.6.3.2
+dotnet add package Devolutions.PowerShell.SDK --version 7.6.9.1
 ```
 
 For in-process PowerShell hosting, reference `System.Management.Automation` from the package and use the normal PowerShell SDK APIs:
@@ -235,26 +245,27 @@ The CLI workflow builds the pinned multi-pwsh launcher from source for glibc 2.2
 | `.github/workflows/powershell-linux.yml` | Repackages Linux CLI archives as deb and RPM packages and tests installation, execution, and removal across supported distributions. | `Devolutions-PowerShell-<version>-linux-<arch>-packages` artifacts with one deb and three RPMs per architecture. |
 | `.github/workflows/powershell-macos-pkg.yml` | Packages published macOS CLI archives, CLI workflow artifacts, or the current release's prepared CLI archives into macOS installer packages, then tests installation on native Intel and Apple silicon runners. | `Devolutions-PowerShell-<tag-or-version>-osx-<arch>-pkg` artifacts containing an x64 or arm64 `.pkg`. |
 | `.github/workflows/release.yml` | Orchestrates the SDK, CLI, MSI, Linux, and macOS pkg workflows, signs release-ready CLI and MSI artifacts, publishes the SDK package, and creates the GitHub release. | GitHub release `vX.Y.Z.R` with the SDK `.nupkg`, eight CLI archives, two Windows MSIs, eight Linux packages, two macOS pkgs, the downstream patch, and checksums. |
-| `.github/workflows/dotnet-runtime.yml` | Builds the .NET runtime for Windows, macOS, glibc Linux, and Alpine Linux on x64 and arm64. The existing native builds use `awakecoding/llvm-prebuilt`; musl builds use Microsoft's .NET 10 cross-build images. | `DotNet-Runtime-<rid>` artifacts containing the source-built runtime packs. |
+| `.github/workflows/dotnet-runtime.yml` | Builds the .NET runtime for the selected channel (`v10.0.5` for `7.6`, `v11.0.0` for `7.7`) across Windows, macOS, glibc Linux, and Alpine Linux on x64 and arm64. Native builds use `awakecoding/llvm-prebuilt`; Linux builds use Microsoft's `.NET 10`/`.NET 11` cross-build images. | `DotNet-Runtime-<channel>-<rid>` artifacts containing the source-built runtime packs. |
 
 All workflows are manual and can be started from the GitHub Actions **Run workflow** button.
 
 ## Publishing PowerShell releases
 
-The release workflow publishes only after the SDK has been validated, every CLI archive, both MSI installers, and both macOS pkg installers have been built, and the Linux packages, Alpine archives, and macOS installers have passed their tests. ReadyToRun CLI archives are signed before installer packaging, so installers contain the final CLI payload. The release version is `POWERSHELL_VERSION.SDK_PACKAGE_REVISION`, such as `7.6.3.0`.
+The release workflow publishes only after the SDK has been validated, every CLI archive, both MSI installers, and both macOS pkg installers have been built, and the Linux packages, Alpine archives, and macOS installers have passed their tests. ReadyToRun CLI archives are signed before installer packaging, so installers contain the final CLI payload. The release version is `<powerShellVersion>.<sdk_package_revision>`, such as `7.6.10.0` or `7.7.0.0`.
 
 Manual inputs:
 
 | Input | Purpose |
 | --- | --- |
-| `sdk_package_revision` | Optional revision override. Leave blank to use the explicit `SDK_PACKAGE_REVISION` env pin, set a number such as `1` for a specific downstream revision, or set `auto` to infer the next revision from existing `vX.Y.Z.R` release tags. |
+| `channel` | PowerShell release channel (`7.6` default for LTS / `.NET 10`, or `7.7` for STS / `.NET 11`). |
+| `sdk_package_revision` | Optional revision override. Leave blank to use the selected channel's `sdkPackageRevision` pin in `eng/powershell-channels.json`, set a number such as `1` for a specific downstream revision, or set `auto` to infer the next revision from existing `vX.Y.Z.R` release tags. |
 | `github-env` | `auto`, `test`, or `prod`. `auto` selects `publish-prod` for manual runs from `master` and `publish-test` elsewhere. |
 | `skip-publish` | Builds, signs when requested, validates, and packages artifacts without publishing to NuGet.org or creating a GitHub release. |
 | `dry-run` | Simulates publishing. This defaults to `true`; non-production environments are forced to dry-run when publishing is requested. |
 | `sign-dry-run` | Signs the SDK payload, CLI binaries, and MSIs, and signs and notarizes the macOS pkgs, during a dry-run. Requires signing secrets and timestamp configuration; fails if they are missing. This defaults to `false` even with `github-env=prod` or `skip-publish=true`; set it to `true` for a signed production dry run. |
 | `ready_to_run` | Applies ReadyToRun optimization to CLI archives. When SDK code signing is enabled, the release workflow signs and verifies the final post-R2R CLI archive payloads before checksums and release creation. |
-| `use_custom_dotnet_runtime` | Optional. When enabled, repackages the CLI archives against a source-built .NET runtime instead of the stock `Microsoft.NETCore.App.Runtime.<rid>` pack from NuGet.org. If `dotnet_runtime_run_id` is blank, the release workflow builds `.github/workflows/dotnet-runtime.yml` first; set it to a specific run ID or `latest` to reuse a prior successful runtime run. Defaults to `false`, so releases use the stock runtime unless this is explicitly turned on. |
-| `dotnet_runtime_run_id` | Optional. Reuse a prior successful `.NET runtime` workflow run instead of building one in the current release chain. Leave blank to build in the current workflow, or pass a specific run ID or `latest` to select the newest successful runtime run. |
+| `use_custom_dotnet_runtime` | Optional. When enabled, repackages the CLI archives against a source-built .NET runtime instead of the stock `Microsoft.NETCore.App.Runtime.<rid>` pack from NuGet.org. If `dotnet_runtime_run_id` is blank, the release workflow builds `.github/workflows/dotnet-runtime.yml` for the selected `channel` first; set it to a specific run ID or `latest` to reuse a prior successful runtime run for that channel. Defaults to `false`, so releases use the stock runtime unless this is explicitly turned on. |
+| `dotnet_runtime_run_id` | Optional. Reuse a prior successful `.NET runtime` workflow run instead of building one in the current release chain. Leave blank to build in the current workflow, or pass a specific run ID or `latest` to select the newest successful runtime run for the selected channel. |
 
 The standalone CLI workflow also has an opt-in `ready_to_run` input that runs a targeted crossgen2 pass over packaged PowerShell managed assemblies after the self-contained layout is assembled. It is disabled by default because ReadyToRun rewrites managed PE files and invalidates existing Authenticode signatures. For signed releases, use `.github/workflows/release.yml` with both signing and `ready_to_run` enabled so the CLI archives are signed after the R2R pass.
 
@@ -283,7 +294,7 @@ The complete release workflow uses the existing environments and secrets without
 
 CLI signing replaces only the selected PE entries in each archive, preserving the original tar permissions, ownership, timestamps, and symlinks on Windows as well as Unix hosts. Run `./eng/Test-SignPowerShellDistroArchive.ps1` to exercise payload replacement, Unix metadata preservation, and failure handling without signing credentials.
 
-Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The release workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation only in the publishing job. A real publish pushes the validated `.nupkg` containing signed Windows payloads to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the SDK package, every CLI archive, both signed MSI installers, the Linux packages, both macOS pkg installers, the generated downstream PowerShell patch file, and a SHA256 checksum file covering all release assets.
+Publishing uses the same NuGet.org OIDC pattern as `Devolutions/gsudo-distro`: repository environments named `publish-test` and `publish-prod`, `NuGet/login@v1`, and a `NUGET_BOT_USERNAME` secret available to the publishing environment. The release workflow grants `id-token: write` for NuGet OIDC and `contents: write` for GitHub release creation only in the publishing job. A real publish pushes the validated `.nupkg` containing signed Windows payloads to `https://api.nuget.org/v3/index.json` and creates a GitHub release named `Devolutions.PowerShell.SDK vX.Y.Z.R` with tag `vX.Y.Z.R`, release notes, the SDK package, every CLI archive, both signed MSI installers, the Linux packages, both macOS pkg installers, the generated downstream PowerShell patch file, and a SHA256 checksum file covering all release assets. Matching upstream `PowerShell/PowerShell`, `release.yml` passes `--latest=false` whenever a higher non-draft, non-prerelease `vA.B.C.R` GitHub release already exists, so `7.7.x` retains the GitHub `Latest` badge even when `7.6.x` servicing releases are published afterward.
 
 ## Source-built .NET runtime option
 
@@ -291,8 +302,8 @@ By default, `powershell-cli.yml` repackages the `Devolutions.PowerShell.SDK` nup
 
 This is **off by default** and does not change existing behavior when unused. To enable it:
 
-- In `powershell-cli.yml` (manual or reusable), set `use_custom_dotnet_runtime` to `true` and provide `dotnet_runtime_run_id` pointing at a completed `dotnet-runtime.yml` run, or set it to `latest` to auto-pick the newest successful `.NET runtime` run. The CLI job for each RID downloads the matching `DotNet-Runtime-<rid>` artifact, stages it as a local NuGet folder feed, and repoints the self-contained restore/publish at that feed with `/p:RuntimeFrameworkVersion=<version>`.
-- In `release.yml`, set `use_custom_dotnet_runtime` to `true`. If `dotnet_runtime_run_id` is blank, the release workflow runs `dotnet-runtime.yml` first; otherwise it skips the build and forwards the supplied run ID (including `latest`) to the reusable CLI job so the whole chain produces CLI archives built from the custom runtime.
+- In `powershell-cli.yml` (manual or reusable), set `use_custom_dotnet_runtime` to `true` and provide `dotnet_runtime_run_id` pointing at a completed `dotnet-runtime.yml` run for the selected `channel`, or set it to `latest` to auto-pick the newest successful `.NET runtime` run for that channel. The CLI job for each RID downloads the matching `DotNet-Runtime-<channel>-<rid>` artifact, stages it as a local NuGet folder feed, and repoints the self-contained restore/publish at that feed with `/p:RuntimeFrameworkVersion=<version>`.
+- In `release.yml`, set `use_custom_dotnet_runtime` to `true`. If `dotnet_runtime_run_id` is blank, the release workflow runs `dotnet-runtime.yml` for the selected `channel` first; otherwise it skips the build and forwards the supplied run ID (including `latest`) to the reusable CLI job so the whole chain produces CLI archives built from the custom runtime.
 
 Linux glibc runtime packs are cross-built against the .NET runtime workflow's Ubuntu 18.04 sysroot, and CI verifies their ELF dependencies require no newer than glibc 2.28 for RHEL 8 compatibility.
 
@@ -301,30 +312,30 @@ An older runtime workflow run without `linux-musl-x64` and `linux-musl-arm64` ar
 `eng/New-PowerShellDistroArchive.ps1` accepts optional `-CustomRuntimeSource` and `-CustomRuntimePackageVersion` parameters that inject the local runtime feed (with `packageSourceMapping` patterns for `Microsoft.NETCore.App.*`) ahead of NuGet.org and pin the runtime pack version during restore and publish. When the parameters are omitted, the generated `nuget.config` and publish command are identical to the stock path.
 
 
-This repository follows a downstream patch branch model inspired by `Devolutions/gsudo-distro`: `master` stays downstream-only, upstream PowerShell refs are mirrored under `upstream/*`, and source patches live on `downstream/vX.Y.Z` branches based on upstream release tags. The patched source is exposed on `master` as a same-repo submodule at `pwsh-src/` pinned to a commit on `downstream/vX.Y.Z`, so workflows build the exact reviewed source tree with a single `actions/checkout` using `submodules: true`. See [BRANCHING.md](BRANCHING.md) for the full branch, tag, submodule, and worktree flow.
+This repository follows a downstream patch branch model inspired by `Devolutions/gsudo-distro`: `master` stays downstream-only, upstream PowerShell refs are mirrored under `upstream/*`, and source patches live on `downstream/vX.Y.Z` branches based on upstream release tags. Each channel's patched source is exposed on `master` as a same-repo submodule (`pwsh-src-7.6/` and `pwsh-src-7.7/`) pinned to a commit on `downstream/vX.Y.Z`, and workflows initialize only the selected channel's submodule via `scripts/Initialize-Repository.ps1 -Channel <channel>`. See [BRANCHING.md](BRANCHING.md) for the full branch, tag, submodule, and worktree flow.
 
 ## Updating PowerShell versions
 
-When moving to a new upstream PowerShell release, the bump touches four surfaces in the same PR:
+When moving a channel (`7.6` or `7.7`) to a new upstream PowerShell release, the bump touches four surfaces in the same PR:
 
-1. Workflow `env` blocks in `.github/workflows/powershell-sdk.yml` and `.github/workflows/powershell-cli.yml`: `POWERSHELL_VERSION`, `POWERSHELL_RELEASE_TAG`, `POWERSHELL_UPSTREAM_TAG`, and `POWERSHELL_SOURCE_REF`. Reset `.github/workflows/powershell-sdk.yml` `SDK_PACKAGE_REVISION` to `0` for the first downstream SDK package built from a new upstream tag, and keep `.github/workflows/powershell-cli.yml` `SDK_PACKAGE_VERSION` and `SDK_PACKAGE_REVISION` aligned with the SDK package version that the CLI workflow should repackage by default.
-2. `.gitmodules`: the `branch = downstream/vX.Y.Z` line under `[submodule "pwsh-src"]` (git does not expand variables in `.gitmodules`, so this must be edited literally).
-3. The `pwsh-src` submodule pointer on `master`, bumped to the new `downstream/vX.Y.Z` tip with `git submodule update --remote pwsh-src && git add pwsh-src`.
+1. `eng/powershell-channels.json`: update the channel's `powerShellVersion`, `powerShellReleaseTag`, `powerShellUpstreamTag`, `powerShellSourceRef`, and `targetFramework`, reset `sdkPackageRevision` and `cliSdkPackageRevision` to `0` for the first downstream SDK package built from a new upstream tag, and update `cliSdkPackageVersion` accordingly.
+2. `.gitmodules`: the `branch = downstream/vX.Y.Z` line under `[submodule "pwsh-src-<channel>"]` (git does not expand variables in `.gitmodules`, so this must be edited literally).
+3. The `pwsh-src-<channel>` submodule pointer on `master`, bumped to the new `downstream/vX.Y.Z` tip with `git submodule update --remote pwsh-src-<channel> && git add pwsh-src-<channel>`.
 4. The "Current pins" table above.
 
-Verify the upstream target framework from `pwsh-src/PowerShell.Common.props` after the bump and keep SDK packaging paths derived from that property instead of hardcoding `net*` folders.
+Verify the upstream target framework from `pwsh-src-<channel>/PowerShell.Common.props` after the bump and keep SDK packaging paths derived from that property instead of hardcoding `net*` folders.
 
 ## Notes
 
-The PowerShell workflows check out this repository with `submodules: true` to populate `pwsh-src/` from the pinned submodule commit on `downstream/vX.Y.Z`, while build metadata continues to use `POWERSHELL_RELEASE_TAG`. This allows downstream patch branches to be built without passing branch names to PowerShell build steps that expect upstream release tags. `POWERSHELL_SOURCE_REF` documents which patch branch the submodule tracks; bumping the submodule pointer on `master` is what actually moves the built source. The release workflow exports the downstream patch by fetching both `POWERSHELL_UPSTREAM_TAG` and `POWERSHELL_SOURCE_REF` into `pwsh-src/` and diffing the mirrored upstream ref against the mirrored downstream ref.
+The PowerShell workflows check out this repository and run `scripts/Initialize-Repository.ps1 -Channel <channel>` to populate only `pwsh-src-<channel>/` from the pinned submodule commit on `downstream/vX.Y.Z`, while build metadata continues to use `POWERSHELL_RELEASE_TAG`. This allows downstream patch branches to be built without passing branch names to PowerShell build steps that expect upstream release tags. `powerShellSourceRef` (`POWERSHELL_SOURCE_REF`) documents which patch branch the submodule tracks; bumping the submodule pointer on `master` is what actually moves the built source. The release workflow exports the downstream patch by fetching both `POWERSHELL_UPSTREAM_TAG` and `POWERSHELL_SOURCE_REF` from `origin` and diffing the mirrored upstream ref against the mirrored downstream ref.
 
-The SDK workflow intentionally derives the target framework from upstream `PowerShell.Common.props` instead of hardcoding it, so future PowerShell updates only need the version pins refreshed. The SDK package is assembled from locally built PowerShell binaries plus package layouts from the official NuGet packages for the same PowerShell version, then `eng/Vendor-PowerShellSdkPackage.ps1` rewrites the NuGet package ID, package version, and vendor metadata to Devolutions. The PowerShell source build also receives `PowerShellVendor=Devolutions` so the built `$PSVersionTable['Vendor']` value and related runtime metadata report Devolutions for vendored distributions.
+The SDK workflow intentionally derives the target framework from upstream `PowerShell.Common.props` (`net10.0` for `7.6`, `net11.0` for `7.7`) instead of hardcoding it, so future PowerShell updates only need the channel pins refreshed. The SDK package is assembled from locally built PowerShell binaries plus package layouts from the official NuGet packages for the same PowerShell version, then `eng/Vendor-PowerShellSdkPackage.ps1` rewrites the NuGet package ID, package version, and vendor metadata to Devolutions. The PowerShell source build also receives `PowerShellVendor=Devolutions` so the built `$PSVersionTable['Vendor']` value and related runtime metadata report Devolutions for vendored distributions.
 
 The SDK and CLI `osx-x64` jobs run on Apple silicon (`macos-15`) instead of the slower Intel runners. The SDK apphost build remains framework-dependent portable IL and stages the x64 launcher from the pinned multi-pwsh package; CLI publishing still targets `osx-x64`. SDK validation retains restore, build, publish, and package-layout checks but skips runtime execution for this RID, and CLI packaging automatically skips execution probes when the target RID differs from the host. This avoids running x64 payloads under Rosetta. Native arm64 runtime tests and the separate native Intel macOS installer tests remain enabled.
 
-The vendored SDK keeps upstream PowerShell build/runtime metadata separate from downstream NuGet package revisions. `POWERSHELL_VERSION` remains the upstream three-part PowerShell version used to restore Microsoft packages and validate `pwsh` runtime output. `.github/workflows/powershell-sdk.yml` keeps the default downstream revision explicit in `SDK_PACKAGE_REVISION`; the manual `sdk_package_revision` input can override it or use `auto` to infer the next release tag revision. The package version is `POWERSHELL_VERSION.sdk_package_revision`, such as `7.6.3.0`, `7.6.3.1`, or `7.6.3.2`. NuGet normalizes a trailing `.0` in package identity metadata, file names, and restore folders, so `7.6.3.0` is expected to produce/use `Devolutions.PowerShell.SDK.7.6.3.nupkg`; nonzero revisions keep all four elements.
+The vendored SDK keeps upstream PowerShell build/runtime metadata separate from downstream NuGet package revisions. `POWERSHELL_VERSION` remains the upstream three-part PowerShell version used to restore Microsoft packages and validate `pwsh` runtime output. `eng/powershell-channels.json` keeps each channel's default downstream revision explicit in `sdkPackageRevision`; the manual `sdk_package_revision` input can override it or use `auto` to infer the next release tag revision. The package version is `POWERSHELL_VERSION.sdk_package_revision`, such as `7.6.10.0` or `7.7.0.0`. NuGet normalizes a trailing `.0` in package identity metadata, file names, and restore folders, so `7.6.10.0` is expected to produce/use `Devolutions.PowerShell.SDK.7.6.10.nupkg`; nonzero revisions keep all four elements.
 
-The package keeps original assembly identities (`System.Management.Automation.dll`, `Microsoft.PowerShell.Commands.Utility.dll`, and related assemblies) so consumers only need to change the NuGet package reference. Source-built PowerShell assemblies are discovered from the current `pwsh-src` build outputs and embedded directly in `Devolutions.PowerShell.SDK`; the package records the embedded Microsoft package IDs and source-built package asset paths under `buildTransitive`, and validation fails if any of those package IDs appear in the restore graph. External packages that are not built by this repository, including `Microsoft.PowerShell.Native` and `Microsoft.PowerShell.MarkdownRender`, remain normal public NuGet dependencies.
+The package keeps original assembly identities (`System.Management.Automation.dll`, `Microsoft.PowerShell.Commands.Utility.dll`, and related assemblies) so consumers only need to change the NuGet package reference. Source-built PowerShell assemblies are discovered from the selected `pwsh-src-<channel>` build outputs and embedded directly in `Devolutions.PowerShell.SDK`; the package records the embedded Microsoft package IDs and source-built package asset paths under `buildTransitive`, and validation fails if any of those package IDs appear in the restore graph. External packages that are not built by this repository, including `Microsoft.PowerShell.Native` and `Microsoft.PowerShell.MarkdownRender`, remain normal public NuGet dependencies.
 
 `Devolutions.PowerShell.SDK` built from this repository is slim by default; existing published versions retain their original dependency metadata. It omits `Microsoft.Windows.Compatibility` and direct dependencies on `System.ServiceModel.Http`, `NetTcp`, `NetFramingBase`, `Primitives`, and `Syndication`; `System.Data.SqlClient`, `Odbc`, and `OleDb`; `System.Speech`; `System.ComponentModel.Composition` and `Composition.Registration`; `System.Reflection.Context`; `System.DirectoryServices.AccountManagement` and `Protocols`; `System.Security.Cryptography.Xml`; `System.Net.Http.WinHttpHandler`; `System.Runtime.Caching`; and `System.IO.Ports` and its RID-specific native packages. It retains the original PowerShell assemblies, type catalog, apphosts, and modules, as well as `System.Security.Cryptography.ProtectedData`, which PowerShell uses for Windows secure-string encryption.
 
@@ -387,5 +398,4 @@ The apphost output is intended for running scripts with the core built-in module
 The secondary PowerShell CLI workflow uses this same package-consumer path instead of rebuilding PowerShell from source. It creates a temporary .NET project, restores the pinned SDK package from the pinned package source or a workflow-built SDK artifact, enables root apphost, XML documentation, and PSGallery module import, opts into localized resources when present, publishes self-contained for the matrix RID, removes the temporary host application files, validates the PowerShell layout, and archives the result as `.tar.gz` for every platform, including Windows. Windows archives additionally stage the matching `Microsoft.WindowsDesktop.App.Runtime.<rid>` payload so WPF/WinForms assemblies such as `PresentationFramework.dll`, `System.Windows.Forms.dll`, and `WindowsBase.dll` load from `$PSHOME`. For end-to-end dry runs outside `.github/workflows/release.yml`, pass `sdk_artifact_run_id` to `.github/workflows/powershell-cli.yml` so it downloads the `PowerShell-SDK-Release-X.Y.Z.R` artifact from a prior `.github/workflows/powershell-sdk.yml` run and repackages that workflow-built `.nupkg` instead of restoring from NuGet.org. If the artifact name does not include the SDK version, also pass `sdk_package_version`.
 
 During NuGet packing, upstream `Microsoft.PowerShell.SDK` content file/reference metadata can emit NU5100/NU5131 package analysis warnings. The SDK workflow treats package validation as the source of truth: the generated sample must restore only the vendored PowerShell package ID, build, publish framework-dependent and self-contained outputs, execute `pwsh`, and load copied built-in modules.
-Generated source checkouts and build artifacts are not part of this repository.
 Generated source checkouts and build artifacts are not part of this repository.

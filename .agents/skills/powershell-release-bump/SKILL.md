@@ -1,19 +1,19 @@
 ---
 name: powershell-release-bump
-description: Upgrades to a new PowerShell release by mirroring its tag, porting downstream patches, publishing the downstream source branch, and coordinating workflow and submodule pins.
+description: Upgrades a PowerShell channel (7.6 or 7.7) to a new release by mirroring its tag, porting downstream patches, publishing the downstream source branch, and coordinating channel manifest and submodule pins.
 ---
 
 # powershell release bump
 
-Use this skill when moving this repository to a new upstream PowerShell release. It covers the full upgrade flow: mirror the upstream tag, create and patch the downstream source branch, update the submodule pin, and synchronize the workflow and documentation pins.
+Use this skill when moving a PowerShell channel (`7.6` or `7.7`) in this repository to a new upstream PowerShell release. It covers the full upgrade flow: mirror the upstream tag, create and patch the downstream source branch, update the channel's submodule pin (`pwsh-src-<channel>`), and synchronize `eng/powershell-channels.json`, `.gitmodules`, and `README.md`.
 
-Do not use this skill to merely check existing pins; use `powershell-pin-audit` for that. Do not copy the PowerShell source tree to `master`: it remains a `pwsh-src` submodule pinned to a commit on a per-release downstream branch.
+Do not use this skill to merely check existing pins; use `powershell-pin-audit` for that. Do not copy the PowerShell source tree to `master`: each channel remains a `pwsh-src-<channel>` submodule pinned to a commit on a per-release downstream branch.
 
-Keep source checkout and build metadata separate:
+Keep source checkout and build metadata separate in `eng/powershell-channels.json`:
 
-- `POWERSHELL_RELEASE_TAG` is the upstream release tag, `vX.Y.Z`.
-- `POWERSHELL_UPSTREAM_TAG` is the mirrored tag, `upstream/vX.Y.Z`.
-- `POWERSHELL_SOURCE_REF` is the patched source branch, `downstream/vX.Y.Z`.
+- `powerShellReleaseTag` is the upstream release tag, `vX.Y.Z`.
+- `powerShellUpstreamTag` is the mirrored tag, `upstream/vX.Y.Z`.
+- `powerShellSourceRef` is the patched source branch, `downstream/vX.Y.Z`.
 
 ## Prerequisites
 
@@ -28,7 +28,7 @@ Keep source checkout and build metadata separate:
 
 ## Scripts
 
-- `scripts\Set-PowerShellReleasePins.ps1`: Updates text pins in both PowerShell workflows, `.gitmodules`, and README.
+- `scripts\Set-PowerShellReleasePins.ps1`: Updates channel pins in `eng/powershell-channels.json`, `.gitmodules`, and README.
 - `..\powershell-pin-audit\scripts\Test-PowerShellPins.ps1`: Audits the resulting pins after the edit.
 - `..\..\..\..\scripts\New-PowerShellPatchBranch.ps1`: Creates `downstream/vX.Y.Z` from `upstream/vX.Y.Z`.
 - `..\..\..\..\scripts\Sync-PowerShellUpstream.ps1`: Mirrors upstream refs and namespaced tags.
@@ -36,11 +36,13 @@ Keep source checkout and build metadata separate:
 
 ## Upgrade procedure
 
-Set the previous and target PowerShell releases. The examples below update `7.6.4` to `7.6.5`.
+Set the channel, previous release, and target PowerShell release. The examples below update channel `7.6` from `7.6.9` to `7.6.10`:
 
 ```powershell
-$PreviousVersion = '7.6.4'
-$Version = '7.6.5'
+$Channel = '7.6'
+$SubmodulePath = "pwsh-src-$Channel"
+$PreviousVersion = '7.6.9'
+$Version = '7.6.10'
 ```
 
 ### 1. Inspect the release and existing patch series
@@ -49,7 +51,7 @@ Confirm that the upstream release exists, identify every downstream commit in ol
 
 ```powershell
 gh api "repos/PowerShell/PowerShell/releases/tags/v$Version" --jq '.tag_name, .published_at, .target_commitish'
-git log --oneline --reverse "upstream/v$PreviousVersion..downstream/v$PreviousVersion"
+git log --oneline --reverse "upstream/v$PreviousVersion..origin/downstream/v$PreviousVersion"
 git show "upstream/v$PreviousVersion:PowerShell.Common.props" |
   Select-String -Pattern 'TargetFramework'
 ```
@@ -73,14 +75,14 @@ Use the target release's `PowerShell.Common.props` as the target-framework autho
 
 ### 3. Create and patch the downstream source branch
 
-Create the downstream branch from the mirrored tag, then use an isolated linked worktree for source changes. Keep this worktree outside the repository checkout or in ignored `pwsh-src-worktree\`; never commit it to `master`.
+Create the downstream branch from the mirrored tag, then use an isolated linked worktree for source changes. Keep this worktree outside the repository checkout or in ignored `pwsh-src-<channel>-worktree\`; never commit it to `master`.
 
 ```powershell
 pwsh .\scripts\New-PowerShellPatchBranch.ps1 -Version $Version
-$PatchWorktree = Join-Path $env:TEMP "pwsh-src-v$Version"
+$PatchWorktree = "pwsh-src-$Channel-worktree"
 git worktree add $PatchWorktree "downstream/v$Version"
 
-$PatchCommits = @(git rev-list --reverse "upstream/v$PreviousVersion..downstream/v$PreviousVersion")
+$PatchCommits = @(git rev-list --reverse "upstream/v$PreviousVersion..origin/downstream/v$PreviousVersion")
 if ($PatchCommits.Count -gt 0) {
   git -C $PatchWorktree cherry-pick @PatchCommits
   if ($LASTEXITCODE -ne 0) {
@@ -125,7 +127,7 @@ if ($LASTEXITCODE -ne 0) {
 
 ### 4. Update coordinated distribution pins
 
-Read the target framework from the patched worktree and pass it to the pin script. Passing it explicitly avoids depending on the currently pinned `pwsh-src` checkout, which still represents the previous release.
+Read the target framework from the patched worktree and pass it to the pin script. Passing it explicitly avoids depending on the currently pinned submodule checkout, which still represents the previous release.
 
 ```powershell
 [xml] $CommonProps = Get-Content -Raw (Join-Path $PatchWorktree 'PowerShell.Common.props')
@@ -135,42 +137,42 @@ $TargetFramework = $CommonProps.Project.PropertyGroup |
   Select-Object -First 1
 
 pwsh .\.agents\skills\powershell-release-bump\scripts\Set-PowerShellReleasePins.ps1 `
+  -Channel $Channel `
   -Version $Version `
   -TargetFramework $TargetFramework
 ```
 
-The script updates these coordinated surfaces:
+The script updates these coordinated surfaces for `$Channel` without modifying other channels:
 
-- `POWERSHELL_VERSION`, `POWERSHELL_RELEASE_TAG`, `POWERSHELL_UPSTREAM_TAG`, and `POWERSHELL_SOURCE_REF` in both PowerShell workflows.
-- The CLI's `SDK_PACKAGE_VERSION`, retaining the selected numeric `SDK_PACKAGE_REVISION`.
-- The literal `branch = downstream/vX.Y.Z` line in `.gitmodules`.
-- The README "Current pins" upstream release, source ref, target framework, and SDK workflow-default version.
+- `powerShellVersion`, `powerShellReleaseTag`, `powerShellUpstreamTag`, `powerShellSourceRef`, `targetFramework`, `sdkPackageRevision`, `cliSdkPackageVersion`, and `cliSdkPackageRevision` in `eng/powershell-channels.json`.
+- The literal `branch = downstream/vX.Y.Z` line under `[submodule "pwsh-src-<channel>"]` in `.gitmodules`.
+- The README "Current pins" rows for `PowerShell <channel> (<track>)`.
 
-Update the gitlink only after the new downstream branch is on `origin`:
+Update the channel gitlink only after the new downstream branch is on `origin`:
 
 ```powershell
-git submodule update --remote pwsh-src
-git add pwsh-src
+git submodule update --init --remote $SubmodulePath
+git add $SubmodulePath
 ```
 
 ### 5. Validate and clean up
 
-The checked-out submodule is now the target-framework authority for the final audit:
+The checked-out channel submodule is now the target-framework authority for the final audit:
 
 ```powershell
-pwsh .\.agents\skills\powershell-pin-audit\scripts\Test-PowerShellPins.ps1 -RequireSubmodule
+pwsh .\.agents\skills\powershell-pin-audit\scripts\Test-PowerShellPins.ps1 -Channel $Channel -RequireSubmodule
 
 Import-Module Yayaml
 Get-Content -Raw .github\workflows\powershell-sdk.yml | ConvertFrom-Yaml | Out-Null
 Get-Content -Raw .github\workflows\powershell-cli.yml | ConvertFrom-Yaml | Out-Null
 
-git -C pwsh-src rev-parse --verify "upstream/v$Version^{commit}"
+git -C $SubmodulePath rev-parse --verify "upstream/v$Version^{commit}"
 if ($LASTEXITCODE -ne 0) {
-  throw "pwsh-src is missing upstream/v$Version."
+  throw "$SubmodulePath is missing upstream/v$Version."
 }
-git -C pwsh-src merge-base --is-ancestor "upstream/v$Version^{commit}" HEAD
+git -C $SubmodulePath merge-base --is-ancestor "upstream/v$Version^{commit}" HEAD
 if ($LASTEXITCODE -ne 0) {
-  throw "pwsh-src is not based on upstream/v$Version."
+  throw "$SubmodulePath is not based on upstream/v$Version."
 }
 git --no-pager diff --check
 if ($LASTEXITCODE -ne 0) {
@@ -180,7 +182,7 @@ git --no-pager diff --cached --check
 if ($LASTEXITCODE -ne 0) {
   throw "The staged diff check failed."
 }
-git submodule status pwsh-src
+git submodule status $SubmodulePath
 git status --short
 ```
 
@@ -191,13 +193,13 @@ git worktree remove $PatchWorktree
 git worktree prune
 ```
 
-Before opening the distribution PR, use `powershell-sdk-package-validate` to build and validate one local SDK package. In GitHub Actions, run the SDK workflow before the CLI distribution workflow.
+Before opening the distribution PR, use `powershell-sdk-package-validate` (`-Channel $Channel`) to build and validate one local SDK package. In GitHub Actions, run the SDK workflow (or `release.yml`) with `channel=$Channel`.
 
 ## Safety checklist
 
-1. Verify both workflows agree on all four `POWERSHELL_*` release pins.
-2. Verify `POWERSHELL_RELEASE_TAG` remains `vX.Y.Z`, not `downstream/vX.Y.Z`.
-3. Confirm the current `pwsh-src` commit is a descendant of `upstream/vX.Y.Z` and is on the published `downstream/vX.Y.Z` branch.
-4. Confirm `.gitmodules` has a literal `branch = downstream/vX.Y.Z` value and the submodule diff is a gitlink update, not copied source files.
+1. Verify `eng/powershell-channels.json`, `.gitmodules`, and `README.md` agree on all pins for every configured channel.
+2. Verify `powerShellReleaseTag` remains `vX.Y.Z`, not `downstream/vX.Y.Z`.
+3. Confirm the current `pwsh-src-<channel>` commit is a descendant of `upstream/vX.Y.Z` and is on the published `downstream/vX.Y.Z` branch.
+4. Confirm `.gitmodules` has a literal `branch = downstream/vX.Y.Z` value for `pwsh-src-<channel>` and the submodule diff is a gitlink update, not copied source files.
 5. Ensure no generated `output\`, `package\`, archive, `dotnet-runtime\`, or temporary source-worktree paths are staged.
 6. Do not create a downstream release tag until validated artifacts are ready; downstream tags use `vX.Y.Z.R`, never plain `vX.Y.Z`.

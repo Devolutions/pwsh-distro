@@ -1,8 +1,12 @@
 [CmdletBinding()]
 param(
-  [string] $PowerShellVersion = '7.6.3',
+  [string] $Channel,
 
-  [string] $PowerShellReleaseTag = 'v7.6.3',
+  [string] $PowerShellVersion,
+
+  [string] $PowerShellReleaseTag,
+
+  [string] $PowerShellSourceRoot,
 
   [string] $PackageId = 'Devolutions.PowerShell.SDK',
 
@@ -27,6 +31,8 @@ param(
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot '..\eng\PowerShellChannelConfig.ps1')
 
 function Invoke-Native {
   param(
@@ -320,121 +326,56 @@ function Copy-LocalizedResourcesToPackage {
     }
 }
 
-function Get-NuGetGlobalPackagesPath {
-  $Output = & dotnet nuget locals global-packages --list
-  if ($LASTEXITCODE -ne 0) {
-    throw "dotnet nuget locals global-packages --list failed with exit code $LASTEXITCODE"
-  }
-
-  $GlobalPackagesLine = $Output | Where-Object { $_ -match '^\s*global-packages:\s*(.+)$' } | Select-Object -First 1
-  if (-not $GlobalPackagesLine -or $GlobalPackagesLine -notmatch '^\s*global-packages:\s*(.+)$') {
-    throw 'Unable to determine NuGet global packages path.'
-  }
-
-  return $Matches[1].Trim()
-}
-
-function Get-NuGetCacheVersion {
-  param(
-    [Parameter(Mandatory)]
-    [string] $Version
-  )
-
-  if ($Version -match '^(\d+\.\d+\.\d+)\.0$') {
-    return $Matches[1]
-  }
-  if ($Version -match '^\d+\.\d+$') {
-    return "$Version.0"
-  }
-
-  return $Version
-}
-
-function Copy-PSGalleryModulesToPackage {
-  param(
-    [Parameter(Mandatory)]
-    [string] $ProjectPath,
-
-    [Parameter(Mandatory)]
-    [string] $DestinationRoot
-  )
-
-  if (-not (Test-Path -LiteralPath $ProjectPath -PathType Leaf)) {
-    throw "PSGallery module project was not found: $ProjectPath"
-  }
-
-  $ProjectDirectory = Split-Path -Parent $ProjectPath
-  $NuGetConfigPath = Join-Path $ProjectDirectory 'nuget.config'
-  $RestoreArguments = @('restore', $ProjectPath, '--verbosity', 'minimal')
-  if (Test-Path -LiteralPath $NuGetConfigPath -PathType Leaf) {
-    $RestoreArguments += @('--configfile', $NuGetConfigPath)
-  }
-
-  Invoke-Native dotnet $RestoreArguments
-
-  [xml] $PSGalleryProject = Get-Content -LiteralPath $ProjectPath -Raw
-  $PackageReferences = @($PSGalleryProject.Project.ItemGroup.PackageReference)
-  if (-not $PackageReferences) {
-    throw "PSGallery module project contains no PackageReference items: $ProjectPath"
-  }
-
-  $NuGetGlobalPackagesPath = Get-NuGetGlobalPackagesPath
-  Remove-Item -LiteralPath $DestinationRoot -Recurse -Force -ErrorAction SilentlyContinue
-  New-Item -Path $DestinationRoot -ItemType Directory -Force | Out-Null
-
-  foreach ($PackageReference in $PackageReferences) {
-    $ModuleName = [string] $PackageReference.Include
-    $ModuleVersion = [string] $PackageReference.Version
-    if ([string]::IsNullOrWhiteSpace($ModuleName) -or [string]::IsNullOrWhiteSpace($ModuleVersion)) {
-      throw "Invalid PSGallery module PackageReference in $ProjectPath"
-    }
-
-    $CacheVersion = Get-NuGetCacheVersion -Version $ModuleVersion
-    $SourcePath = Join-Path $NuGetGlobalPackagesPath (Join-Path $ModuleName.ToLowerInvariant() $CacheVersion)
-    if (-not (Test-Path -LiteralPath $SourcePath -PathType Container)) {
-      throw "Restored PSGallery module package was not found: $SourcePath"
-    }
-
-    $DestinationPath = Join-Path $DestinationRoot $ModuleName
-    Remove-Item -LiteralPath $DestinationPath -Recurse -Force -ErrorAction SilentlyContinue
-    New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
-    Copy-Item -Path (Join-Path $SourcePath '*') -Destination $DestinationPath -Recurse -Force
-
-    $ExcludedNames = @('fullclr', 'System.Runtime.InteropServices.RuntimeInformation.dll')
-    $ExcludedPatterns = @('*.nupkg', '*.nupkg.metadata', '*.nupkg.sha512', '*.nuspec')
-    Get-ChildItem -LiteralPath $DestinationPath -Recurse -Force |
-      Sort-Object FullName -Descending |
-      Where-Object {
-        $ItemName = $_.Name
-        $ExcludedNames -contains $_.Name -or
-        (@($ExcludedPatterns | Where-Object { $ItemName -like $_ }).Count -gt 0)
-      } |
-      Remove-Item -Recurse -Force
-  }
-}
-
 if (-not $RuntimeIdentifier) {
   $RuntimeIdentifier = Get-DefaultRuntimeIdentifier
 }
-if ([string]::IsNullOrWhiteSpace($SdkPackageVersion)) {
-  $SdkPackageVersion = "$PowerShellVersion.0"
-}
-Assert-SdkPackageVersion -PowerShellVersion $PowerShellVersion -PackageVersion $SdkPackageVersion
-$NormalizedSdkPackageVersion = Get-NormalizedNuGetPackageVersion -PackageVersion $SdkPackageVersion
 
 $RepositoryRoot = (Invoke-GitOutput rev-parse --show-toplevel | Select-Object -First 1).Trim()
 if (-not $RepositoryRoot) {
   throw 'Unable to determine git repository root.'
 }
-
 $RepositoryRoot = (Resolve-Path -LiteralPath $RepositoryRoot).Path
-$PwshSourceRoot = Join-Path $RepositoryRoot 'pwsh-src'
+
+if ([string]::IsNullOrWhiteSpace($PowerShellVersion) -and
+    -not [string]::IsNullOrWhiteSpace($SdkPackageVersion) -and
+    $SdkPackageVersion.Trim() -match '^(?<ver>\d+\.\d+\.\d+)\.\d+$') {
+  $PowerShellVersion = $Matches['ver']
+}
+
+$ChannelConfig = Resolve-PowerShellChannelConfig `
+  -Channel $Channel `
+  -PowerShellVersion $PowerShellVersion `
+  -RepositoryRoot $RepositoryRoot
+
+if ([string]::IsNullOrWhiteSpace($PowerShellVersion)) {
+  $PowerShellVersion = $ChannelConfig.PowerShellVersion
+}
+if ([string]::IsNullOrWhiteSpace($PowerShellReleaseTag)) {
+  $PowerShellReleaseTag = "v$PowerShellVersion"
+}
+if ([string]::IsNullOrWhiteSpace($SdkPackageVersion)) {
+  $SdkPackageVersion = if ($PowerShellVersion -eq $ChannelConfig.PowerShellVersion) {
+    $ChannelConfig.SdkPackageVersion
+  } else {
+    "$PowerShellVersion.0"
+  }
+}
+Assert-SdkPackageVersion -PowerShellVersion $PowerShellVersion -PackageVersion $SdkPackageVersion
+$NormalizedSdkPackageVersion = Get-NormalizedNuGetPackageVersion -PackageVersion $SdkPackageVersion
+
+$PwshSourceRoot = if ([string]::IsNullOrWhiteSpace($PowerShellSourceRoot)) {
+  Join-Path $RepositoryRoot $ChannelConfig.SubmodulePath
+} elseif ([System.IO.Path]::IsPathRooted($PowerShellSourceRoot)) {
+  $PowerShellSourceRoot
+} else {
+  Join-Path $RepositoryRoot $PowerShellSourceRoot
+}
 if (-not (Test-Path (Join-Path $PwshSourceRoot 'PowerShell.Common.props') -PathType Leaf)) {
-  throw 'pwsh-src is not initialized. Run scripts\Initialize-Repository.ps1 first.'
+  throw "PowerShell source at '$PwshSourceRoot' is not initialized. Run 'scripts\Initialize-Repository.ps1 -Channel $($ChannelConfig.Channel)' first."
 }
 Import-Module (Join-Path $RepositoryRoot 'eng\PowerShellSdkPackaging.psm1') -Force
 
-$OutputRootPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath((Join-Path $RepositoryRoot (Join-Path $OutputRoot $RuntimeIdentifier)))
+$OutputRootPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath((Join-Path $RepositoryRoot (Join-Path $OutputRoot (Join-Path $ChannelConfig.Channel $RuntimeIdentifier))))
 $AppHostOutputPath = Join-Path $OutputRootPath 'PowerShell-AppHost'
 $PackageRuntimePath = Join-Path $OutputRootPath 'package-runtime'
 $PackageOutputPath = Join-Path $OutputRootPath 'package'
@@ -448,6 +389,9 @@ $env:PATH = "$(Split-Path -Parent $NuGetCommand);$env:PATH"
 $ModuleNugetConfigPath = Join-Path $PwshSourceRoot 'src\Modules\nuget.config'
 $HadModuleNugetConfig = Test-Path $ModuleNugetConfigPath -PathType Leaf
 $OriginalModuleNugetConfig = if ($HadModuleNugetConfig) { Get-Content -LiteralPath $ModuleNugetConfigPath -Raw } else { $null }
+$GlobalToolShimProjectPath = Join-Path $PwshSourceRoot 'src\Microsoft.PowerShell.GlobalTool.Shim\Microsoft.PowerShell.GlobalTool.Shim.csproj'
+$HadGlobalToolShimProject = Test-Path $GlobalToolShimProjectPath -PathType Leaf
+$OriginalGlobalToolShimProject = if ($HadGlobalToolShimProject) { Get-Content -LiteralPath $GlobalToolShimProjectPath -Raw } else { $null }
 
 Push-Location $PwshSourceRoot
 try {
@@ -471,6 +415,7 @@ try {
       '<configuration>',
       '  <packageSources>',
       '    <clear />',
+      '    <add key="psgallery" value="https://www.powershellgallery.com/api/v2/" />',
       '    <add key="powershell" value="https://pkgs.dev.azure.com/powershell/PowerShell/_packaging/PowerShell/nuget/v3/index.json" />',
       '  </packageSources>',
       '  <disabledPackageSources>',
@@ -479,6 +424,14 @@ try {
       '</configuration>'
     )
     Set-Content -Path $ModuleNugetConfigPath -Value $ModuleNugetConfig -Encoding utf8
+
+    if ($HadGlobalToolShimProject) {
+      $WindowsDesktopShimImport = 'Sdk="Microsoft.NET.Sdk.WindowsDesktop" Condition="''$(SDKToUse)'' == ''Microsoft.NET.Sdk.WindowsDesktop'' "'
+      if ($OriginalGlobalToolShimProject.Contains($WindowsDesktopShimImport)) {
+        $PatchedGlobalToolShimProject = $OriginalGlobalToolShimProject.Replace($WindowsDesktopShimImport, 'Sdk="Microsoft.NET.Sdk" Condition="''$(SDKToUse)'' == ''Microsoft.NET.Sdk.WindowsDesktop'' "')
+        Set-Content -LiteralPath $GlobalToolShimProjectPath -Value $PatchedGlobalToolShimProject -Encoding utf8NoBOM
+      }
+    }
   }
 
   [xml] $CommonProps = Get-Content .\PowerShell.Common.props
@@ -554,9 +507,10 @@ try {
     Copy-Item $_ $DestinationDir -Force
   }
 
-  Copy-PSGalleryModulesToPackage `
+  Copy-PowerShellSdkPSGalleryModules `
     -ProjectPath (Join-Path $PwshSourceRoot 'src\Modules\PSGalleryModules.csproj') `
-    -DestinationRoot (Join-Path $SdkStagePath 'buildTransitive\psgallery-modules')
+    -DestinationRoot (Join-Path $SdkStagePath 'buildTransitive\psgallery-modules') `
+    -PowerShellVersion $PowerShellVersion
 
   Copy-LocalizedResourcesToPackage `
     -SourceRoot $AppHostOutputPath `
@@ -641,14 +595,17 @@ try {
   if ($Validate) {
     & (Join-Path $RepositoryRoot 'eng\Validate-PowerShellSdkPackage.ps1') `
       -PackageDirectory $PackageOutputPath `
+      -Channel $ChannelConfig.Channel `
       -PowerShellVersion $PowerShellVersion `
       -PackageVersion $SdkPackageVersion `
       -TargetFramework $TargetFramework `
       -RuntimeIdentifier $RuntimeIdentifier `
       -PackageId $PackageId `
-      -PackageVendorName $VendorName
+      -PackageVendorName $VendorName `
+      -SourceBuiltSdkProjectPath (Join-Path $PwshSourceRoot 'src\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj')
   }
 
+  Write-Output "Channel=$($ChannelConfig.Channel)"
   Write-Output "Package=$($Package.FullName)"
   Write-Output "RuntimeIdentifier=$RuntimeIdentifier"
   Write-Output "TargetFramework=$TargetFramework"
@@ -658,6 +615,9 @@ try {
       Set-Content -Path $ModuleNugetConfigPath -Value $OriginalModuleNugetConfig -Encoding utf8NoBOM
     } else {
       Remove-Item $ModuleNugetConfigPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($HadGlobalToolShimProject) {
+      Set-Content -LiteralPath $GlobalToolShimProjectPath -Value $OriginalGlobalToolShimProject -Encoding utf8NoBOM
     }
   }
   Pop-Location

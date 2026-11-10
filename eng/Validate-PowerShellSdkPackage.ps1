@@ -17,7 +17,9 @@ param(
 
   [string] $PackageVendorName = 'Devolutions',
 
-  [string] $SourceBuiltSdkProjectPath = (Join-Path $PSScriptRoot '..\pwsh-src\src\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj'),
+  [string] $Channel,
+
+  [string] $SourceBuiltSdkProjectPath,
 
   [switch] $SkipRuntimeExecution
 )
@@ -25,7 +27,17 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'PowerShellChannelConfig.ps1')
 . (Join-Path $PSScriptRoot 'PowerShellSdkDependencyProfile.ps1')
+
+if ([string]::IsNullOrWhiteSpace($SourceBuiltSdkProjectPath)) {
+  $RepositoryRootPath = Split-Path -Parent $PSScriptRoot
+  $ResolvedChannelConfig = Resolve-PowerShellChannelConfig `
+    -Channel $Channel `
+    -PowerShellVersion $PowerShellVersion `
+    -RepositoryRoot $RepositoryRootPath
+  $SourceBuiltSdkProjectPath = Join-Path $RepositoryRootPath (Join-Path $ResolvedChannelConfig.SubmodulePath 'src\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj')
+}
 
 function Assert-OptionalSdkDependenciesAbsent {
   param(

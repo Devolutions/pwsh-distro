@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [string] $RepoPath = 'pwsh-src-worktree',
+  [string] $RepoPath,
 
   [string] $Branch,
 
@@ -13,6 +13,18 @@ param(
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($RepoPath)) {
+  $Candidates = @('pwsh-src-worktree')
+  if ($Branch -match '^downstream/v(?<channel>\d+\.\d+)\.') {
+    $ChannelName = $Matches['channel']
+    $Candidates = @("pwsh-src-$ChannelName-worktree", "pwsh-src-$ChannelName") + $Candidates
+  }
+  $RepoPath = @($Candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Container } | Select-Object -First 1)
+  if (-not $RepoPath) {
+    $RepoPath = $Candidates[0]
+  }
+}
 
 if (-not (Test-Path $RepoPath -PathType Container)) {
   throw "Repository path not found: $RepoPath"
