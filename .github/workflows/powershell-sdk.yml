@@ -330,7 +330,8 @@ jobs:
             psbuild-runtime: fxdependent-linux-arm64
             executable: pwsh
           - rid: osx-x64
-            runner: macos-15-intel
+            # fxdependent produces portable IL; the x64 launcher is staged from the pinned apphost package.
+            runner: macos-15
             psbuild-runtime: fxdependent
             executable: pwsh
           - rid: osx-arm64
@@ -1458,7 +1459,8 @@ jobs:
           - rid: linux-arm64
             runner: ubuntu-24.04-arm
           - rid: osx-x64
-            runner: macos-15-intel
+            runner: macos-15
+            skip-runtime-execution: true
           - rid: osx-arm64
             runner: macos-15
 
