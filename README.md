@@ -257,6 +257,8 @@ This is **off by default** and does not change existing behavior when unused. To
 - In `powershell-cli.yml` (manual or reusable), set `use_custom_dotnet_runtime` to `true` and provide `dotnet_runtime_run_id` pointing at a completed `dotnet-runtime.yml` run, or set it to `latest` to auto-pick the newest successful `.NET runtime` run. The CLI job for each RID downloads the matching `DotNet-Runtime-<rid>` artifact, stages it as a local NuGet folder feed, and repoints the self-contained restore/publish at that feed with `/p:RuntimeFrameworkVersion=<version>`.
 - In `release.yml`, set `use_custom_dotnet_runtime` to `true`. If `dotnet_runtime_run_id` is blank, the release workflow runs `dotnet-runtime.yml` first; otherwise it skips the build and forwards the supplied run ID (including `latest`) to the reusable CLI job so the whole chain produces CLI archives built from the custom runtime.
 
+Linux glibc runtime packs are cross-built against the .NET runtime workflow's Ubuntu 18.04 sysroot, and CI verifies their ELF dependencies require no newer than glibc 2.28 for RHEL 8 compatibility.
+
 An older runtime workflow run without `linux-musl-x64` and `linux-musl-arm64` artifacts cannot supply the Alpine archives; run the updated runtime workflow before reusing its run ID.
 
 `eng/New-PowerShellDistroArchive.ps1` accepts optional `-CustomRuntimeSource` and `-CustomRuntimePackageVersion` parameters that inject the local runtime feed (with `packageSourceMapping` patterns for `Microsoft.NETCore.App.*`) ahead of NuGet.org and pin the runtime pack version during restore and publish. When the parameters are omitted, the generated `nuget.config` and publish command are identical to the stock path.

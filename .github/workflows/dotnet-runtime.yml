@@ -12,6 +12,8 @@ env:
   CLANG_LLVM_VERSION: "22.1.4"
   CLANG_LLVM_RELEASE: "v2026.1.1"
   VSDEVSHELL_MODULE_NAME: "VsDevShell"
+  DOTNET_GLIBC_CROSS_IMAGE_X64: "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-amd64"
+  DOTNET_GLIBC_CROSS_IMAGE_ARM64: "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-arm64"
   DOTNET_MUSL_CROSS_IMAGE_X64: "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-amd64-musl"
   DOTNET_MUSL_CROSS_IMAGE_ARM64: "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-arm64-musl"
 jobs:
@@ -57,16 +59,12 @@ jobs:
           - os: linux
             arch: x86_64
             runtime-arch: x64
-            llvm-arch: x86_64
             runner: ubuntu-24.04
-            llvm-platform: ubuntu-24.04
             rid: linux-x64
           - os: linux
             arch: arm64
             runtime-arch: arm64
-            llvm-arch: aarch64
-            runner: ubuntu-24.04-arm
-            llvm-platform: ubuntu-24.04
+            runner: ubuntu-24.04
             rid: linux-arm64
   
     steps:
@@ -86,37 +84,8 @@ jobs:
           echo "CLR_CXX=/usr/bin/clang++" >> $GITHUB_ENV
           echo "BUILD_CMD=./build.sh" >> $GITHUB_ENV
 
-      - name: Configure Linux runner
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git xz-utils ninja-build build-essential
-          sudo apt-get install -y libkrb5-dev liblttng-ust-dev
-          if [ "${{matrix.runtime-arch}}" = "arm64" ]; then
-            sudo tee /usr/local/bin/clang-dotnet >/dev/null <<'EOF'
-          #!/usr/bin/env bash
-          if [ -x /opt/llvm/bin/clang-22 ]; then
-            exec /opt/llvm/bin/clang-22 --target=aarch64-linux-gnu --gcc-toolchain=/usr --sysroot=/ "$@"
-          fi
-          exec /opt/llvm/bin/clang --target=aarch64-linux-gnu --gcc-toolchain=/usr --sysroot=/ "$@"
-          EOF
-            sudo tee /usr/local/bin/clang++-dotnet >/dev/null <<'EOF'
-          #!/usr/bin/env bash
-          if [ -x /opt/llvm/bin/clang++-22 ]; then
-            exec /opt/llvm/bin/clang++-22 --target=aarch64-linux-gnu --gcc-toolchain=/usr --sysroot=/ "$@"
-          fi
-          if [ -x /opt/llvm/bin/clang++ ]; then
-            exec /opt/llvm/bin/clang++ --target=aarch64-linux-gnu --gcc-toolchain=/usr --sysroot=/ "$@"
-          fi
-          exec /opt/llvm/bin/clang-22 --driver-mode=g++ --target=aarch64-linux-gnu --gcc-toolchain=/usr --sysroot=/ "$@"
-          EOF
-            sudo chmod +x /usr/local/bin/clang-dotnet /usr/local/bin/clang++-dotnet
-            echo "CLR_CC=/usr/local/bin/clang-dotnet" >> $GITHUB_ENV
-            echo "CLR_CXX=/usr/local/bin/clang++-dotnet" >> $GITHUB_ENV
-          fi
-          echo "BUILD_CMD=./build.sh" >> $GITHUB_ENV
-
       - name: Install clang+llvm
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ClangLlvmVersion = $Env:CLANG_LLVM_VERSION
@@ -136,7 +105,7 @@ jobs:
           $LLVM_BIN_PATH="$LLVM_PREFIX/bin"
           $LLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm"
           echo "LLVM_DIR=$LLVM_DIR" >> $Env:GITHUB_ENV
-          if ('${{matrix.os}}' -ne 'macos') {
+          if ('${{matrix.os}}' -eq 'windows') {
             echo "PATH=$LLVM_BIN_PATH$([IO.Path]::PathSeparator)$Env:PATH" >> $Env:GITHUB_ENV
           }
 
@@ -211,6 +180,7 @@ jobs:
           }
 
       - name: Restore nuget packages
+        if: runner.os != 'Linux'
         working-directory: dotnet-runtime
         shell: pwsh
         run: |
@@ -221,10 +191,31 @@ jobs:
           }
 
       - name: Build .NET runtime
+        if: runner.os != 'Linux'
         working-directory: dotnet-runtime
         shell: pwsh
         run: |
           & $Env:BUILD_CMD -arch '${{matrix.runtime-arch}}' -c Release -ninja -pack
+
+      - name: Build Linux runtime packs against the Ubuntu 18.04 sysroot
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.runtime-arch }}" == "arm64" ]]; then
+            image="$DOTNET_GLIBC_CROSS_IMAGE_ARM64"
+          else
+            image="$DOTNET_GLIBC_CROSS_IMAGE_X64"
+          fi
+          docker run --rm \
+            -v "$PWD/dotnet-runtime:/runtime" \
+            -w /runtime -e ROOTFS_DIR="/crossrootfs/${{ matrix.runtime-arch }}" \
+            -e TARGET_BUILD_ARCH="${{ matrix.runtime-arch }}" \
+            "$image" bash -euc '
+              git config --global --add safe.directory /runtime
+              ./build.sh -arch "${{ matrix.runtime-arch }}" -cross -restore
+              ./build.sh -arch "${{ matrix.runtime-arch }}" -cross -c Release -ninja -pack
+            '
 
       - name: Stage runtime pack artifacts
         working-directory: dotnet-runtime
@@ -264,6 +255,40 @@ jobs:
           Write-Host "##[group]Staged runtime packs"
           Get-ChildItem -LiteralPath $StageDir -File | ForEach-Object { Write-Host "  $($_.Name)" }
           Write-Host "##[endgroup]"
+
+      - name: Validate Linux runtime glibc compatibility
+        if: matrix.os == 'linux'
+        shell: bash
+        env:
+          RUNTIME_PACK_DIR: ${{ runner.temp }}/dotnet-runtime-pack-${{ matrix.rid }}
+        run: |
+          set -euo pipefail
+          extracted="$(mktemp -d)"
+          trap 'rm -rf "$extracted"' EXIT
+          while IFS= read -r -d '' pack; do
+            destination="$extracted/$(basename "$pack" .nupkg)"
+            mkdir -p "$destination"
+            unzip -q "$pack" -d "$destination"
+          done < <(find "$RUNTIME_PACK_DIR" -maxdepth 1 -type f -name '*.nupkg' -print0)
+
+          found_elf=false
+          while IFS= read -r -d '' file; do
+            if ! readelf --file-header "$file" >/dev/null 2>&1; then
+              continue
+            fi
+            found_elf=true
+            max_glibc="$(readelf --version-info "$file" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -Vu | tail -n 1 || true)"
+            if [[ -n "$max_glibc" && "$(printf '%s\n' GLIBC_2.28 "$max_glibc" | sort -V | tail -n 1)" != "GLIBC_2.28" ]]; then
+              echo "$file requires $max_glibc; Linux runtime packs must remain compatible with glibc 2.28." >&2
+              exit 1
+            fi
+          done < <(find "$extracted" -type f -print0)
+
+          if [[ "$found_elf" != true ]]; then
+            echo "No ELF files were found in the staged Linux runtime packs." >&2
+            exit 1
+          fi
+          echo "All Linux runtime pack ELF files are compatible with glibc 2.28 or older."
 
       - name: Upload runtime pack
         uses: actions/upload-artifact@v7.0.1
