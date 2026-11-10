@@ -1,6 +1,8 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
-  [string] $SubmodulePath = 'pwsh-src',
+  [string] $Channel,
+
+  [string] $SubmodulePath,
 
   [ValidateSet('Local', 'Global', 'Both', 'None')]
   [string] $LongPathScope = 'Both'
@@ -8,6 +10,8 @@ param(
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot '..\eng\PowerShellChannelConfig.ps1')
 
 function Invoke-Git {
   param(
@@ -89,47 +93,108 @@ try {
     }
   }
 
-  if ($PSCmdlet.ShouldProcess($SubmodulePath, 'Synchronize submodule URL configuration')) {
-    Invoke-Git submodule sync --recursive -- $SubmodulePath
-  }
-
-  if ($PSCmdlet.ShouldProcess($SubmodulePath, 'Initialize and update submodule to the pinned commit')) {
-    Invoke-Git submodule update --init --recursive -- $SubmodulePath
-  }
-
-  $SubmoduleStatus = @(Get-GitOutput submodule status --recursive -- $SubmodulePath)
-  foreach ($Line in $SubmoduleStatus) {
-    if ($Line.StartsWith('-')) {
-      throw "Submodule is not initialized: $Line"
+  $Manifest = Get-PowerShellChannelsManifest -RepositoryRoot $RepositoryRoot
+  $Targets = @()
+  if (-not [string]::IsNullOrWhiteSpace($SubmodulePath)) {
+    $TrimmedSubmodulePath = $SubmodulePath.Trim()
+    $MatchedChannel = @($Manifest.Channels.Values | Where-Object { $_.SubmodulePath -eq $TrimmedSubmodulePath } | Select-Object -First 1)
+    if (-not [string]::IsNullOrWhiteSpace($Channel)) {
+      if ($Channel.Trim() -ieq 'All') {
+        throw 'Cannot combine -Channel All with an explicit -SubmodulePath.'
+      }
+      $ResolvedChannel = Resolve-PowerShellChannelConfig -Channel $Channel -RepositoryRoot $RepositoryRoot
+      if ($ResolvedChannel.SubmodulePath -ne $TrimmedSubmodulePath) {
+        throw "Channel '$($ResolvedChannel.Channel)' maps to submodule '$($ResolvedChannel.SubmodulePath)', not '$TrimmedSubmodulePath'."
+      }
+      $MatchedChannel = @($ResolvedChannel)
     }
-    if ($Line.StartsWith('+')) {
-      throw "Submodule checkout does not match the pinned commit: $Line"
+
+    $Targets += [pscustomobject]@{
+      SubmodulePath = $TrimmedSubmodulePath
+      ChannelConfig = if ($MatchedChannel.Count -gt 0) { $MatchedChannel[0] } else { $null }
     }
-    if ($Line.StartsWith('U')) {
-      throw "Submodule has unresolved conflicts: $Line"
+  } elseif (-not [string]::IsNullOrWhiteSpace($Channel) -and $Channel.Trim() -ieq 'All') {
+    foreach ($ChannelEntry in $Manifest.Channels.Values) {
+      $Targets += [pscustomobject]@{
+        SubmodulePath = $ChannelEntry.SubmodulePath
+        ChannelConfig = $ChannelEntry
+      }
+    }
+  } else {
+    $ResolvedChannel = Resolve-PowerShellChannelConfig -Channel $Channel -RepositoryRoot $RepositoryRoot
+    $Targets += [pscustomobject]@{
+      SubmodulePath = $ResolvedChannel.SubmodulePath
+      ChannelConfig = $ResolvedChannel
     }
   }
-
-  $CommonPropsPath = Join-Path $SubmodulePath 'PowerShell.Common.props'
-  if (-not (Test-Path $CommonPropsPath -PathType Leaf)) {
-    throw "PowerShell source submodule did not initialize correctly; missing $CommonPropsPath."
-  }
-
-  [xml] $CommonProps = Get-Content -LiteralPath $CommonPropsPath
-  $TargetFramework = $CommonProps.Project.PropertyGroup |
-    ForEach-Object { $_.TargetFramework } |
-    Where-Object { $_ } |
-    Select-Object -First 1
-
-  $SubmoduleCommit = (Get-GitOutput @('-C', $SubmodulePath, 'rev-parse', 'HEAD') | Select-Object -First 1).Trim()
 
   Write-Output "RepositoryRoot=$RepositoryRoot"
   if (Test-WindowsPlatform) {
     Write-Output "GitCoreLongPaths=$((& git config --bool --get core.longpaths).Trim())"
   }
-  Write-Output "SubmodulePath=$SubmodulePath"
-  Write-Output "SubmoduleCommit=$SubmoduleCommit"
-  Write-Output "PowerShellTargetFramework=$TargetFramework"
+
+  foreach ($Target in $Targets) {
+    $TargetSubmodulePath = $Target.SubmodulePath
+    $TargetChannelConfig = $Target.ChannelConfig
+
+    if ($PSCmdlet.ShouldProcess($TargetSubmodulePath, 'Synchronize submodule URL configuration')) {
+      Invoke-Git submodule sync --recursive -- $TargetSubmodulePath
+    }
+
+    if ($PSCmdlet.ShouldProcess($TargetSubmodulePath, 'Initialize and update submodule to the pinned commit')) {
+      Invoke-Git submodule update --init --recursive -- $TargetSubmodulePath
+    }
+
+    $SubmoduleStatus = @(Get-GitOutput submodule status --recursive -- $TargetSubmodulePath)
+    foreach ($Line in $SubmoduleStatus) {
+      if ($Line.StartsWith('-')) {
+        throw "Submodule is not initialized: $Line"
+      }
+      if ($Line.StartsWith('+')) {
+        throw "Submodule checkout does not match the pinned commit: $Line"
+      }
+      if ($Line.StartsWith('U')) {
+        throw "Submodule has unresolved conflicts: $Line"
+      }
+    }
+
+    if ($null -ne $TargetChannelConfig) {
+      $UpstreamTag = $TargetChannelConfig.PowerShellUpstreamTag
+      & git -C $TargetSubmodulePath rev-parse --verify "$UpstreamTag^{commit}" *> $null
+      if ($LASTEXITCODE -ne 0 -and $PSCmdlet.ShouldProcess($TargetSubmodulePath, "Fetch base tag $UpstreamTag")) {
+        $IsShallow = (& git -C $TargetSubmodulePath rev-parse --is-shallow-repository 2>$null)
+        if ($IsShallow -and $IsShallow.Trim() -eq 'true') {
+          Invoke-Git -C $TargetSubmodulePath fetch --unshallow origin "refs/tags/${UpstreamTag}:refs/tags/${UpstreamTag}"
+        } else {
+          Invoke-Git -C $TargetSubmodulePath fetch --force origin "refs/tags/${UpstreamTag}:refs/tags/${UpstreamTag}"
+        }
+      }
+    }
+
+    $CommonPropsPath = Join-Path $TargetSubmodulePath 'PowerShell.Common.props'
+    if (-not (Test-Path $CommonPropsPath -PathType Leaf)) {
+      throw "PowerShell source submodule did not initialize correctly; missing $CommonPropsPath."
+    }
+
+    [xml] $CommonProps = Get-Content -LiteralPath $CommonPropsPath
+    $TargetFramework = $CommonProps.Project.PropertyGroup |
+      ForEach-Object { $_.TargetFramework } |
+      Where-Object { $_ } |
+      Select-Object -First 1
+
+    if ($null -ne $TargetChannelConfig -and $TargetFramework -ne $TargetChannelConfig.TargetFramework) {
+      throw "Submodule '$TargetSubmodulePath' TargetFramework '$TargetFramework' does not match channel '$($TargetChannelConfig.Channel)' expected '$($TargetChannelConfig.TargetFramework)'."
+    }
+
+    $SubmoduleCommit = (Get-GitOutput @('-C', $TargetSubmodulePath, 'rev-parse', 'HEAD') | Select-Object -First 1).Trim()
+
+    if ($null -ne $TargetChannelConfig) {
+      Write-Output "Channel=$($TargetChannelConfig.Channel)"
+    }
+    Write-Output "SubmodulePath=$TargetSubmodulePath"
+    Write-Output "SubmoduleCommit=$SubmoduleCommit"
+    Write-Output "PowerShellTargetFramework=$TargetFramework"
+  }
 } finally {
   Set-Location $PreviousLocation
 }

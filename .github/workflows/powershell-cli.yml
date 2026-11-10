@@ -2,8 +2,16 @@ name: PowerShell CLI
 on:
   workflow_dispatch:
     inputs:
+      channel:
+        description: PowerShell release channel
+        required: true
+        type: choice
+        options:
+          - "7.6"
+          - "7.7"
+        default: "7.6"
       sdk_package_version:
-        description: Optional SDK package version override (blank = use SDK_PACKAGE_VERSION)
+        description: Optional SDK package version override (blank = use channel cliSdkPackageVersion)
         default: ""
         required: false
       sdk_artifact_run_id:
@@ -25,13 +33,18 @@ on:
         type: boolean
         default: false
       dotnet_runtime_run_id:
-        description: Optional dotnet-runtime.yml run ID whose pack artifact should be used (blank = build in this workflow, latest = select latest successful runtime run, or a specific run ID to reuse its artifacts)
+        description: Optional dotnet-runtime.yml run ID whose pack artifact should be used (blank = build in this workflow, latest = select latest successful runtime run for this channel, or a specific run ID to reuse its artifacts)
         default: ""
         required: false
   workflow_call:
     inputs:
+      channel:
+        description: PowerShell release channel (7.6 or 7.7)
+        default: "7.6"
+        required: false
+        type: string
       sdk_package_version:
-        description: Optional SDK package version override (blank = use SDK_PACKAGE_VERSION)
+        description: Optional SDK package version override (blank = use channel cliSdkPackageVersion)
         default: ""
         required: false
         type: string
@@ -56,7 +69,7 @@ on:
         required: false
         type: boolean
       dotnet_runtime_run_id:
-        description: Optional dotnet-runtime.yml run ID whose pack artifact should be used (blank = build in this workflow, latest = select latest successful runtime run, or a specific run ID to reuse its artifacts)
+        description: Optional dotnet-runtime.yml run ID whose pack artifact should be used (blank = build in this workflow, latest = select latest successful runtime run for this channel, or a specific run ID to reuse its artifacts)
         default: ""
         required: false
         type: string
@@ -64,14 +77,9 @@ permissions:
   actions: read
   contents: read
 env:
-  POWERSHELL_VERSION: "7.6.9"
-  POWERSHELL_RELEASE_TAG: "v7.6.9"
-  POWERSHELL_UPSTREAM_TAG: "upstream/v7.6.9"
+  POWERSHELL_CHANNELS_MANIFEST: "eng/powershell-channels.json"
   POWERSHELL_SOURCE_REPOSITORY: ${{ github.repository }}
-  POWERSHELL_SOURCE_REF: "downstream/v7.6.9"
   SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
-  SDK_PACKAGE_VERSION: "7.6.9.2"
-  SDK_PACKAGE_REVISION: "2"
   SDK_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
   MULTI_PWSH_APPHOST_VERSION: "0.14.2"
   MULTI_PWSH_APPHOST_SOURCE_REF: "77676d18baaf205ec36b1711d11bd386d4b15272"
@@ -82,9 +90,79 @@ env:
   POWERSHELL_NATIVE_PACKAGE_VERSION: "700.0.2"
   POWERSHELL_NATIVE_SOURCE_REF: "f24d5494b373de20ec3e3d2fdc7c3fc98af1f9f1"
 jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-24.04
+    outputs:
+      channel: ${{ steps.info.outputs.channel }}
+      powershell-submodule-path: ${{ steps.info.outputs.powershell-submodule-path }}
+      powershell-version: ${{ steps.info.outputs.powershell-version }}
+      powershell-release-tag: ${{ steps.info.outputs.powershell-release-tag }}
+      powershell-upstream-tag: ${{ steps.info.outputs.powershell-upstream-tag }}
+      powershell-source-ref: ${{ steps.info.outputs.powershell-source-ref }}
+      sdk-package-version: ${{ steps.info.outputs.sdk-package-version }}
+    steps:
+      - name: Clone project
+        uses: actions/checkout@v7.0.0
+
+      - name: Resolve CLI channel configuration
+        id: info
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./eng/PowerShellChannelConfig.ps1
+
+          $ExplicitVersion = '${{ inputs.sdk_package_version }}'.Trim()
+          if ([string]::IsNullOrWhiteSpace($ExplicitVersion)) {
+            $SdkArtifactName = '${{ inputs.sdk_artifact_name }}'.Trim()
+            if ($SdkArtifactName -match '^PowerShell-SDK-Release-(\d+\.\d+\.\d+\.\d+)$') {
+              $ExplicitVersion = $Matches[1]
+            }
+          }
+
+          $ChannelConfig = Resolve-PowerShellChannelConfig `
+            -Channel '${{ inputs.channel }}' `
+            -PowerShellVersion $ExplicitVersion `
+            -ManifestPath $Env:POWERSHELL_CHANNELS_MANIFEST
+
+          $SdkPackageVersion = if ([string]::IsNullOrWhiteSpace($ExplicitVersion)) {
+            $ChannelConfig.CliSdkPackageVersion
+          } else {
+            $ExplicitVersion
+          }
+
+          $EscapedPowerShellVersion = [regex]::Escape($ChannelConfig.PowerShellVersion)
+          if ($SdkPackageVersion -notmatch "^$EscapedPowerShellVersion\.\d+$") {
+            throw "SDK package version '$SdkPackageVersion' does not match expected PowerShell version prefix '$($ChannelConfig.PowerShellVersion)' for channel '$($ChannelConfig.Channel)'."
+          }
+
+          @(
+            "channel=$($ChannelConfig.Channel)",
+            "powershell-submodule-path=$($ChannelConfig.SubmodulePath)",
+            "powershell-version=$($ChannelConfig.PowerShellVersion)",
+            "powershell-release-tag=$($ChannelConfig.PowerShellReleaseTag)",
+            "powershell-upstream-tag=$($ChannelConfig.PowerShellUpstreamTag)",
+            "powershell-source-ref=$($ChannelConfig.PowerShellSourceRef)",
+            "sdk-package-version=$SdkPackageVersion"
+          ) | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
+
+          echo "::notice::PowerShellChannel: $($ChannelConfig.Channel)"
+          echo "::notice::PowerShellSubmodulePath: $($ChannelConfig.SubmodulePath)"
+          echo "::notice::PowerShellVersion: $($ChannelConfig.PowerShellVersion)"
+          echo "::notice::SDKPackageVersion: $SdkPackageVersion"
+
   build:
-    name: PowerShell [${{matrix.arch}}-${{matrix.os}}]
+    name: PowerShell [${{ needs.preflight.outputs.channel }} ${{matrix.arch}}-${{matrix.os}}]
+    needs: preflight
     runs-on: ${{matrix.runner}}
+    env:
+      POWERSHELL_CHANNEL: ${{ needs.preflight.outputs.channel }}
+      POWERSHELL_SUBMODULE_PATH: ${{ needs.preflight.outputs.powershell-submodule-path }}
+      POWERSHELL_VERSION: ${{ needs.preflight.outputs.powershell-version }}
+      POWERSHELL_RELEASE_TAG: ${{ needs.preflight.outputs.powershell-release-tag }}
+      POWERSHELL_UPSTREAM_TAG: ${{ needs.preflight.outputs.powershell-upstream-tag }}
+      POWERSHELL_SOURCE_REF: ${{ needs.preflight.outputs.powershell-source-ref }}
+      SDK_PACKAGE_VERSION: ${{ needs.preflight.outputs.sdk-package-version }}
     strategy:
       fail-fast: false
       matrix:
@@ -127,16 +205,20 @@ jobs:
         if: runner.os == 'Windows'
         run: git config --system core.longpaths true
 
-      - name: Clone project with PowerShell submodule
+      - name: Clone project
         uses: actions/checkout@v7.0.0
         with:
-          submodules: true
           fetch-depth: 0
+
+      - name: Initialize PowerShell source submodule
+        shell: pwsh
+        run: ./scripts/Initialize-Repository.ps1 -Channel $Env:POWERSHELL_CHANNEL -LongPathScope Local
 
       - name: Verify PowerShell source ref
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $SubmodulePath = $Env:POWERSHELL_SUBMODULE_PATH
 
           function Invoke-GitPowerShell {
             param(
@@ -144,9 +226,9 @@ jobs:
               [string[]] $Arguments
             )
 
-            $Output = & git -C pwsh-src @Arguments
+            $Output = & git -C $SubmodulePath @Arguments
             if ($LASTEXITCODE -ne 0) {
-              throw "git -C pwsh-src $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
+              throw "git -C $SubmodulePath $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
             }
 
             return $Output
@@ -158,7 +240,7 @@ jobs:
               [string] $Ref
             )
 
-            & git -C pwsh-src rev-parse --verify "$Ref^{commit}" *> $null
+            & git -C $SubmodulePath rev-parse --verify "$Ref^{commit}" *> $null
             return $LASTEXITCODE -eq 0
           }
 
@@ -167,23 +249,14 @@ jobs:
             throw "POWERSHELL_VERSION '$Env:POWERSHELL_VERSION' does not match POWERSHELL_RELEASE_TAG '$Env:POWERSHELL_RELEASE_TAG'."
           }
 
-          $SdkPackageVersion = '${{ inputs.sdk_package_version }}'.Trim()
-          if ([string]::IsNullOrWhiteSpace($SdkPackageVersion)) {
-            $SdkArtifactName = '${{ inputs.sdk_artifact_name }}'.Trim()
-            if ($SdkArtifactName -match '^PowerShell-SDK-Release-(\d+\.\d+\.\d+\.\d+)$') {
-              $SdkPackageVersion = $Matches[1]
-            } else {
-              $SdkPackageVersion = $Env:SDK_PACKAGE_VERSION
-            }
-          }
-
+          $SdkPackageVersion = $Env:SDK_PACKAGE_VERSION
           $EscapedPowerShellVersion = [regex]::Escape($Env:POWERSHELL_VERSION)
           if ($SdkPackageVersion -notmatch "^$EscapedPowerShellVersion\.\d+$") {
             throw "SDK package version '$SdkPackageVersion' does not match expected PowerShell version prefix '$Env:POWERSHELL_VERSION'."
           }
 
           $SourceCommit = (Invoke-GitPowerShell rev-parse HEAD).Trim()
-          Write-Host "PowerShell source: $Env:POWERSHELL_SOURCE_REPOSITORY@$Env:POWERSHELL_SOURCE_REF ($SourceCommit)"
+          Write-Host "PowerShell source ($SubmodulePath): $Env:POWERSHELL_SOURCE_REPOSITORY@$Env:POWERSHELL_SOURCE_REF ($SourceCommit)"
           Write-Host "PowerShell SDK package: $Env:SDK_PACKAGE_ID $SdkPackageVersion from $Env:SDK_PACKAGE_SOURCE"
 
           $BaseRef = if ($Env:POWERSHELL_SOURCE_REPOSITORY -eq $Env:GITHUB_REPOSITORY) {
@@ -196,7 +269,7 @@ jobs:
             throw "Expected PowerShell base tag '$BaseRef' was not found in the PowerShell checkout."
           }
 
-          & git -C pwsh-src merge-base --is-ancestor "${BaseRef}^{commit}" HEAD
+          & git -C $SubmodulePath merge-base --is-ancestor "${BaseRef}^{commit}" HEAD
           if ($LASTEXITCODE -ne 0) {
             throw "PowerShell source ref '$Env:POWERSHELL_SOURCE_REF' is not based on '$BaseRef'."
           }
@@ -204,7 +277,7 @@ jobs:
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5.3.0
         with:
-          global-json-file: pwsh-src/global.json
+          global-json-file: ${{ needs.preflight.outputs.powershell-submodule-path }}/global.json
 
       - name: Test Linux apphost validation
         if: runner.os == 'Linux'
@@ -238,7 +311,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          [xml] $Project = Get-Content -LiteralPath 'pwsh-src/src/System.Management.Automation/System.Management.Automation.csproj' -Raw
+          [xml] $Project = Get-Content -LiteralPath "$Env:POWERSHELL_SUBMODULE_PATH/src/System.Management.Automation/System.Management.Automation.csproj" -Raw
           $References = @($Project.Project.ItemGroup.PackageReference | Where-Object { $_.Include -eq 'Microsoft.PowerShell.Native' })
           if ($References.Count -ne 1 -or $References[0].Version -ne $Env:POWERSHELL_NATIVE_PACKAGE_VERSION) {
             throw "PowerShell.Native source pin does not match version $Env:POWERSHELL_NATIVE_PACKAGE_VERSION in PowerShell source."
@@ -340,7 +413,7 @@ jobs:
         uses: actions/download-artifact@v8.0.1
         with:
           run-id: ${{ inputs.sdk_artifact_run_id }}
-          name: ${{ inputs.sdk_artifact_name || format('PowerShell-SDK-Release-{0}', inputs.sdk_package_version || env.SDK_PACKAGE_VERSION) }}
+          name: ${{ inputs.sdk_artifact_name || format('PowerShell-SDK-Release-{0}', needs.preflight.outputs.sdk-package-version) }}
           path: sdk-package-source
           github-token: ${{ github.token }}
 
@@ -357,24 +430,71 @@ jobs:
             throw "use_custom_dotnet_runtime is enabled but dotnet_runtime_run_id is blank. Set it to a specific dotnet-runtime.yml run ID, or 'latest' to select the latest successful runtime run."
           }
 
-          $ResolvedRunId = $RequestedRunId
+          $ChannelArtifactName = "DotNet-Runtime-$Env:POWERSHELL_CHANNEL-${{matrix.rid}}"
+          $LegacyArtifactName = "DotNet-Runtime-${{matrix.rid}}"
+          $AllowLegacy76Fallback = ($Env:POWERSHELL_CHANNEL -eq '7.6')
+
+          function Get-RunArtifactNames {
+            param([Parameter(Mandatory)][string] $RunId)
+            $Response = gh api "repos/$Env:GITHUB_REPOSITORY/actions/runs/$RunId/artifacts?per_page=100" | ConvertFrom-Json
+            return @($Response.artifacts | Where-Object { -not $_.expired } | Select-Object -ExpandProperty name)
+          }
+
+          $ResolvedRunId = $null
+          $ResolvedArtifactName = $null
+
           if ($RequestedRunId -eq 'latest') {
-            $Runs = gh run list -R $Env:GITHUB_REPOSITORY -w '.NET runtime' --json databaseId,status,conclusion 2>$null | ConvertFrom-Json
-            $ResolvedRunId = @($Runs | Where-Object { $_.status -eq 'completed' -and $_.conclusion -eq 'success' } | Select-Object -First 1 -ExpandProperty databaseId)
+            $Runs = gh run list -R $Env:GITHUB_REPOSITORY -w '.NET runtime' -L 25 --json databaseId,status,conclusion | ConvertFrom-Json
+            $CandidateRunIds = @($Runs | Where-Object { $_.status -eq 'completed' -and $_.conclusion -eq 'success' } | Select-Object -ExpandProperty databaseId)
+            foreach ($CandidateRunId in $CandidateRunIds) {
+              $ArtifactNames = Get-RunArtifactNames -RunId ([string] $CandidateRunId)
+              if ($ArtifactNames -contains $ChannelArtifactName) {
+                $ResolvedRunId = [string] $CandidateRunId
+                $ResolvedArtifactName = $ChannelArtifactName
+                break
+              }
+            }
+            if (-not $ResolvedRunId -and $AllowLegacy76Fallback) {
+              foreach ($CandidateRunId in $CandidateRunIds) {
+                $ArtifactNames = Get-RunArtifactNames -RunId ([string] $CandidateRunId)
+                if ($ArtifactNames -contains $LegacyArtifactName) {
+                  $ResolvedRunId = [string] $CandidateRunId
+                  $ResolvedArtifactName = $LegacyArtifactName
+                  break
+                }
+              }
+            }
             if (-not $ResolvedRunId) {
-              throw "No successful '.NET runtime' workflow runs were found to reuse."
+              throw "No successful '.NET runtime' workflow runs with artifact '$ChannelArtifactName' were found to reuse."
+            }
+          } else {
+            if ([string] $RequestedRunId -eq [string] $Env:GITHUB_RUN_ID) {
+              $ResolvedRunId = [string] $RequestedRunId
+              $ResolvedArtifactName = $ChannelArtifactName
+            } else {
+              $ArtifactNames = Get-RunArtifactNames -RunId $RequestedRunId
+              if ($ArtifactNames -contains $ChannelArtifactName) {
+                $ResolvedRunId = $RequestedRunId
+                $ResolvedArtifactName = $ChannelArtifactName
+              } elseif ($AllowLegacy76Fallback -and ($ArtifactNames -contains $LegacyArtifactName)) {
+                $ResolvedRunId = $RequestedRunId
+                $ResolvedArtifactName = $LegacyArtifactName
+              } else {
+                throw "'.NET runtime' workflow run '$RequestedRunId' does not contain expected artifact '$ChannelArtifactName' for channel '$Env:POWERSHELL_CHANNEL'."
+              }
             }
           }
 
           "DOTNET_RUNTIME_RUN_ID=$ResolvedRunId" | Out-File -FilePath $Env:GITHUB_ENV -Append
-          Write-Host "Resolved dotnet-runtime workflow run: $ResolvedRunId"
+          "DOTNET_RUNTIME_ARTIFACT_NAME=$ResolvedArtifactName" | Out-File -FilePath $Env:GITHUB_ENV -Append
+          Write-Host "Resolved dotnet-runtime workflow run: $ResolvedRunId ($ResolvedArtifactName)"
 
       - name: Download source-built .NET runtime pack
         if: ${{ inputs.use_custom_dotnet_runtime == true }}
         uses: actions/download-artifact@v8.0.1
         with:
           run-id: ${{ env.DOTNET_RUNTIME_RUN_ID }}
-          name: DotNet-Runtime-${{matrix.rid}}
+          name: ${{ env.DOTNET_RUNTIME_ARTIFACT_NAME }}
           path: custom-runtime-source
           github-token: ${{ github.token }}
 
@@ -387,15 +507,7 @@ jobs:
           $ArchivePath = "$OutputPath.tar.gz"
           $PackageScript = Join-Path (Join-Path $PWD 'eng') 'New-PowerShellDistroArchive.ps1'
           $PackageSource = $Env:SDK_PACKAGE_SOURCE
-          $SdkPackageVersion = '${{ inputs.sdk_package_version }}'.Trim()
-          if ([string]::IsNullOrWhiteSpace($SdkPackageVersion)) {
-            $SdkArtifactName = '${{ inputs.sdk_artifact_name }}'.Trim()
-            if ($SdkArtifactName -match '^PowerShell-SDK-Release-(\d+\.\d+\.\d+\.\d+)$') {
-              $SdkPackageVersion = $Matches[1]
-            } else {
-              $SdkPackageVersion = $Env:SDK_PACKAGE_VERSION
-            }
-          }
+          $SdkPackageVersion = $Env:SDK_PACKAGE_VERSION
 
           $SdkArtifactRunId = '${{ inputs.sdk_artifact_run_id }}'.Trim()
           $SdkArtifactName = '${{ inputs.sdk_artifact_name }}'.Trim()
@@ -419,6 +531,8 @@ jobs:
           }
 
           $PackageArguments = @{
+            Channel = $Env:POWERSHELL_CHANNEL
+            PowerShellSourceRoot = (Join-Path $PWD $Env:POWERSHELL_SUBMODULE_PATH)
             PackageId = $Env:SDK_PACKAGE_ID
             PackageVersion = $SdkPackageVersion
             PackageSource = $PackageSource
@@ -467,14 +581,16 @@ jobs:
       - name: Upload PowerShell package
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: PowerShell-${{env.POWERSHELL_VERSION}}-${{matrix.os}}-${{matrix.arch}}
-          path: PowerShell-${{env.POWERSHELL_VERSION}}-${{matrix.os}}-${{matrix.arch}}.tar.gz
+          name: PowerShell-${{ needs.preflight.outputs.powershell-version }}-${{matrix.os}}-${{matrix.arch}}
+          path: PowerShell-${{ needs.preflight.outputs.powershell-version }}-${{matrix.os}}-${{matrix.arch}}.tar.gz
           if-no-files-found: error
 
   test-alpine:
-    name: Test Alpine ${{ matrix.alpine }} [${{ matrix.arch }}]
-    needs: build
+    name: Test Alpine ${{ matrix.alpine }} [${{ needs.preflight.outputs.channel }} ${{ matrix.arch }}]
+    needs: [preflight, build]
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    env:
+      POWERSHELL_VERSION: ${{ needs.preflight.outputs.powershell-version }}
     strategy:
       fail-fast: false
       matrix:
@@ -487,7 +603,7 @@ jobs:
       - name: Download Alpine CLI archive
         uses: actions/download-artifact@v8.0.1
         with:
-          name: PowerShell-${{ env.POWERSHELL_VERSION }}-linux-musl-${{ matrix.arch }}
+          name: PowerShell-${{ needs.preflight.outputs.powershell-version }}-linux-musl-${{ matrix.arch }}
           path: archives
 
       - name: Run Alpine archive

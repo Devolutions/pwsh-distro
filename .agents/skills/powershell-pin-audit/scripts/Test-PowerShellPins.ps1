@@ -2,6 +2,8 @@
 param(
   [string] $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..\..')).Path,
 
+  [string] $Channel,
+
   [switch] $RequireSubmodule
 )
 
@@ -9,6 +11,8 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 $RepositoryRoot = (Resolve-Path -LiteralPath $RepositoryRoot).Path
+. (Join-Path $RepositoryRoot 'eng\PowerShellChannelConfig.ps1')
+
 $Errors = [System.Collections.Generic.List[string]]::new()
 $Warnings = [System.Collections.Generic.List[string]]::new()
 
@@ -62,23 +66,6 @@ function Get-YamlScalar {
     -Description "$Name in $FileName"
 }
 
-function Get-PowerShellWorkflowPins {
-  param([Parameter(Mandatory)][string] $RelativePath)
-
-  $Text = Get-RepositoryFileText $RelativePath
-  $Pins = [ordered]@{}
-  foreach ($Name in @(
-    'POWERSHELL_VERSION',
-    'POWERSHELL_RELEASE_TAG',
-    'POWERSHELL_UPSTREAM_TAG',
-    'POWERSHELL_SOURCE_REF'
-  )) {
-    $Pins[$Name] = Get-YamlScalar -Text $Text -Name $Name -FileName $RelativePath
-  }
-
-  return $Pins
-}
-
 function Assert-Equal {
   param(
     [Parameter(Mandatory)][string] $Actual,
@@ -91,109 +78,172 @@ function Assert-Equal {
   }
 }
 
+$Manifest = Get-PowerShellChannelsManifest -RepositoryRoot $RepositoryRoot
+$TargetChannels = if ([string]::IsNullOrWhiteSpace($Channel)) {
+  @($Manifest.Channels.Values)
+} else {
+  @(Resolve-PowerShellChannelConfig -Channel $Channel -RepositoryRoot $RepositoryRoot)
+}
+
 $SdkWorkflow = '.github\workflows\powershell-sdk.yml'
-$DistributionWorkflow = '.github\workflows\powershell-cli.yml'
-$SdkPins = Get-PowerShellWorkflowPins $SdkWorkflow
-$DistributionPins = Get-PowerShellWorkflowPins $DistributionWorkflow
+$CliWorkflow = '.github\workflows\powershell-cli.yml'
+$RuntimeWorkflow = '.github\workflows\dotnet-runtime.yml'
+$ReleaseWorkflow = '.github\workflows\release.yml'
 
-foreach ($Name in $SdkPins.Keys) {
-  Assert-Equal `
-    -Actual $DistributionPins[$Name] `
-    -Expected $SdkPins[$Name] `
-    -Description "$Name in $DistributionWorkflow"
+foreach ($ManifestWorkflow in @($SdkWorkflow, $CliWorkflow, $RuntimeWorkflow)) {
+  $WorkflowText = Get-RepositoryFileText $ManifestWorkflow
+  $ManifestRef = Get-YamlScalar -Text $WorkflowText -Name 'POWERSHELL_CHANNELS_MANIFEST' -FileName $ManifestWorkflow
+  Assert-Equal -Actual $ManifestRef -Expected 'eng/powershell-channels.json' -Description "POWERSHELL_CHANNELS_MANIFEST in $ManifestWorkflow"
 }
 
-$Version = $SdkPins['POWERSHELL_VERSION']
-$ReleaseTag = $SdkPins['POWERSHELL_RELEASE_TAG']
-$UpstreamTag = $SdkPins['POWERSHELL_UPSTREAM_TAG']
-$SourceRef = $SdkPins['POWERSHELL_SOURCE_REF']
+foreach ($PackageWorkflow in @($SdkWorkflow, $CliWorkflow, $ReleaseWorkflow)) {
+  $WorkflowText = Get-RepositoryFileText $PackageWorkflow
+  $WorkflowPackageId = Get-YamlScalar -Text $WorkflowText -Name 'SDK_PACKAGE_ID' -FileName $PackageWorkflow
+  Assert-Equal -Actual $WorkflowPackageId -Expected $Manifest.SdkPackageId -Description "SDK_PACKAGE_ID in $PackageWorkflow"
+}
+
 $SdkWorkflowText = Get-RepositoryFileText $SdkWorkflow
-$SdkPackageId = Get-YamlScalar -Text $SdkWorkflowText -Name 'SDK_PACKAGE_ID' -FileName $SdkWorkflow
-$SdkPackageRevision = Get-YamlScalar -Text $SdkWorkflowText -Name 'SDK_PACKAGE_REVISION' -FileName $SdkWorkflow
-if ($SdkPackageRevision -notmatch '^\d+$') {
-  Add-AuditError "SDK_PACKAGE_REVISION in $SdkWorkflow must be numeric, found '$SdkPackageRevision'."
-}
-$SdkPackageVersion = "$Version.$SdkPackageRevision"
-$DistributionWorkflowText = Get-RepositoryFileText $DistributionWorkflow
-$DistributionSdkPackageId = Get-YamlScalar -Text $DistributionWorkflowText -Name 'SDK_PACKAGE_ID' -FileName $DistributionWorkflow
-$DistributionSdkPackageVersion = Get-YamlScalar -Text $DistributionWorkflowText -Name 'SDK_PACKAGE_VERSION' -FileName $DistributionWorkflow
-$DistributionSdkPackageRevision = Get-YamlScalar -Text $DistributionWorkflowText -Name 'SDK_PACKAGE_REVISION' -FileName $DistributionWorkflow
-if ($DistributionSdkPackageRevision -notmatch '^\d+$') {
-  Add-AuditError "SDK_PACKAGE_REVISION in $DistributionWorkflow must be numeric, found '$DistributionSdkPackageRevision'."
-}
+Assert-Equal `
+  -Actual (Get-YamlScalar -Text $SdkWorkflowText -Name 'SDK_VENDOR_NAME' -FileName $SdkWorkflow) `
+  -Expected $Manifest.SdkVendorName `
+  -Description "SDK_VENDOR_NAME in $SdkWorkflow"
+Assert-Equal `
+  -Actual (Get-YamlScalar -Text $SdkWorkflowText -Name 'POWERSHELL_VENDOR_NAME' -FileName $SdkWorkflow) `
+  -Expected $Manifest.PowerShellVendorName `
+  -Description "POWERSHELL_VENDOR_NAME in $SdkWorkflow"
 
-Assert-Equal -Actual $DistributionSdkPackageId -Expected $SdkPackageId -Description "SDK_PACKAGE_ID in $DistributionWorkflow"
-Assert-Equal -Actual $DistributionSdkPackageRevision -Expected $SdkPackageRevision -Description "SDK_PACKAGE_REVISION in $DistributionWorkflow"
-Assert-Equal -Actual $DistributionSdkPackageVersion -Expected $SdkPackageVersion -Description "SDK_PACKAGE_VERSION in $DistributionWorkflow"
+foreach ($ChannelWorkflow in @($SdkWorkflow, $CliWorkflow, $RuntimeWorkflow, $ReleaseWorkflow)) {
+  $WorkflowText = Get-RepositoryFileText $ChannelWorkflow
+  $DispatchChannelBlock = [regex]::Match(
+    $WorkflowText,
+    '(?ms)^\s*workflow_dispatch:\r?\n.*?^\s{6}channel:\r?\n(?<block>(?:^\s{8,}.*\r?\n)+)',
+    [System.Text.RegularExpressions.RegexOptions]::None)
+  if (-not $DispatchChannelBlock.Success) {
+    Add-AuditError "$ChannelWorkflow is missing workflow_dispatch.inputs.channel."
+    continue
+  }
 
-Assert-Equal -Actual $ReleaseTag -Expected "v$Version" -Description 'POWERSHELL_RELEASE_TAG'
-Assert-Equal -Actual $UpstreamTag -Expected "upstream/$ReleaseTag" -Description 'POWERSHELL_UPSTREAM_TAG'
-Assert-Equal -Actual $SourceRef -Expected "downstream/$ReleaseTag" -Description 'POWERSHELL_SOURCE_REF'
+  $BlockText = $DispatchChannelBlock.Groups['block'].Value
+  $DefaultMatch = [regex]::Match($BlockText, '^\s*default:\s*[''"]?([^''"\r\n]+)[''"]?\s*$', [System.Text.RegularExpressions.RegexOptions]::Multiline)
+  if ($DefaultMatch.Success) {
+    Assert-Equal -Actual $DefaultMatch.Groups[1].Value.Trim() -Expected $Manifest.DefaultChannel -Description "workflow_dispatch.inputs.channel.default in $ChannelWorkflow"
+  } else {
+    Add-AuditError "$ChannelWorkflow workflow_dispatch.inputs.channel is missing a default value."
+  }
+
+  foreach ($KnownChannel in $Manifest.ChannelNames) {
+    $EscapedKnownChannel = [regex]::Escape($KnownChannel)
+    if ($BlockText -notmatch "(?m)^\s*-\s*['""]?$EscapedKnownChannel['""]?\s*$") {
+      Add-AuditError "$ChannelWorkflow workflow_dispatch.inputs.channel.options is missing channel '$KnownChannel'."
+    }
+  }
+}
 
 $GitmodulesText = Get-RepositoryFileText '.gitmodules'
-$GitmodulesBranch = Get-RequiredRegexValue `
-  -Text $GitmodulesText `
-  -Pattern '^\s*branch\s*=\s*(\S+)\s*$' `
-  -Description 'pwsh-src branch in .gitmodules'
-Assert-Equal -Actual $GitmodulesBranch -Expected $SourceRef -Description 'pwsh-src branch in .gitmodules'
-
 $ReadmeText = Get-RepositoryFileText 'README.md'
-$ReadmeReleaseMatch = [regex]::Match(
+
+$ReadmeDefaultChannelMatch = [regex]::Match(
   $ReadmeText,
-  'PowerShell upstream release \| `([^`]+)` / `([^`]+)`',
+  'Default PowerShell channel \| `([^`]+)`',
   [System.Text.RegularExpressions.RegexOptions]::Multiline)
-if ($ReadmeReleaseMatch.Success) {
-  Assert-Equal -Actual $ReadmeReleaseMatch.Groups[1].Value -Expected $Version -Description 'README PowerShell upstream release version'
-  Assert-Equal -Actual $ReadmeReleaseMatch.Groups[2].Value -Expected $ReleaseTag -Description 'README PowerShell upstream release tag'
+if ($ReadmeDefaultChannelMatch.Success) {
+  Assert-Equal -Actual $ReadmeDefaultChannelMatch.Groups[1].Value -Expected $Manifest.DefaultChannel -Description 'README Default PowerShell channel'
 } else {
-  Add-AuditError 'README Current pins table is missing the PowerShell upstream release row.'
+  Add-AuditError 'README Current pins table is missing the Default PowerShell channel row.'
 }
 
-$ReadmeSourceMatch = [regex]::Match(
-  $ReadmeText,
-  'PowerShell downstream source ref \| `([^`]+)` based on `([^`]+)`',
-  [System.Text.RegularExpressions.RegexOptions]::Multiline)
-if ($ReadmeSourceMatch.Success) {
-  Assert-Equal -Actual $ReadmeSourceMatch.Groups[1].Value -Expected $SourceRef -Description 'README PowerShell downstream source ref'
-  Assert-Equal -Actual $ReadmeSourceMatch.Groups[2].Value -Expected $UpstreamTag -Description 'README PowerShell upstream base tag'
-} else {
-  Add-AuditError 'README Current pins table is missing the PowerShell downstream source ref row.'
-}
+foreach ($ChannelConfig in $TargetChannels) {
+  $ChannelKey = $ChannelConfig.Channel
+  $EscapedChannel = [regex]::Escape($ChannelKey)
+  $EscapedTrack = [regex]::Escape($ChannelConfig.SupportTrack)
+  $EscapedSubmoduleName = [regex]::Escape($ChannelConfig.SubmoduleName)
+  $RowPrefix = "PowerShell $EscapedChannel \($EscapedTrack\)"
 
-$ReadmeSdkPackageMatch = [regex]::Match(
-  $ReadmeText,
-  'PowerShell SDK package \| `([^`]+)` / `([^`]+)`',
-  [System.Text.RegularExpressions.RegexOptions]::Multiline)
-if ($ReadmeSdkPackageMatch.Success) {
-  Assert-Equal -Actual $ReadmeSdkPackageMatch.Groups[1].Value -Expected $SdkPackageId -Description 'README PowerShell SDK package ID'
-  Assert-Equal -Actual $ReadmeSdkPackageMatch.Groups[2].Value -Expected $SdkPackageVersion -Description 'README PowerShell SDK package version'
-} else {
-  Add-AuditError 'README Current pins table is missing the PowerShell SDK package row.'
-}
-
-$ReadmeFrameworkMatch = [regex]::Match(
-  $ReadmeText,
-  'PowerShell target framework \| `([^`]+)`',
-  [System.Text.RegularExpressions.RegexOptions]::Multiline)
-if (-not $ReadmeFrameworkMatch.Success) {
-  Add-AuditError 'README Current pins table is missing the PowerShell target framework row.'
-}
-
-$PowerShellCommonProps = Join-Path $RepositoryRoot 'pwsh-src\PowerShell.Common.props'
-if (Test-Path -LiteralPath $PowerShellCommonProps -PathType Leaf) {
-  $PropsText = Get-Content -Raw -LiteralPath $PowerShellCommonProps
-  $TargetFramework = Get-RequiredRegexValue `
-    -Text $PropsText `
-    -Pattern '<TargetFramework>([^<]+)</TargetFramework>' `
-    -Description 'TargetFramework in pwsh-src\PowerShell.Common.props'
-
-  if ($ReadmeFrameworkMatch.Success) {
-    Assert-Equal -Actual $ReadmeFrameworkMatch.Groups[1].Value -Expected $TargetFramework -Description 'README PowerShell target framework'
+  $SubmoduleSectionMatch = [regex]::Match(
+    $GitmodulesText,
+    "(?ms)^\[submodule ""$EscapedSubmoduleName""\]\r?\n(?<body>(?:^\t[^\r\n]+\r?\n?)+)")
+  if (-not $SubmoduleSectionMatch.Success) {
+    Add-AuditError ".gitmodules is missing [submodule ""$($ChannelConfig.SubmoduleName)""]."
+  } else {
+    $SectionBody = $SubmoduleSectionMatch.Groups['body'].Value
+    $SubmodulePathValue = Get-RequiredRegexValue -Text $SectionBody -Pattern '^\s*path\s*=\s*(\S+)\s*$' -Description "$($ChannelConfig.SubmoduleName) path in .gitmodules"
+    $SubmoduleUrlValue = Get-RequiredRegexValue -Text $SectionBody -Pattern '^\s*url\s*=\s*(\S+)\s*$' -Description "$($ChannelConfig.SubmoduleName) url in .gitmodules"
+    $SubmoduleBranchValue = Get-RequiredRegexValue -Text $SectionBody -Pattern '^\s*branch\s*=\s*(\S+)\s*$' -Description "$($ChannelConfig.SubmoduleName) branch in .gitmodules"
+    Assert-Equal -Actual $SubmodulePathValue -Expected $ChannelConfig.SubmodulePath -Description "$($ChannelConfig.SubmoduleName) path in .gitmodules"
+    Assert-Equal -Actual $SubmoduleUrlValue -Expected './' -Description "$($ChannelConfig.SubmoduleName) url in .gitmodules"
+    Assert-Equal -Actual $SubmoduleBranchValue -Expected $ChannelConfig.PowerShellSourceRef -Description "$($ChannelConfig.SubmoduleName) branch in .gitmodules"
   }
-} elseif ($RequireSubmodule) {
-  Add-AuditError 'pwsh-src\PowerShell.Common.props was not found. Initialize the pwsh-src submodule before release-bump validation.'
-} else {
-  Add-AuditWarning 'pwsh-src\PowerShell.Common.props was not found; target-framework verification was skipped.'
+
+  $ReadmeReleaseMatch = [regex]::Match(
+    $ReadmeText,
+    "$RowPrefix upstream release \| ``([^``]+)`` / ``([^``]+)``",
+    [System.Text.RegularExpressions.RegexOptions]::Multiline)
+  if ($ReadmeReleaseMatch.Success) {
+    Assert-Equal -Actual $ReadmeReleaseMatch.Groups[1].Value -Expected $ChannelConfig.PowerShellVersion -Description "README $ChannelKey PowerShell upstream release version"
+    Assert-Equal -Actual $ReadmeReleaseMatch.Groups[2].Value -Expected $ChannelConfig.PowerShellReleaseTag -Description "README $ChannelKey PowerShell upstream release tag"
+  } else {
+    Add-AuditError "README Current pins table is missing the PowerShell $ChannelKey ($($ChannelConfig.SupportTrack)) upstream release row."
+  }
+
+  $ReadmeSourceMatch = [regex]::Match(
+    $ReadmeText,
+    "$RowPrefix downstream source ref \| ``([^``]+)`` based on ``([^``]+)`` \(``([^``]+)``\)",
+    [System.Text.RegularExpressions.RegexOptions]::Multiline)
+  if ($ReadmeSourceMatch.Success) {
+    Assert-Equal -Actual $ReadmeSourceMatch.Groups[1].Value -Expected $ChannelConfig.PowerShellSourceRef -Description "README $ChannelKey PowerShell downstream source ref"
+    Assert-Equal -Actual $ReadmeSourceMatch.Groups[2].Value -Expected $ChannelConfig.PowerShellUpstreamTag -Description "README $ChannelKey PowerShell upstream base tag"
+    Assert-Equal -Actual $ReadmeSourceMatch.Groups[3].Value -Expected $ChannelConfig.SubmodulePath -Description "README $ChannelKey PowerShell submodule path"
+  } else {
+    Add-AuditError "README Current pins table is missing the PowerShell $ChannelKey ($($ChannelConfig.SupportTrack)) downstream source ref row."
+  }
+
+  $ReadmeSdkPackageMatch = [regex]::Match(
+    $ReadmeText,
+    "$RowPrefix SDK package \| ``([^``]+)`` / ``([^``]+)`` workflow default",
+    [System.Text.RegularExpressions.RegexOptions]::Multiline)
+  if ($ReadmeSdkPackageMatch.Success) {
+    Assert-Equal -Actual $ReadmeSdkPackageMatch.Groups[1].Value -Expected $ChannelConfig.SdkPackageId -Description "README $ChannelKey PowerShell SDK package ID"
+    Assert-Equal -Actual $ReadmeSdkPackageMatch.Groups[2].Value -Expected $ChannelConfig.SdkPackageVersion -Description "README $ChannelKey PowerShell SDK package version"
+  } else {
+    Add-AuditError "README Current pins table is missing the PowerShell $ChannelKey ($($ChannelConfig.SupportTrack)) SDK package row."
+  }
+
+  $ReadmeFrameworkMatch = [regex]::Match(
+    $ReadmeText,
+    "$RowPrefix target framework \| ``([^``]+)``",
+    [System.Text.RegularExpressions.RegexOptions]::Multiline)
+  if ($ReadmeFrameworkMatch.Success) {
+    Assert-Equal -Actual $ReadmeFrameworkMatch.Groups[1].Value -Expected $ChannelConfig.TargetFramework -Description "README $ChannelKey PowerShell target framework"
+  } else {
+    Add-AuditError "README Current pins table is missing the PowerShell $ChannelKey ($($ChannelConfig.SupportTrack)) target framework row."
+  }
+
+  $ReadmeRuntimeMatch = [regex]::Match(
+    $ReadmeText,
+    "$RowPrefix \.NET runtime workflow \| ``([^``]+)``",
+    [System.Text.RegularExpressions.RegexOptions]::Multiline)
+  if ($ReadmeRuntimeMatch.Success) {
+    Assert-Equal -Actual $ReadmeRuntimeMatch.Groups[1].Value -Expected $ChannelConfig.DotnetRuntimeRef -Description "README $ChannelKey .NET runtime workflow ref"
+  } else {
+    Add-AuditError "README Current pins table is missing the PowerShell $ChannelKey ($($ChannelConfig.SupportTrack)) .NET runtime workflow row."
+  }
+
+  $PowerShellCommonProps = Join-Path $RepositoryRoot (Join-Path $ChannelConfig.SubmodulePath 'PowerShell.Common.props')
+  if (Test-Path -LiteralPath $PowerShellCommonProps -PathType Leaf) {
+    $PropsText = Get-Content -Raw -LiteralPath $PowerShellCommonProps
+    $SubmoduleTargetFramework = Get-RequiredRegexValue `
+      -Text $PropsText `
+      -Pattern '<TargetFramework>([^<]+)</TargetFramework>' `
+      -Description "TargetFramework in $($ChannelConfig.SubmodulePath)\PowerShell.Common.props"
+    Assert-Equal `
+      -Actual $SubmoduleTargetFramework `
+      -Expected $ChannelConfig.TargetFramework `
+      -Description "$($ChannelConfig.SubmodulePath)\PowerShell.Common.props TargetFramework"
+  } elseif ($RequireSubmodule) {
+    Add-AuditError "$($ChannelConfig.SubmodulePath)\PowerShell.Common.props was not found. Initialize the $($ChannelConfig.SubmodulePath) submodule before release-bump validation."
+  } else {
+    Add-AuditWarning "$($ChannelConfig.SubmodulePath)\PowerShell.Common.props was not found; target-framework verification was skipped for channel $ChannelKey."
+  }
 }
 
 if ($Warnings.Count -gt 0) {
@@ -211,4 +261,5 @@ if ($Errors.Count -gt 0) {
   throw "PowerShell pin audit failed with $($Errors.Count) error(s)."
 }
 
-Write-Host "PowerShell pin audit passed for $Version ($ReleaseTag)."
+$Summary = @($TargetChannels | ForEach-Object { "$($_.Channel)=$($_.PowerShellVersion) ($($_.PowerShellReleaseTag), $($_.TargetFramework))" }) -join '; '
+Write-Host "PowerShell pin audit passed: $Summary."

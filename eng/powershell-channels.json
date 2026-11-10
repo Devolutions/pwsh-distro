@@ -1,0 +1,46 @@
+{
+  "defaultChannel": "7.6",
+  "sdkPackageId": "Devolutions.PowerShell.SDK",
+  "sdkVendorName": "Devolutions",
+  "powerShellVendorName": "Devolutions",
+  "channels": {
+    "7.6": {
+      "supportTrack": "LTS",
+      "powerShellVersion": "7.6.10",
+      "powerShellReleaseTag": "v7.6.10",
+      "powerShellUpstreamTag": "upstream/v7.6.10",
+      "powerShellSourceRef": "downstream/v7.6.10",
+      "submoduleName": "pwsh-src-7.6",
+      "submodulePath": "pwsh-src-7.6",
+      "targetFramework": "net10.0",
+      "sdkPackageRevision": "0",
+      "cliSdkPackageVersion": "7.6.10.0",
+      "cliSdkPackageRevision": "0",
+      "dotnetRuntimeVersion": "10.0.5",
+      "dotnetRuntimeRef": "v10.0.5",
+      "dotnetGlibcCrossImageX64": "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-amd64",
+      "dotnetGlibcCrossImageArm64": "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-arm64",
+      "dotnetMuslCrossImageX64": "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-amd64-musl",
+      "dotnetMuslCrossImageArm64": "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-arm64-musl"
+    },
+    "7.7": {
+      "supportTrack": "STS",
+      "powerShellVersion": "7.7.0",
+      "powerShellReleaseTag": "v7.7.0",
+      "powerShellUpstreamTag": "upstream/v7.7.0",
+      "powerShellSourceRef": "downstream/v7.7.0",
+      "submoduleName": "pwsh-src-7.7",
+      "submodulePath": "pwsh-src-7.7",
+      "targetFramework": "net11.0",
+      "sdkPackageRevision": "0",
+      "cliSdkPackageVersion": "7.7.0.0",
+      "cliSdkPackageRevision": "0",
+      "dotnetRuntimeVersion": "11.0.0",
+      "dotnetRuntimeRef": "v11.0.0",
+      "dotnetGlibcCrossImageX64": "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net11.0-cross-amd64",
+      "dotnetGlibcCrossImageArm64": "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net11.0-cross-arm64",
+      "dotnetMuslCrossImageX64": "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net11.0-cross-amd64-musl",
+      "dotnetMuslCrossImageArm64": "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net11.0-cross-arm64-musl"
+    }
+  }
+}

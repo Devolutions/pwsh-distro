@@ -3,6 +3,8 @@ param(
   [Parameter(Mandatory)]
   [string] $Version,
 
+  [string] $Channel,
+
   [string] $TargetFramework,
 
   [string] $SdkPackageRevision = '0',
@@ -14,6 +16,7 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 $RepositoryRoot = (Resolve-Path -LiteralPath $RepositoryRoot).Path
+. (Join-Path $RepositoryRoot 'eng\PowerShellChannelConfig.ps1')
 
 function Get-RepositoryPath {
   param([Parameter(Mandatory)][string] $RelativePath)
@@ -69,26 +72,12 @@ function Set-RegexValue {
   return $Regex.Replace($Text, $Evaluator, 1)
 }
 
-function Set-YamlEnvValue {
-  param(
-    [Parameter(Mandatory)][string] $Text,
-    [Parameter(Mandatory)][string] $Name,
-    [Parameter(Mandatory)][string] $Value,
-    [Parameter(Mandatory)][string] $FileName
-  )
-
-  $EscapedName = [regex]::Escape($Name)
-  return Set-RegexValue `
-    -Text $Text `
-    -Pattern "^(\s*$EscapedName\s*:\s*)['""]?[^'""\r\n]+['""]?(\s*)$" `
-    -ReplacementValue "`"$Value`"" `
-    -Description "$Name in $FileName"
-}
-
 function Get-PowerShellTargetFramework {
-  $CommonPropsPath = Get-RepositoryPath 'pwsh-src\PowerShell.Common.props'
+  param([Parameter(Mandatory)][string] $SubmodulePath)
+
+  $CommonPropsPath = Get-RepositoryPath (Join-Path $SubmodulePath 'PowerShell.Common.props')
   if (-not (Test-Path -LiteralPath $CommonPropsPath -PathType Leaf)) {
-    throw 'pwsh-src\PowerShell.Common.props was not found. Initialize pwsh-src or pass -TargetFramework explicitly.'
+    throw "$SubmodulePath\PowerShell.Common.props was not found. Initialize $SubmodulePath or pass -TargetFramework explicitly."
   }
 
   [xml] $CommonProps = Get-Content -LiteralPath $CommonPropsPath
@@ -97,7 +86,7 @@ function Get-PowerShellTargetFramework {
     Where-Object { $_ } |
     Select-Object -First 1
   if (-not $Framework) {
-    throw 'Unable to determine TargetFramework from pwsh-src\PowerShell.Common.props.'
+    throw "Unable to determine TargetFramework from $SubmodulePath\PowerShell.Common.props."
   }
 
   return [string] $Framework
@@ -116,73 +105,85 @@ if ($SdkPackageRevision -notmatch '^\d+$') {
   throw "SdkPackageRevision must be a non-negative integer. Received '$SdkPackageRevision'."
 }
 
+$ChannelConfig = Resolve-PowerShellChannelConfig `
+  -Channel $Channel `
+  -PowerShellVersion $NormalizedVersion `
+  -RepositoryRoot $RepositoryRoot
+
+$ChannelKey = $ChannelConfig.Channel
+$SupportTrack = $ChannelConfig.SupportTrack
+$SubmoduleName = $ChannelConfig.SubmoduleName
+$SubmodulePath = $ChannelConfig.SubmodulePath
+
 if (-not $TargetFramework) {
-  $TargetFramework = Get-PowerShellTargetFramework
+  $TargetFramework = Get-PowerShellTargetFramework -SubmodulePath $SubmodulePath
 }
 
 $ReleaseTag = "v$NormalizedVersion"
 $UpstreamTag = "upstream/$ReleaseTag"
 $SourceRef = "downstream/$ReleaseTag"
 $SdkPackageVersion = "$NormalizedVersion.$SdkPackageRevision"
-$ReadmeReleaseValue = "``$NormalizedVersion`` / ``$ReleaseTag``"
-$ReadmeSourceRefValue = "``$SourceRef`` based on ``$UpstreamTag``"
-$ReadmeTargetFrameworkValue = "``$TargetFramework``"
-$ReadmeSdkPackageDefaultValue = "``$SdkPackageVersion``"
 
-$WorkflowPins = [ordered]@{
-  POWERSHELL_VERSION = $NormalizedVersion
-  POWERSHELL_RELEASE_TAG = $ReleaseTag
-  POWERSHELL_UPSTREAM_TAG = $UpstreamTag
-  POWERSHELL_SOURCE_REF = $SourceRef
-}
+$ManifestRelativePath = 'eng\powershell-channels.json'
+$ManifestJson = Get-RepositoryFileText $ManifestRelativePath | ConvertFrom-Json
+$ChannelNode = $ManifestJson.channels.$ChannelKey
+$ChannelNode.powerShellVersion = $NormalizedVersion
+$ChannelNode.powerShellReleaseTag = $ReleaseTag
+$ChannelNode.powerShellUpstreamTag = $UpstreamTag
+$ChannelNode.powerShellSourceRef = $SourceRef
+$ChannelNode.targetFramework = $TargetFramework
+$ChannelNode.sdkPackageRevision = $SdkPackageRevision
+$ChannelNode.cliSdkPackageVersion = $SdkPackageVersion
+$ChannelNode.cliSdkPackageRevision = $SdkPackageRevision
+$ManifestContent = ($ManifestJson | ConvertTo-Json -Depth 10) + "`n"
+Set-RepositoryFileText -RelativePath $ManifestRelativePath -Text $ManifestContent
 
-foreach ($WorkflowPath in @('.github\workflows\powershell-sdk.yml', '.github\workflows\powershell-cli.yml')) {
-  $WorkflowText = Get-RepositoryFileText $WorkflowPath
-  foreach ($Pin in $WorkflowPins.GetEnumerator()) {
-    $WorkflowText = Set-YamlEnvValue -Text $WorkflowText -Name $Pin.Key -Value $Pin.Value -FileName $WorkflowPath
-  }
-  $WorkflowText = Set-YamlEnvValue -Text $WorkflowText -Name 'SDK_PACKAGE_REVISION' -Value $SdkPackageRevision -FileName $WorkflowPath
-  if ($WorkflowPath -eq '.github\workflows\powershell-cli.yml') {
-    $WorkflowText = Set-YamlEnvValue -Text $WorkflowText -Name 'SDK_PACKAGE_VERSION' -Value $SdkPackageVersion -FileName $WorkflowPath
-  }
-  Set-RepositoryFileText -RelativePath $WorkflowPath -Text $WorkflowText
-}
-
+$EscapedSubmoduleName = [regex]::Escape($SubmoduleName)
 $GitmodulesText = Get-RepositoryFileText '.gitmodules'
 $GitmodulesText = Set-RegexValue `
   -Text $GitmodulesText `
-  -Pattern '^(\s*branch\s*=\s*)\S+(\s*)$' `
+  -Pattern "(?ms)(^\[submodule ""$EscapedSubmoduleName""\]\r?\n(?:\t(?:path|url)\s*=\s*\S+\r?\n)+\tbranch\s*=\s*)\S+(\r?$)" `
   -ReplacementValue $SourceRef `
-  -Description 'pwsh-src branch in .gitmodules'
+  -Description "$SubmoduleName branch in .gitmodules"
 Set-RepositoryFileText -RelativePath '.gitmodules' -Text $GitmodulesText
+
+$EscapedChannel = [regex]::Escape($ChannelKey)
+$EscapedTrack = [regex]::Escape($SupportTrack)
+$RowPrefix = "PowerShell $EscapedChannel \($EscapedTrack\)"
+$ReadmeReleaseValue = "``$NormalizedVersion`` / ``$ReleaseTag``"
+$ReadmeSourceRefValue = "``$SourceRef`` based on ``$UpstreamTag`` (``$SubmodulePath``)"
+$ReadmeTargetFrameworkValue = "``$TargetFramework``"
+$ReadmeSdkPackageDefaultValue = "``$SdkPackageVersion``"
 
 $ReadmeText = Get-RepositoryFileText 'README.md'
 $ReadmeText = Set-RegexValue `
   -Text $ReadmeText `
-  -Pattern '^(\| PowerShell upstream release \| )`[^`]+` / `[^`]+`( \|\r?)$' `
+  -Pattern "^(\| $RowPrefix upstream release \| )``[^``]+`` / ``[^``]+``( \|\r?)$" `
   -ReplacementValue $ReadmeReleaseValue `
-  -Description 'README PowerShell upstream release row'
+  -Description "README PowerShell $ChannelKey upstream release row"
 $ReadmeText = Set-RegexValue `
   -Text $ReadmeText `
-  -Pattern '^(\| PowerShell downstream source ref \| )`[^`]+` based on `[^`]+`( \|\r?)$' `
+  -Pattern "^(\| $RowPrefix downstream source ref \| )``[^``]+`` based on ``[^``]+`` \(``[^``]+``\)( \|\r?)$" `
   -ReplacementValue $ReadmeSourceRefValue `
-  -Description 'README PowerShell downstream source ref row'
+  -Description "README PowerShell $ChannelKey downstream source ref row"
 $ReadmeText = Set-RegexValue `
   -Text $ReadmeText `
-  -Pattern '^(\| PowerShell target framework \| )`[^`]+`( \|\r?)$' `
+  -Pattern "^(\| $RowPrefix target framework \| )``[^``]+``( \|\r?)$" `
   -ReplacementValue $ReadmeTargetFrameworkValue `
-  -Description 'README PowerShell target framework row'
+  -Description "README PowerShell $ChannelKey target framework row"
 $ReadmeText = Set-RegexValue `
   -Text $ReadmeText `
-  -Pattern '^(\| PowerShell SDK package \| `[^`]+` / )`[^`]+`( workflow default; `[^`]+` latest published package \|\r?)$' `
+  -Pattern "^(\| $RowPrefix SDK package \| ``[^``]+`` / )``[^``]+``( workflow default(?:; ``[^``]+`` latest published package)? \|\r?)$" `
   -ReplacementValue $ReadmeSdkPackageDefaultValue `
-  -Description 'README PowerShell SDK package workflow default'
+  -Description "README PowerShell $ChannelKey SDK package workflow default"
 Set-RepositoryFileText -RelativePath 'README.md' -Text $ReadmeText
 
+Write-Output "Channel=$ChannelKey"
+Write-Output "SubmodulePath=$SubmodulePath"
 Write-Output "PowerShellVersion=$NormalizedVersion"
 Write-Output "PowerShellReleaseTag=$ReleaseTag"
 Write-Output "PowerShellUpstreamTag=$UpstreamTag"
 Write-Output "PowerShellSourceRef=$SourceRef"
 Write-Output "PowerShellTargetFramework=$TargetFramework"
 Write-Output "SdkPackageVersion=$SdkPackageVersion"
-Write-Output 'NextStep=git submodule update --remote pwsh-src && git add pwsh-src'
+Write-Output "NextStep=git submodule update --remote $SubmodulePath && git add $SubmodulePath"

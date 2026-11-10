@@ -4,8 +4,9 @@
 
 - Keep downstream automation and packaging separate from the upstream PowerShell source tree.
 - Carry Devolutions source patches on explicit per-release branches based on upstream PowerShell release tags.
-- Keep upstream and downstream refs distinct so workflow pins are auditable.
-- Expose the patched source on `master` as a pinned submodule so workflows build the exact reviewed tree without a second checkout.
+- Support active LTS (`7.6`, `net10.0`) and STS (`7.7`, `net11.0`) release channels concurrently from `master`.
+- Keep upstream and downstream refs distinct so channel pins are auditable.
+- Expose each channel's patched source on `master` as a pinned submodule (`pwsh-src-7.6/`, `pwsh-src-7.7/`) and initialize only the selected channel's submodule in each build job.
 
 ## Branches
 
@@ -40,62 +41,67 @@ Do not use plain `vX.Y.Z` downstream tags. Those names belong to upstream PowerS
 2. Create a patch branch from the upstream release tag without switching the downstream `master` worktree:
 
    ```powershell
-   .\scripts\New-PowerShellPatchBranch.ps1 -Version 7.6.3
+   .\scripts\New-PowerShellPatchBranch.ps1 -Version 7.6.10
    ```
 
-3. Add a linked source worktree for `downstream/v7.6.3` and apply downstream PowerShell source patches there.
-4. Bump the `pwsh-src` submodule on `master` to the updated `downstream/vX.Y.Z` tip and update workflow pins so `POWERSHELL_SOURCE_REF` points to the desired `downstream/vX.Y.Z` branch while `POWERSHELL_RELEASE_TAG` remains the upstream PowerShell release tag.
-5. Run the PowerShell SDK workflow first, then the PowerShell distribution workflow if the SDK package is valid.
-6. Tag downstream releases as `vX.Y.Z.R` when publishing artifacts externally.
+3. Add a linked source worktree for `downstream/v7.6.10` (for example `pwsh-src-7.6-worktree`) and apply downstream PowerShell source patches there.
+4. Update `eng/powershell-channels.json`, `.gitmodules`, and `README.md`, and bump the channel's submodule pointer (`pwsh-src-7.6` or `pwsh-src-7.7`) on `master` to the updated `downstream/vX.Y.Z` tip while keeping `powerShellReleaseTag` set to the upstream PowerShell release tag.
+5. Run the PowerShell SDK workflow (or `.github/workflows/release.yml`) for the target `channel` (`7.6` or `7.7`).
+6. Tag downstream releases as `vX.Y.Z.R` when publishing artifacts externally. Following `PowerShell/PowerShell`, `release.yml` marks a release as GitHub `Latest` only when no higher non-draft, non-prerelease `vA.B.C.R` release already exists, so `7.7.x` retains `Latest` when `7.6.x` servicing releases are published afterward.
 
-## Workflow pin model
+## Channel pin model
 
-PowerShell workflows keep source checkout refs separate from release metadata:
+`eng/powershell-channels.json` (loaded through `eng/PowerShellChannelConfig.ps1`) keeps source checkout refs separate from release metadata for each supported channel (`7.6` default, `7.7`):
 
-- `POWERSHELL_VERSION`: package and artifact version, for example `7.6.3`.
-- `POWERSHELL_RELEASE_TAG`: upstream release tag passed to PowerShell build metadata, for example `v7.6.3`.
-- `POWERSHELL_UPSTREAM_TAG`: mirrored upstream source ref used for ancestry checks and release patch export, for example `upstream/v7.6.3`.
-- `POWERSHELL_SOURCE_REPOSITORY`: repository containing the source branch, normally this repository.
-- `POWERSHELL_SOURCE_REF`: downstream source branch to build, for example `downstream/v7.6.3`.
+- `powerShellVersion` (`POWERSHELL_VERSION`): package and artifact version, for example `7.6.10` or `7.7.0`.
+- `powerShellReleaseTag` (`POWERSHELL_RELEASE_TAG`): upstream release tag passed to PowerShell build metadata, for example `v7.6.10` or `v7.7.0`.
+- `powerShellUpstreamTag` (`POWERSHELL_UPSTREAM_TAG`): mirrored upstream source ref used for ancestry checks and release patch export, for example `upstream/v7.6.10` or `upstream/v7.7.0`.
+- `powerShellSourceRef` (`POWERSHELL_SOURCE_REF`): downstream source branch to build, for example `downstream/v7.6.10` or `downstream/v7.7.0`.
+- `submodulePath` (`POWERSHELL_SUBMODULE_PATH`): channel source submodule directory, `pwsh-src-7.6` or `pwsh-src-7.7`.
+- `targetFramework`: upstream target framework moniker, `net10.0` (`7.6`) or `net11.0` (`7.7`).
 
-This prevents a downstream source branch such as `downstream/v7.6.3` from being passed to PowerShell build logic that expects an upstream release tag.
+This prevents a downstream source branch such as `downstream/v7.6.10` from being passed to PowerShell build logic that expects an upstream release tag.
 
-## Source submodule
+## Source submodules
 
-`master` exposes the patched PowerShell source tree as a same-repository git submodule at path `pwsh-src/`:
+`master` exposes each channel's patched PowerShell source tree as a same-repository git submodule:
 
 ```ini
-[submodule "pwsh-src"]
-    path = pwsh-src
-    url = ./
-    branch = downstream/v7.6.3
+[submodule "pwsh-src-7.6"]
+	path = pwsh-src-7.6
+	url = ./
+	branch = downstream/v7.6.10
+[submodule "pwsh-src-7.7"]
+	path = pwsh-src-7.7
+	url = ./
+	branch = downstream/v7.7.0
 ```
 
-The submodule pins a specific commit on `downstream/vX.Y.Z`, not the branch tip. Bumping the pointer is a normal commit on `master` and is reviewable in the PR diff. Workflows check out the project with `submodules: true`, which is enough to populate `pwsh-src/` using the default `GITHUB_TOKEN`; no second `actions/checkout` and no extra secrets are needed.
+Each submodule pins a specific commit on `downstream/vX.Y.Z`, not the branch tip. Bumping a pointer is a normal commit on `master` and is reviewable in the PR diff. Workflows check out `master` and run `scripts/Initialize-Repository.ps1 -Channel <channel>` to populate only the selected channel's submodule using the default `GITHUB_TOKEN`; no second `actions/checkout` and no extra secrets are needed.
 
-After rebasing `downstream/vX.Y.Z` (for example with an AI-assisted rebase that force-pushes the patch branch), re-bump the submodule on `master` so the pinned commit matches the new tip:
+After rebasing `downstream/vX.Y.Z` (for example with an AI-assisted rebase that force-pushes the patch branch), re-bump the matching submodule on `master` so the pinned commit matches the new tip:
 
 ```powershell
-git submodule update --remote pwsh-src
-git add pwsh-src
+git submodule update --remote pwsh-src-7.6
+git add pwsh-src-7.6
 ```
 
 ## Local source worktree
 
-The `pwsh-src/` submodule on `master` is the build source of truth, but it is a detached checkout of the pinned commit. For developing patches, use a linked worktree on the patch branch:
+The `pwsh-src-<channel>/` submodules on `master` are the build source of truth, and each is a detached checkout of its pinned commit. For developing patches, use a linked worktree on the patch branch:
 
 ```powershell
-git worktree add pwsh-src-worktree downstream/v7.6.3
+git worktree add pwsh-src-7.6-worktree downstream/v7.6.10
 ```
 
-`pwsh-src-worktree/` is ignored by this repository. Commit source patches in that worktree on the `downstream/vX.Y.Z` branch, not on `master`, then bump the submodule pointer on `master` as described above.
+`pwsh-src-worktree/` and `pwsh-src-*-worktree/` are ignored by this repository. Commit source patches in that worktree on the `downstream/vX.Y.Z` branch, not on `master`, then bump the channel submodule pointer on `master` as described above.
 
 ## Patch export
 
 To export a squashed patch for review or archival:
 
 ```powershell
-.\scripts\Export-PowerShellPatch.ps1 -RepoPath pwsh-src-worktree -Branch downstream/v7.6.3
+.\scripts\Export-PowerShellPatch.ps1 -RepoPath pwsh-src-7.6-worktree -Branch downstream/v7.6.10
 ```
 
-The script compares `upstream/v7.6.3...downstream/v7.6.3` and writes the patch under `patchsets/`, which is ignored by git.
+The script compares `upstream/v7.6.10...downstream/v7.6.10` and writes the patch under `patchsets/`, which is ignored by git.

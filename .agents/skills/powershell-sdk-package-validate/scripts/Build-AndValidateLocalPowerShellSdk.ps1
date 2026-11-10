@@ -2,6 +2,8 @@
 param(
   [string] $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..\..')).Path,
 
+  [string] $Channel,
+
   [string] $RuntimeIdentifier,
 
   [string] $OutputRoot = 'output\local-sdk',
@@ -15,6 +17,7 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 $RepositoryRoot = (Resolve-Path -LiteralPath $RepositoryRoot).Path
+. (Join-Path $RepositoryRoot 'eng\PowerShellChannelConfig.ps1')
 
 function Get-RepositoryPath {
   param([Parameter(Mandatory)][string] $RelativePath)
@@ -52,20 +55,20 @@ function Get-YamlScalar {
   return $Match.Groups[1].Value.Trim()
 }
 
+$ChannelConfig = Resolve-PowerShellChannelConfig `
+  -Channel $Channel `
+  -RepositoryRoot $RepositoryRoot
+
 $WorkflowPath = '.github\workflows\powershell-sdk.yml'
 $WorkflowText = Get-RepositoryFileText $WorkflowPath
-$PowerShellVersion = Get-YamlScalar -Text $WorkflowText -Name 'POWERSHELL_VERSION' -FileName $WorkflowPath
-$SdkPackageRevision = Get-YamlScalar -Text $WorkflowText -Name 'SDK_PACKAGE_REVISION' -FileName $WorkflowPath
-if ($SdkPackageRevision -notmatch '^\d+$') {
-  throw "SDK_PACKAGE_REVISION in $WorkflowPath must be numeric."
-}
 
 $BuildArguments = @{
-  PowerShellVersion = $PowerShellVersion
-  PowerShellReleaseTag = Get-YamlScalar -Text $WorkflowText -Name 'POWERSHELL_RELEASE_TAG' -FileName $WorkflowPath
-  SdkPackageVersion = "$PowerShellVersion.$SdkPackageRevision"
-  PackageId = Get-YamlScalar -Text $WorkflowText -Name 'SDK_PACKAGE_ID' -FileName $WorkflowPath
-  VendorName = Get-YamlScalar -Text $WorkflowText -Name 'SDK_VENDOR_NAME' -FileName $WorkflowPath
+  Channel = $ChannelConfig.Channel
+  PowerShellVersion = $ChannelConfig.PowerShellVersion
+  PowerShellReleaseTag = $ChannelConfig.PowerShellReleaseTag
+  SdkPackageVersion = $ChannelConfig.SdkPackageVersion
+  PackageId = $ChannelConfig.SdkPackageId
+  VendorName = $ChannelConfig.SdkVendorName
   MultiPwshPackageId = Get-YamlScalar -Text $WorkflowText -Name 'MULTI_PWSH_APPHOST_PACKAGE_ID' -FileName $WorkflowPath
   MultiPwshPackageVersion = Get-YamlScalar -Text $WorkflowText -Name 'MULTI_PWSH_APPHOST_PACKAGE_VERSION' -FileName $WorkflowPath
   MultiPwshPackageSource = Get-YamlScalar -Text $WorkflowText -Name 'MULTI_PWSH_APPHOST_PACKAGE_SOURCE' -FileName $WorkflowPath
@@ -86,7 +89,7 @@ if (-not $SkipPinAudit) {
     throw "Pin audit script was not found: $PinAuditScript"
   }
 
-  & $PinAuditScript -RepositoryRoot $RepositoryRoot -RequireSubmodule
+  & $PinAuditScript -RepositoryRoot $RepositoryRoot -Channel $ChannelConfig.Channel -RequireSubmodule
   if (-not $?) {
     throw 'PowerShell pin audit failed.'
   }

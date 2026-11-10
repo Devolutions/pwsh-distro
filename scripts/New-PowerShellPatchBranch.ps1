@@ -38,6 +38,11 @@ if (-not $TagVersion.StartsWith('v', [System.StringComparison]::OrdinalIgnoreCas
   $TagVersion = "v$TagVersion"
 }
 
+$WorktreeDirectory = 'pwsh-src-worktree'
+if ($TagVersion -match '^v(?<channel>\d+\.\d+)\.') {
+  $WorktreeDirectory = "pwsh-src-$($Matches['channel'])-worktree"
+}
+
 if (-not $BranchName) {
   $BranchName = "downstream/$TagVersion"
 }
@@ -61,4 +66,4 @@ if ($PSCmdlet.ShouldProcess($BranchName, "Create from $UpstreamTag")) {
 
 Write-Output "Branch=$BranchName"
 Write-Output "BaseTag=$UpstreamTag"
-Write-Output "WorktreeCommand=git worktree add pwsh-src-worktree $BranchName"
+Write-Output "WorktreeCommand=git worktree add $WorktreeDirectory $BranchName"

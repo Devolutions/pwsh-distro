@@ -1,25 +1,85 @@
 name: .NET runtime
 on:
   workflow_dispatch:
+    inputs:
+      channel:
+        description: PowerShell release channel (.NET 10 for 7.6, .NET 11 for 7.7)
+        required: true
+        type: choice
+        options:
+          - "7.6"
+          - "7.7"
+        default: "7.6"
   workflow_call:
+    inputs:
+      channel:
+        description: PowerShell release channel (7.6 or 7.7)
+        default: "7.6"
+        required: false
+        type: string
     outputs:
+      channel:
+        description: Selected PowerShell release channel
+        value: ${{ jobs.preflight.outputs.channel }}
       workflow-run-id:
-        description: The workflow run id that produced the DotNet-Runtime-<rid> artifacts
+        description: The workflow run id that produced the DotNet-Runtime-<channel>-<rid> artifacts
         value: ${{ jobs.build.outputs.workflow-run-id }}
 env:
-  DOTNET_RUNTIME_VERSION: "10.0.5"
-  DOTNET_RUNTIME_REF: "v10.0.5"
+  POWERSHELL_CHANNELS_MANIFEST: "eng/powershell-channels.json"
   CLANG_LLVM_VERSION: "22.1.4"
   CLANG_LLVM_RELEASE: "v2026.1.1"
   VSDEVSHELL_MODULE_NAME: "VsDevShell"
-  DOTNET_GLIBC_CROSS_IMAGE_X64: "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-amd64"
-  DOTNET_GLIBC_CROSS_IMAGE_ARM64: "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-arm64"
-  DOTNET_MUSL_CROSS_IMAGE_X64: "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-amd64-musl"
-  DOTNET_MUSL_CROSS_IMAGE_ARM64: "mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-arm64-musl"
 jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-24.04
+    outputs:
+      channel: ${{ steps.info.outputs.channel }}
+      dotnet-runtime-version: ${{ steps.info.outputs.dotnet-runtime-version }}
+      dotnet-runtime-ref: ${{ steps.info.outputs.dotnet-runtime-ref }}
+      dotnet-glibc-cross-image-x64: ${{ steps.info.outputs.dotnet-glibc-cross-image-x64 }}
+      dotnet-glibc-cross-image-arm64: ${{ steps.info.outputs.dotnet-glibc-cross-image-arm64 }}
+      dotnet-musl-cross-image-x64: ${{ steps.info.outputs.dotnet-musl-cross-image-x64 }}
+      dotnet-musl-cross-image-arm64: ${{ steps.info.outputs.dotnet-musl-cross-image-arm64 }}
+    steps:
+      - name: Clone project
+        uses: actions/checkout@v7.0.0
+
+      - name: Resolve channel runtime configuration
+        id: info
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./eng/PowerShellChannelConfig.ps1
+
+          $ChannelConfig = Resolve-PowerShellChannelConfig `
+            -Channel '${{ inputs.channel }}' `
+            -ManifestPath $Env:POWERSHELL_CHANNELS_MANIFEST
+
+          @(
+            "channel=$($ChannelConfig.Channel)",
+            "dotnet-runtime-version=$($ChannelConfig.DotnetRuntimeVersion)",
+            "dotnet-runtime-ref=$($ChannelConfig.DotnetRuntimeRef)",
+            "dotnet-glibc-cross-image-x64=$($ChannelConfig.DotnetGlibcCrossImageX64)",
+            "dotnet-glibc-cross-image-arm64=$($ChannelConfig.DotnetGlibcCrossImageArm64)",
+            "dotnet-musl-cross-image-x64=$($ChannelConfig.DotnetMuslCrossImageX64)",
+            "dotnet-musl-cross-image-arm64=$($ChannelConfig.DotnetMuslCrossImageArm64)"
+          ) | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
+
+          echo "::notice::Channel: $($ChannelConfig.Channel)"
+          echo "::notice::DotNetRuntimeVersion: $($ChannelConfig.DotnetRuntimeVersion)"
+          echo "::notice::DotNetRuntimeRef: $($ChannelConfig.DotnetRuntimeRef)"
+
   build:
-    name: .NET runtime [${{matrix.arch}}-${{matrix.os}}]
+    name: .NET runtime [${{ needs.preflight.outputs.channel }} ${{matrix.arch}}-${{matrix.os}}]
+    needs: preflight
     runs-on: ${{matrix.runner}}
+    env:
+      DOTNET_CHANNEL: ${{ needs.preflight.outputs.channel }}
+      DOTNET_RUNTIME_VERSION: ${{ needs.preflight.outputs.dotnet-runtime-version }}
+      DOTNET_RUNTIME_REF: ${{ needs.preflight.outputs.dotnet-runtime-ref }}
+      DOTNET_GLIBC_CROSS_IMAGE_X64: ${{ needs.preflight.outputs.dotnet-glibc-cross-image-x64 }}
+      DOTNET_GLIBC_CROSS_IMAGE_ARM64: ${{ needs.preflight.outputs.dotnet-glibc-cross-image-arm64 }}
     outputs:
       workflow-run-id: ${{ github.run_id }}
     strategy:
@@ -109,11 +169,11 @@ jobs:
             echo "PATH=$LLVM_BIN_PATH$([IO.Path]::PathSeparator)$Env:PATH" >> $Env:GITHUB_ENV
           }
 
-      - name: Clone .NET runtime ${{env.DOTNET_RUNTIME_VERSION}}
+      - name: Clone .NET runtime ${{ needs.preflight.outputs.dotnet-runtime-version }}
         uses: actions/checkout@v7.0.0
         with:
           repository: dotnet/runtime
-          ref: ${{env.DOTNET_RUNTIME_REF}}
+          ref: ${{ needs.preflight.outputs.dotnet-runtime-ref }}
           path: dotnet-runtime
 
       - name: Install ${{env.VSDEVSHELL_MODULE_NAME}} from PSGallery
@@ -293,23 +353,30 @@ jobs:
       - name: Upload runtime pack
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: DotNet-Runtime-${{matrix.rid}}
+          name: DotNet-Runtime-${{ needs.preflight.outputs.channel }}-${{matrix.rid}}
           path: ${{ runner.temp }}/dotnet-runtime-pack-${{matrix.rid}}/*.nupkg
           if-no-files-found: error
 
   build-musl:
-    name: .NET runtime [linux-musl-${{ matrix.arch }}]
+    name: .NET runtime [${{ needs.preflight.outputs.channel }} linux-musl-${{ matrix.arch }}]
+    needs: preflight
     runs-on: ubuntu-24.04
+    env:
+      DOTNET_CHANNEL: ${{ needs.preflight.outputs.channel }}
+      DOTNET_RUNTIME_VERSION: ${{ needs.preflight.outputs.dotnet-runtime-version }}
+      DOTNET_RUNTIME_REF: ${{ needs.preflight.outputs.dotnet-runtime-ref }}
+      DOTNET_MUSL_CROSS_IMAGE_X64: ${{ needs.preflight.outputs.dotnet-musl-cross-image-x64 }}
+      DOTNET_MUSL_CROSS_IMAGE_ARM64: ${{ needs.preflight.outputs.dotnet-musl-cross-image-arm64 }}
     strategy:
       fail-fast: false
       matrix:
         arch: [x64, arm64]
     steps:
-      - name: Clone .NET runtime ${{ env.DOTNET_RUNTIME_VERSION }}
+      - name: Clone .NET runtime ${{ needs.preflight.outputs.dotnet-runtime-version }}
         uses: actions/checkout@v7.0.0
         with:
           repository: dotnet/runtime
-          ref: ${{ env.DOTNET_RUNTIME_REF }}
+          ref: ${{ needs.preflight.outputs.dotnet-runtime-ref }}
           path: dotnet-runtime
 
       - name: Build Linux-musl runtime packs
@@ -359,6 +426,6 @@ jobs:
       - name: Upload Linux-musl runtime pack
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: DotNet-Runtime-linux-musl-${{ matrix.arch }}
+          name: DotNet-Runtime-${{ needs.preflight.outputs.channel }}-linux-musl-${{ matrix.arch }}
           path: ${{ runner.temp }}/dotnet-runtime-pack-linux-musl-${{ matrix.arch }}/*.nupkg
           if-no-files-found: error

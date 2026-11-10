@@ -1,4 +1,8 @@
-[submodule "pwsh-src"]
-	path = pwsh-src
+[submodule "pwsh-src-7.6"]
+	path = pwsh-src-7.6
 	url = ./
-	branch = downstream/v7.6.9
+	branch = downstream/v7.6.10
+[submodule "pwsh-src-7.7"]
+	path = pwsh-src-7.7
+	url = ./
+	branch = downstream/v7.7.0
