@@ -63,6 +63,7 @@ $InstallDirectory = "/usr/local/devolutions/powershell/$($Version.Major)"
 $LinkPath = '/usr/local/bin/pwsh'
 $ManPagePath = '/usr/local/share/man/man1/pwsh.1.gz'
 $AppPath = '/Applications/Devolutions PowerShell.app'
+$MinimumOSVersion = '12.0'
 $HostArchitecture = if ($Architecture -eq 'x64') { 'x86_64' } else { 'arm64' }
 $ExpectedCpuType = if ($Architecture -eq 'x64') { 'x86_64' } else { 'arm64' }
 
@@ -79,6 +80,8 @@ try {
   $HostArchitectures = @($Script.options | ForEach-Object { $_.GetAttribute('hostArchitectures') } | Where-Object { $_ })
   Assert-True ($HostArchitectures.Count -eq 1 -and $HostArchitectures[0] -eq $HostArchitecture) "Distribution hostArchitectures '$($HostArchitectures -join ',')' does not match $HostArchitecture."
   Assert-True ($Script.product.id -eq $PackageIdentifier -and $Script.product.version -eq $PackageVersion) "Distribution product is '$($Script.product.id)' '$($Script.product.version)'."
+  $AllowedOSVersions = @($Script.'allowed-os-versions'.'os-version' | ForEach-Object { $_.GetAttribute('min') })
+  Assert-True ($AllowedOSVersions.Count -eq 1 -and $AllowedOSVersions[0] -eq $MinimumOSVersion) "Distribution minimum macOS version '$($AllowedOSVersions -join ',')' does not match $MinimumOSVersion."
 
   $ComponentDirectories = @(Get-ChildItem -LiteralPath $Expanded -Directory -Filter '*.pkg')
   Assert-True ($ComponentDirectories.Count -eq 1) "Expected one component package, found $($ComponentDirectories.Count)."
@@ -94,6 +97,12 @@ try {
     $ScriptPath = Join-Path $Component "Scripts/$ScriptName"
     Assert-True (Test-Path -LiteralPath $ScriptPath -PathType Leaf) "Component is missing its $ScriptName script."
     Assert-True ((Get-Item -LiteralPath $ScriptPath).UnixFileMode.HasFlag([System.IO.UnixFileMode]::UserExecute)) "$ScriptName is not executable."
+    if ($ScriptName -eq 'preinstall') {
+      $PreInstallContent = Get-Content -LiteralPath $ScriptPath -Raw
+      $OSVersionCheck = $PreInstallContent.IndexOf('sw_vers -productVersion', [System.StringComparison]::Ordinal)
+      $PayloadRemoval = $PreInstallContent.IndexOf("rm -rf `"$InstallDirectory`"", [System.StringComparison]::Ordinal)
+      Assert-True ($OSVersionCheck -ge 0 -and $OSVersionCheck -lt $PayloadRemoval -and $PreInstallContent.Contains('BASH_REMATCH[1] < 12')) 'preinstall must reject unsupported macOS versions before removing the existing payload.'
+    }
   }
 
   $PayloadRoot = Join-Path $Component 'Payload'
@@ -107,7 +116,10 @@ try {
   Assert-True ((Get-Item -LiteralPath $PayloadLauncher).UnixFileMode.HasFlag([System.IO.UnixFileMode]::UserExecute)) "Payload $LinkPath is not executable."
   $ExpectedLauncher = "#!/bin/sh`nexec `"$InstallDirectory/pwsh`" `"`$@`"`n"
   Assert-True ((Get-Content -LiteralPath $PayloadLauncher -Raw) -eq $ExpectedLauncher) "Payload $LinkPath does not launch $InstallDirectory/pwsh."
-  Assert-True (Test-Path -LiteralPath (Join-Path $PayloadRoot $ManPagePath.TrimStart('/')) -PathType Leaf) "Payload is missing $ManPagePath."
+  $PayloadManPage = Join-Path $PayloadRoot $ManPagePath.TrimStart('/')
+  Assert-True (Test-Path -LiteralPath $PayloadManPage -PathType Leaf) "Payload is missing $ManPagePath."
+  $ManPageContent = (Invoke-NativeCommand gzip @('-dc', $PayloadManPage)) -join "`n"
+  Assert-True ($ManPageContent.Contains('.SH "OPTIONS"') -and $ManPageContent.Contains('.SH "COPYRIGHT"')) 'The packaged pwsh man page is incomplete.'
   $PayloadApp = Join-Path $PayloadRoot $AppPath.TrimStart('/')
   $BundleId = (Invoke-NativeCommand /usr/libexec/PlistBuddy @('-c', 'Print :CFBundleIdentifier', "$PayloadApp/Contents/Info.plist")).Trim()
   Assert-True ($BundleId -eq $LauncherIdentifier) "Launcher bundle identifier is '$BundleId'."

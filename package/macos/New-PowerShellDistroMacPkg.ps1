@@ -74,7 +74,8 @@ $LinkPath = '/usr/local/bin/pwsh'
 $ManPagePath = '/usr/local/share/man/man1/pwsh.1.gz'
 $AppName = "$ProductName.app"
 $HostArchitecture = if ($Architecture -eq 'x64') { 'x86_64' } else { 'arm64' }
-$MinimumOSVersion = '11.0'
+$MinimumOSVersion = '12.0'
+$MinimumOSVersionMajor = [int] ($MinimumOSVersion.Split('.')[0])
 
 $Output = [System.IO.Path]::GetFullPath($OutputDirectory)
 if ($Output.StartsWith($Payload.TrimEnd('/') + '/', [System.StringComparison]::Ordinal) -or $Output -eq $Payload) {
@@ -190,6 +191,15 @@ try {
   Set-Content -LiteralPath $PreInstall -Encoding ascii -Value @"
 #!/bin/bash
 set -e
+OS_VERSION=`$(/usr/bin/sw_vers -productVersion)
+if [[ ! "`$OS_VERSION" =~ ^([0-9]+)\.([0-9]+) ]]; then
+    echo "Unable to determine macOS version: `$OS_VERSION" >&2
+    exit 1
+fi
+if (( BASH_REMATCH[1] < $MinimumOSVersionMajor )); then
+    echo "Devolutions PowerShell requires macOS $MinimumOSVersion or later; found `$OS_VERSION." >&2
+    exit 1
+fi
 if [ -d "$InstallDirectory" ] ; then
     rm -rf "$InstallDirectory"
 fi
