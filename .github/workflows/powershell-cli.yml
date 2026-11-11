@@ -105,6 +105,10 @@ jobs:
       - name: Clone project
         uses: actions/checkout@v7.0.0
 
+      - name: Test PowerShell distro layout requirements
+        shell: pwsh
+        run: ./eng/Test-PowerShellDistroLayout.ps1
+
       - name: Resolve CLI channel configuration
         id: info
         shell: pwsh
