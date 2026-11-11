@@ -49,6 +49,7 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'PowerShellChannelConfig.ps1')
+. (Join-Path $PSScriptRoot 'PowerShellDistroLayout.ps1')
 . (Join-Path $PSScriptRoot 'PowerShellSdkDependencyProfile.ps1')
 . (Join-Path $PSScriptRoot 'LinuxElf.ps1')
 . (Join-Path $PSScriptRoot 'LinuxAppHost.ps1')
@@ -177,19 +178,6 @@ function Get-PowerShellTargetFramework {
   }
 
   return [string] $TargetFramework
-}
-
-function Get-PowerShellExecutableName {
-  param(
-    [Parameter(Mandatory)]
-    [string] $Rid
-  )
-
-  if ($Rid -like 'win-*') {
-    return 'pwsh.exe'
-  }
-
-  return 'pwsh'
 }
 
 function Assert-SdkPackageVersion {
@@ -626,74 +614,6 @@ function Add-PowerShellDistroAncillaryFiles {
   }
 }
 
-function Get-RequiredDistroRelativePaths {
-  param(
-    [Parameter(Mandatory)]
-    [string] $Rid
-  )
-
-  $ExecutableName = Get-PowerShellExecutableName -Rid $Rid
-  $RequiredPaths = @(
-    $ExecutableName,
-    'LICENSE.txt',
-    'ThirdPartyNotices.txt',
-    'en-US/default.help.txt',
-    'pwsh.dll',
-    'pwsh.runtimeconfig.json',
-    'pwsh.xml',
-    'System.Management.Automation.dll',
-    'System.Management.Automation.xml',
-    'System.Web.Services.Description.dll',
-    'Microsoft.PowerShell.Commands.Management.xml',
-    'Microsoft.PowerShell.ConsoleHost.dll',
-    'Schemas/PSMaml/Maml.xsd'
-  )
-  if ($Rid -like 'linux-*') {
-    $RequiredPaths += 'libpsl-native.so'
-  }
-  if ($Rid -like 'win-*') {
-    $RequiredPaths += @(
-      'Microsoft.PowerShell.GraphicalHost.dll',
-      'Microsoft.PowerShell.GraphicalHost.dll.config',
-      'Microsoft.PowerShell.GraphicalHost.xml',
-      'PowerShell.Core.Instrumentation.man',
-      'PowerShellCoreExecutionPolicy.adml',
-      'PowerShellCoreExecutionPolicy.admx',
-      'PresentationFramework.dll',
-      'RegisterManifest.ps1',
-      'RegisterMicrosoftUpdate.ps1',
-      'System.Windows.Forms.dll',
-      'WindowsBase.dll',
-      'powershell.config.json',
-      'preview/pwsh-preview.cmd',
-      'pwsh.profile.dsc.resource.json',
-      'pwsh.profile.resource.ps1'
-    )
-  }
-
-  foreach ($ModuleName in @(
-      'Microsoft.PowerShell.Management',
-      'Microsoft.PowerShell.Host',
-      'Microsoft.PowerShell.Utility',
-      'Microsoft.PowerShell.Security',
-      'Microsoft.PowerShell.Archive',
-      'Microsoft.PowerShell.PSResourceGet',
-      'Microsoft.PowerShell.ThreadJob',
-      'PackageManagement',
-      'PowerShellGet',
-      'PSReadLine')) {
-    $RequiredPaths += "Modules/$ModuleName/$ModuleName.psd1"
-  }
-  foreach ($SignedModuleName in @(
-      'Microsoft.PowerShell.PSResourceGet',
-      'Microsoft.PowerShell.ThreadJob',
-      'PSReadLine')) {
-    $RequiredPaths += "Modules/$SignedModuleName/.signature.p7s"
-  }
-
-  return $RequiredPaths
-}
-
 function Test-PowerShellDistroLayout {
   param(
     [Parameter(Mandatory)]
@@ -707,7 +627,7 @@ function Test-PowerShellDistroLayout {
   )
 
   $ExecutableName = Get-PowerShellExecutableName -Rid $Rid
-  foreach ($RelativePath in (Get-RequiredDistroRelativePaths -Rid $Rid)) {
+  foreach ($RelativePath in (Get-RequiredDistroRelativePaths -Rid $Rid -PowerShellVersion $ExpectedVersion)) {
     Assert-RequiredFile -Root $Root -RelativePath $RelativePath
   }
 
@@ -792,6 +712,9 @@ function Test-PowerShellDistroArchive {
     [string] $Rid,
 
     [Parameter(Mandatory)]
+    [string] $ExpectedVersion,
+
+    [Parameter(Mandatory)]
     [string] $HostBaseName
   )
 
@@ -808,7 +731,7 @@ function Test-PowerShellDistroArchive {
     }
   )
 
-  foreach ($RelativePath in (Get-RequiredDistroRelativePaths -Rid $Rid)) {
+  foreach ($RelativePath in (Get-RequiredDistroRelativePaths -Rid $Rid -PowerShellVersion $ExpectedVersion)) {
     if ($NormalizedEntries -notcontains $RelativePath) {
       throw "PowerShell distro archive is missing required entry: $RelativePath"
     }
@@ -1169,7 +1092,7 @@ $CustomRuntimeMappingBlock
   if (-not (Test-Path -LiteralPath $ArchiveFullPath -PathType Leaf)) {
     throw "PowerShell distro archive was not created: $ArchiveFullPath"
   }
-  Test-PowerShellDistroArchive -ArchivePath $ArchiveFullPath -Rid $RuntimeIdentifier -HostBaseName $HostBaseName
+  Test-PowerShellDistroArchive -ArchivePath $ArchiveFullPath -Rid $RuntimeIdentifier -ExpectedVersion $PowerShellVersion -HostBaseName $HostBaseName
   New-Item -Path $ArchiveValidationDirectory -ItemType Directory -Force | Out-Null
   Invoke-NativeCommand tar @('-xzf', $ArchiveFullPath, '-C', $ArchiveValidationDirectory)
   Test-PowerShellDistroLayout -Root $ArchiveValidationDirectory -Rid $RuntimeIdentifier -ExpectedVersion $PowerShellVersion
