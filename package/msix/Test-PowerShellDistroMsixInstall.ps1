@@ -23,6 +23,9 @@ $ErrorActionPreference = 'Stop'
 if (-not $IsWindows) {
   throw 'MSIX installation tests require Windows.'
 }
+if (-not $RequireSignature -and -not $AllowEphemeralTestSigning) {
+  throw 'Specify -RequireSignature, -AllowEphemeralTestSigning, or both so MSIX package deployment is actually exercised.'
+}
 
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -304,7 +307,11 @@ try {
     }
   }
 
-  Write-Host "Passed MSIX installation and upgrade verification for $Architecture ($PackageVersion)."
+  if ($AllowEphemeralTestSigning) {
+    Write-Host "Passed MSIX installation and upgrade verification for $Architecture ($PackageVersion)."
+  } else {
+    Write-Host "Passed signed MSIX installation verification for $Architecture ($PackageVersion)."
+  }
 } finally {
   foreach ($Leftover in @(Get-AppxPackage -Name 'Devolutions.PowerShell' -ErrorAction SilentlyContinue)) {
     Remove-AppxPackage -Package $Leftover.PackageFullName -ErrorAction SilentlyContinue

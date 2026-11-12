@@ -12,6 +12,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $MsixRoot = $PSScriptRoot
 $Generator = Join-Path $MsixRoot 'New-PowerShellDistroAppInstaller.ps1'
 $Verifier = Join-Path $MsixRoot 'Test-PowerShellDistroMsixPackage.ps1'
+$InstallVerifier = Join-Path $MsixRoot 'Test-PowerShellDistroMsixInstall.ps1'
 $ReleaseBuilder = Join-Path $MsixRoot 'New-ReleasePowerShellDistroMsix.ps1'
 $TemplateManifestPath = Join-Path $MsixRoot 'assets\AppxManifest.xml'
 
@@ -327,6 +328,13 @@ try {
     }
     $UnsignedOut = Join-Path $Directory 'out-unsigned'
     Assert-True (Test-Path -LiteralPath (Join-Path $UnsignedOut 'Devolutions-PowerShell-7.6.10.1-win.msixbundle') -PathType Leaf) 'Relative OutputDirectory must resolve against $PWD.'
+
+    Assert-Fails {
+      & $InstallVerifier `
+        -BundlePath (Join-Path $UnsignedOut 'Devolutions-PowerShell-7.6.10.1-win.msixbundle') `
+        -AppInstallerPath (Join-Path $UnsignedOut 'Devolutions-PowerShell.appinstaller') `
+        -Architecture 'x64'
+    } 'Test-PowerShellDistroMsixInstall.ps1 must reject invocations that omit both -RequireSignature and -AllowEphemeralTestSigning.'
 
     # Verify makeappx unbundle + unpack round-trip used by Test-PowerShellDistroMsixInstall.ps1.
     $HostArch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [System.Runtime.InteropServices.Architecture]::Arm64) { 'arm64' } else { 'x64' }
