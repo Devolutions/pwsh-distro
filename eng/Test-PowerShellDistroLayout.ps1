@@ -22,6 +22,12 @@ foreach ($Case in $Cases) {
   if (($RequiredPaths -contains 'RegisterManifest.ps1') -ne ($Case.Rid -like 'win-*')) {
     throw "$($Case.Name): unexpected Windows manifest script requirement."
   }
+  if (($RequiredPaths -contains 'pwrshplugin.dll') -ne ($Case.Rid -like 'win-*')) {
+    throw "$($Case.Name): unexpected Windows WinRM plugin DLL requirement."
+  }
+  if (($RequiredPaths -contains 'Install-PowerShellRemoting.ps1') -ne ($Case.Rid -like 'win-*')) {
+    throw "$($Case.Name): unexpected Windows WinRM remoting script requirement."
+  }
   Write-Host "PASS $($Case.Name)"
 }
 
