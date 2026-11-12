@@ -115,6 +115,8 @@ dotnet publish -c Release -r win-x64 --self-contained true
 
 Use `linux-x64`, `linux-arm`, `linux-arm64`, `osx-x64`, `osx-arm64`, `win-x64`, or `win-arm64` as the runtime identifier. If you only need the SDK assemblies and do not want an apphost copied to the output, leave `PowerShellSDKAppHostLayout` unset.
 
+The Windows apphost and installer, and the macOS launcher, use the PowerShell icon recolored with Devolutions brand blue (`#0068C3`); the shared vector artwork is `package/powershell-icon.svg`. Replacing the icon removes the original multi-pwsh executable signature; signed releases re-sign the modified apphost, while local builds and unsigned dry runs leave it unsigned.
+
 ### PowerShell CLI
 
 Use the PowerShell CLI archives when you want a ready-to-run, self-contained PowerShell layout without creating a .NET project. Download the archive for the target platform from the latest GitHub release:
@@ -141,7 +143,7 @@ The release workflow builds x64 and ARM64 MSI installers from its release-ready 
 
 You can also run `.github/workflows/powershell-msi.yml` separately with a **published** release tag such as `v7.6.3.2`, or leave `release_tag` blank and provide a CLI workflow `cli_run_id` plus `package_version` (for example `7.6.6.0`). Standalone MSI signing defaults to enabled and requires code signing secrets in the selected GitHub environment; disable `sign_msi` only for unsigned test artifacts. Signing an MSI does not sign previously unsigned binaries inside a CLI artifact.
 
-Packaging sources live in the top-level `package/` directory so other distribution formats can be added beside `package/msi/`. The installer source and image assets were copied from PowerShell's MIT-licensed 7.6.6 installer and migrated to WiX 4; the upstream copyright and permission notice appears below. `package/msi/New-PowerShellDistroMsi.ps1` harvests the existing CLI layout, not the upstream PowerShell build output. It restores pinned WiX 4 packages from NuGet.org and can be run locally on Windows with a previously unpacked Windows CLI archive:
+Packaging sources live in the top-level `package/` directory so other distribution formats can be added beside `package/msi/`. The installer source and image assets were adapted from PowerShell's MIT-licensed 7.6.6 installer and migrated to WiX 4; the upstream copyright and permission notice appears below. `package/msi/New-PowerShellDistroMsi.ps1` harvests the existing CLI layout, not the upstream PowerShell build output. It restores pinned WiX 4 packages from NuGet.org and can be run locally on Windows with a previously unpacked Windows CLI archive:
 
 ```powershell
 .\package\msi\New-PowerShellDistroMsi.ps1 -PayloadDirectory .\pwsh-cli -PackageVersion 7.6.6.0 -Architecture x64 -OutputDirectory .\output\msi
@@ -201,7 +203,7 @@ You can also run `.github/workflows/powershell-macos-pkg.yml` separately with a 
 ./package/macos/Test-PowerShellDistroMacPkg.ps1 -PkgPath ./output/pkg/Devolutions-PowerShell-7.6.9.2-osx-arm64.pkg -Architecture arm64 -PackageVersion 7.6.9.2
 ```
 
-`Test-PowerShellDistroMacPkg.ps1` validates the expanded distribution, component metadata, and payload. CI additionally passes `-Install`, which uses `sudo installer` on native Intel and Apple silicon runners to verify the receipt, `/usr/local/bin/pwsh`, `$PSHOME`, process architecture, `/etc/shells`, man page, launcher, and stale-file removal on reinstall, and, on Intel, refusal of the arm64 package. Signed CI builds also pass `-RequireNotarization`, which verifies the Developer ID Installer signature, Developer ID Application hardened-runtime signatures and timestamps on every payload Mach-O file, the `pwsh` entitlements, the stapled ticket, and Gatekeeper acceptance; `-RequireSignature` performs the signature checks without notarization. Do not pass `-Install` on a workstation you do not want modified. The launcher icon, installer background, and man page in `package/macos/assets/` were copied from PowerShell's MIT-licensed 7.6.9 sources.
+`Test-PowerShellDistroMacPkg.ps1` validates the expanded distribution, component metadata, and payload. CI additionally passes `-Install`, which uses `sudo installer` on native Intel and Apple silicon runners to verify the receipt, `/usr/local/bin/pwsh`, `$PSHOME`, process architecture, `/etc/shells`, man page, launcher, and stale-file removal on reinstall, and, on Intel, refusal of the arm64 package. Signed CI builds also pass `-RequireNotarization`, which verifies the Developer ID Installer signature, Developer ID Application hardened-runtime signatures and timestamps on every payload Mach-O file, the `pwsh` entitlements, the stapled ticket, and Gatekeeper acceptance; `-RequireSignature` performs the signature checks without notarization. Do not pass `-Install` on a workstation you do not want modified. The installer background and man page in `package/macos/assets/` were copied from PowerShell's MIT-licensed 7.6.9 sources; the launcher icon is recolored from the upstream artwork.
 
 The copied PowerShell installer source and artwork carry this MIT license notice:
 

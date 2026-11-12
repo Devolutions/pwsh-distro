@@ -538,12 +538,16 @@ try {
 
     $AppHostPackageRoot = Join-Path $SdkStagePath "tools\apphost\$AppHostRuntimeIdentifier"
     New-Item $AppHostPackageRoot -ItemType Directory -Force | Out-Null
-    Copy-Item -LiteralPath $AppHostAsset.SourcePath -Destination (Join-Path $AppHostPackageRoot $AppHostAsset.AppHostFileName) -Force
+    $PackagedAppHostPath = Join-Path $AppHostPackageRoot $AppHostAsset.AppHostFileName
+    Copy-Item -LiteralPath $AppHostAsset.SourcePath -Destination $PackagedAppHostPath -Force
+    if ($AppHostRuntimeIdentifier -like 'win-*') {
+      & (Join-Path $RepositoryRoot 'eng\Set-PowerShellAppHostIcon.ps1') -ExecutablePath $PackagedAppHostPath
+    }
 
     $NativeAppHostPackageRoot = Join-Path $SdkStagePath "runtimes\$AppHostRuntimeIdentifier\native"
     New-Item $NativeAppHostPackageRoot -ItemType Directory -Force | Out-Null
     $SharedPayloadAppHostPath = Join-Path $NativeAppHostPackageRoot $AppHostAsset.AppHostFileName
-    Copy-Item -LiteralPath $AppHostAsset.SourcePath -Destination $SharedPayloadAppHostPath -Force
+    Copy-Item -LiteralPath $PackagedAppHostPath -Destination $SharedPayloadAppHostPath -Force
 
     foreach ($AppHostFile in @(
         @{ Name = 'pwsh.dll'; Required = $true },

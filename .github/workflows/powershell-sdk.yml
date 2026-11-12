@@ -764,6 +764,10 @@ jobs:
           if (-not (Test-Path $ExecutableDestinationPath -PathType Leaf)) {
             throw "Failed to stage multi-pwsh apphost executable for '$Rid' at $ExecutableDestinationPath"
           }
+          if ($Rid -like 'win-*') {
+            & (Join-Path $PWD '../eng/Test-PowerShellAppHostIcon.ps1') -AppHostPath $AppHostAsset.SourcePath
+            & (Join-Path $PWD '../eng/Set-PowerShellAppHostIcon.ps1') -ExecutablePath $ExecutableDestinationPath
+          }
 
           foreach ($FileName in @("pwsh.dll", "pwsh.runtimeconfig.json")) {
             $SourcePath = Join-Path $OutputPath $FileName
@@ -784,7 +788,7 @@ jobs:
           $RuntimeNativeStagePath = Join-Path $StagePath "runtime-native"
           New-Item $RuntimeNativeStagePath -ItemType Directory -Force | Out-Null
           $RuntimeNativeAppHostPath = Join-Path $RuntimeNativeStagePath $AppHostAsset.AppHostFileName
-          Copy-Item -LiteralPath $AppHostAsset.SourcePath -Destination $RuntimeNativeAppHostPath -Force
+          Copy-Item -LiteralPath $ExecutableDestinationPath -Destination $RuntimeNativeAppHostPath -Force
 
           $LocalizedResourcesStagePath = Join-Path $StagePath "localized-resources"
           Get-ChildItem -LiteralPath $OutputPath -Directory |
@@ -826,6 +830,10 @@ jobs:
           $RuntimeNativeFilePath = Join-Path $StagePath "runtime-native/${{matrix.executable}}"
           if (-not (Test-Path $RuntimeNativeFilePath -PathType Leaf)) {
             throw "Missing staged shared-payload runtime-native apphost file for ${{matrix.rid}}: $RuntimeNativeFilePath"
+          }
+          $RootAppHostPath = Join-Path $StagePath "${{matrix.executable}}"
+          if ((Get-FileHash -LiteralPath $RootAppHostPath).Hash -ne (Get-FileHash -LiteralPath $RuntimeNativeFilePath).Hash) {
+            throw "Root and runtime-native apphosts differ for ${{matrix.rid}}."
           }
 
       - name: Upload PowerShell apphost
