@@ -2,12 +2,19 @@
 param(
   [string] $InstallLocation = $PSScriptRoot,
 
-  [ValidateSet('Install', 'Uninstall')]
+  [ValidateSet('Install', 'Uninstall', 'Rollback')]
   [string] $Mode = 'Install',
 
+  [Alias('En')]
   [string] $EnableRemoting = '0',
 
+  [Alias('Net')]
   [string] $SkipNetworkProfileCheck = '0',
+
+  [Alias('Snap')]
+  [string] $SnapshotId,
+
+  [string] $SnapshotRoot,
 
   [string] $MajorVersion = "$($PSVersionTable.PSVersion.Major)",
 
@@ -123,8 +130,8 @@ function Test-IsDevolutionsInstallDirectory {
 
   if (-not [string]::IsNullOrWhiteSpace($CurrentInstallDirectory)) {
     try {
-      $NormalizedCurrent = [System.IO.Path]::GetFullPath((Expand-WinRmPluginPath -PathValue $CurrentInstallDirectory -ProgramFilesRoot $ProgramFilesRoot)).TrimEnd('\', '/')
-      if ($ExpandedTarget.Equals($NormalizedCurrent, [System.StringComparison]::OrdinalIgnoreCase)) {
+      $NormalizedInstallDirectory = [System.IO.Path]::GetFullPath((Expand-WinRmPluginPath -PathValue $CurrentInstallDirectory -ProgramFilesRoot $ProgramFilesRoot)).TrimEnd('\', '/')
+      if ($ExpandedTarget.Equals($NormalizedInstallDirectory, [System.StringComparison]::OrdinalIgnoreCase)) {
         return $true
       }
     } catch {
@@ -326,8 +333,10 @@ function Set-WinRmPluginRegistryEntry {
   }
 
   $Architecture = if ([System.Environment]::Is64BitOperatingSystem) { '64' } else { '32' }
+  $EscapedEndpointName = [System.Security.SecurityElement]::Escape($EndpointName)
+  $EscapedPluginFileName = [System.Security.SecurityElement]::Escape($PluginFileName)
   $ConfigXml = @"
-<PlugInConfiguration xmlns="http://schemas.microsoft.com/wbem/wsman/1/config/PluginConfiguration" Name="$EndpointName" Filename="$PluginFileName" SDKVersion="2" XmlRenderingType="text" Enabled="True" OutputBufferingMode="Block" ProcessIdleTimeoutSec="0" Architecture="$Architecture" UseSharedProcess="false" RunAsUser="" RunAsPassword="" AutoRestart="false">
+<PlugInConfiguration xmlns="http://schemas.microsoft.com/wbem/wsman/1/config/PluginConfiguration" Name="$EscapedEndpointName" Filename="$EscapedPluginFileName" SDKVersion="2" XmlRenderingType="text" Enabled="True" OutputBufferingMode="Block" ProcessIdleTimeoutSec="0" Architecture="$Architecture" UseSharedProcess="false" RunAsUser="" RunAsPassword="" AutoRestart="false">
   <InitializationParameters>
     <Param Name="PSVersion" Value="$PluginPsVersion" />
   </InitializationParameters>
@@ -379,7 +388,7 @@ function Remove-MatchingLegacyEndpointsAndCopies {
     foreach ($Key in @(Get-ChildItem -LiteralPath $RegistryRoot -ErrorAction SilentlyContinue)) {
       $Name = $Key.PSChildName
       $IsDefaultMatch = ($IncludeDefaultEndpoint -and -not [string]::IsNullOrWhiteSpace($DefaultEndpointName) -and $Name -ieq $DefaultEndpointName)
-      $IsLegacyVersionMatch = $Name.StartsWith($LegacyPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+      $IsLegacyVersionMatch = $Name -match ('^' + [regex]::Escape($LegacyPrefix) + '\d+\.\d+(?:\.\d+)?$')
       if (-not $IsDefaultMatch -and -not $IsLegacyVersionMatch) {
         continue
       }
@@ -436,7 +445,7 @@ function Remove-MatchingLegacyEndpointsAndCopies {
     $Leaf = $Candidate.Name
     if ($Leaf -ine $Major -and
         $Leaf -ine "$Major-preview" -and
-        -not $Leaf.StartsWith("$Major.", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $Leaf -notmatch ('^' + [regex]::Escape($Major) + '\.\d+\.\d+(?:\.\d+)?$')) {
       continue
     }
 
@@ -489,6 +498,213 @@ function Restart-WinRmIfRunning {
   }
 }
 
+function Get-RemotingSnapshotDirectory {
+  param([Parameter(Mandatory)] [string] $Id)
+
+  try {
+    $SnapshotGuid = [guid]::Parse($Id)
+  } catch {
+    throw "SnapshotId must be a GUID: $Id"
+  }
+
+  $Root = if ([string]::IsNullOrWhiteSpace($SnapshotRoot)) {
+    Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'Devolutions\PowerShell\RemotingRollback'
+  } else {
+    $SnapshotRoot
+  }
+  return Join-Path $Root $SnapshotGuid.ToString('B')
+}
+
+function Get-RegistryKeySnapshot {
+  param([Parameter(Mandatory)] [string] $KeyPath)
+
+  $Key = Get-Item -LiteralPath $KeyPath -ErrorAction Stop
+  $Values = @(
+    foreach ($ValueName in $Key.GetValueNames()) {
+      $Kind = $Key.GetValueKind($ValueName)
+      $Value = $Key.GetValue($ValueName, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+      if ($Kind -eq [Microsoft.Win32.RegistryValueKind]::Binary -or $Kind -eq [Microsoft.Win32.RegistryValueKind]::None) {
+        $Value = [Convert]::ToBase64String([byte[]] $Value)
+      }
+
+      [pscustomobject]@{
+        Name = $ValueName
+        Kind = $Kind.ToString()
+        Value = $Value
+      }
+    }
+  )
+  $Children = @(
+    foreach ($ChildName in $Key.GetSubKeyNames()) {
+      Get-RegistryKeySnapshot -KeyPath (Join-Path $KeyPath $ChildName)
+    }
+  )
+
+  return [pscustomobject]@{
+    Name = Split-Path -Leaf $KeyPath
+    Values = $Values
+    Children = $Children
+  }
+}
+
+function Restore-RegistryKeySnapshot {
+  param(
+    [Parameter(Mandatory)] [string] $ParentPath,
+    [Parameter(Mandatory)] $Snapshot
+  )
+
+  $KeyPath = Join-Path $ParentPath $Snapshot.Name
+  $PathMatch = [regex]::Match($KeyPath, '^(?<Hive>HKLM|HKCU):\\(?<SubKey>.*)$')
+  if (-not $PathMatch.Success) {
+    throw "Unsupported registry path in remoting snapshot: $KeyPath"
+  }
+  $Hive = if ($PathMatch.Groups['Hive'].Value -eq 'HKLM') {
+    [Microsoft.Win32.RegistryHive]::LocalMachine
+  } else {
+    [Microsoft.Win32.RegistryHive]::CurrentUser
+  }
+  $BaseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, [Microsoft.Win32.RegistryView]::Default)
+  $Key = $null
+  try {
+    $Key = $BaseKey.CreateSubKey($PathMatch.Groups['SubKey'].Value.Replace('/', '\'))
+    foreach ($Value in @($Snapshot.Values)) {
+      $Kind = [Microsoft.Win32.RegistryValueKind] $Value.Kind
+      $Data = $Value.Value
+      switch ($Kind) {
+        ([Microsoft.Win32.RegistryValueKind]::Binary) { $Data = [Convert]::FromBase64String([string] $Data); break }
+        ([Microsoft.Win32.RegistryValueKind]::None) { $Data = [Convert]::FromBase64String([string] $Data); break }
+        ([Microsoft.Win32.RegistryValueKind]::MultiString) { $Data = [string[]] @($Data); break }
+        ([Microsoft.Win32.RegistryValueKind]::DWord) { $Data = [int] $Data; break }
+        ([Microsoft.Win32.RegistryValueKind]::QWord) { $Data = [long] $Data; break }
+      }
+      $Key.SetValue([string] $Value.Name, $Data, $Kind)
+    }
+
+    foreach ($Child in @($Snapshot.Children)) {
+      Restore-RegistryKeySnapshot -ParentPath $KeyPath -Snapshot $Child
+    }
+  } finally {
+    if ($null -ne $Key) {
+      $Key.Dispose()
+    }
+    $BaseKey.Dispose()
+  }
+}
+
+function Save-RemotingSnapshot {
+  param(
+    [Parameter(Mandatory)] [string] $Id,
+    [Parameter(Mandatory)] [string] $RegistryRoot,
+    [AllowNull()] [string] $System32PsRoot,
+    [Parameter(Mandatory)] [string] $Major,
+    [Parameter(Mandatory)] [string] $DefaultEndpointName
+  )
+
+  $Directory = Get-RemotingSnapshotDirectory -Id $Id
+  if (Test-Path -LiteralPath $Directory) {
+    Remove-Item -LiteralPath $Directory -Recurse -Force
+  }
+
+  $Acl = New-Object System.Security.AccessControl.DirectorySecurity
+  $Acl.SetAccessRuleProtection($true, $false)
+  $SnapshotSids = @('S-1-5-18', 'S-1-5-32-544', [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value) | Select-Object -Unique
+  foreach ($Sid in $SnapshotSids) {
+    $Rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+      [System.Security.Principal.SecurityIdentifier]::new($Sid),
+      [System.Security.AccessControl.FileSystemRights]::FullControl,
+      ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit),
+      [System.Security.AccessControl.PropagationFlags]::None,
+      [System.Security.AccessControl.AccessControlType]::Allow
+    )
+    $Acl.AddAccessRule($Rule)
+  }
+  $null = [System.IO.Directory]::CreateDirectory((Split-Path -Parent $Directory))
+  New-Item -Path $Directory -ItemType Directory -Force | Out-Null
+  Set-Acl -LiteralPath $Directory -AclObject $Acl
+
+  $LegacyPrefix = "PowerShell.$Major."
+  $RegistryEntries = @(
+    if (Test-Path -LiteralPath $RegistryRoot) {
+      foreach ($Key in @(Get-ChildItem -LiteralPath $RegistryRoot -ErrorAction Stop)) {
+        if ($Key.PSChildName -ieq $DefaultEndpointName -or
+            $Key.PSChildName -match ('^' + [regex]::Escape($LegacyPrefix) + '\d+\.\d+(?:\.\d+)?$')) {
+          Get-RegistryKeySnapshot -KeyPath $Key.PSPath
+        }
+      }
+    }
+  )
+
+  $DirectoryEntries = @()
+  if (-not [string]::IsNullOrWhiteSpace($System32PsRoot) -and (Test-Path -LiteralPath $System32PsRoot -PathType Container)) {
+    $Index = 0
+    foreach ($Candidate in @(Get-ChildItem -LiteralPath $System32PsRoot -Directory -ErrorAction Stop)) {
+      if ($Candidate.Name -ine $Major -and
+          $Candidate.Name -ine "$Major-preview" -and
+          $Candidate.Name -notmatch ('^' + [regex]::Escape($Major) + '\.\d+\.\d+(?:\.\d+)?$')) {
+        continue
+      }
+
+      $Files = @()
+      foreach ($Name in @('pwrshplugin.dll', 'RemotePowerShellConfig.txt')) {
+        $FilePath = Join-Path $Candidate.FullName $Name
+        if (Test-Path -LiteralPath $FilePath -PathType Leaf) {
+          $BackupName = "$Index-$Name"
+          Copy-Item -LiteralPath $FilePath -Destination (Join-Path $Directory $BackupName) -Force
+          $Files += [pscustomobject]@{ Name = $Name; BackupName = $BackupName }
+        }
+      }
+
+      $DirectoryEntries += [pscustomobject]@{
+        Path = $Candidate.FullName
+        Files = $Files
+      }
+      $Index++
+    }
+  }
+
+  [pscustomobject]@{
+    RegistryRoot = $RegistryRoot
+    RegistryNames = @($DefaultEndpointName, (Get-ChildItem -LiteralPath $RegistryRoot -ErrorAction SilentlyContinue | Where-Object {
+      $_.PSChildName -match ('^' + [regex]::Escape($LegacyPrefix) + '\d+\.\d+(?:\.\d+)?$')
+    } | ForEach-Object { $_.PSChildName }))
+    RegistryEntries = $RegistryEntries
+    Directories = $DirectoryEntries
+  } | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath (Join-Path $Directory 'state.json') -Encoding utf8
+}
+
+function Restore-RemotingSnapshot {
+  param([Parameter(Mandatory)] [string] $Id)
+
+  $Directory = Get-RemotingSnapshotDirectory -Id $Id
+  $StatePath = Join-Path $Directory 'state.json'
+  if (-not (Test-Path -LiteralPath $StatePath -PathType Leaf)) {
+    return
+  }
+
+  $State = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+  foreach ($Name in @($State.RegistryNames)) {
+    $KeyPath = Join-Path $State.RegistryRoot $Name
+    if (Test-Path -LiteralPath $KeyPath) {
+      Remove-Item -LiteralPath $KeyPath -Recurse -Force
+    }
+  }
+  foreach ($Entry in @($State.RegistryEntries)) {
+    Restore-RegistryKeySnapshot -ParentPath $State.RegistryRoot -Snapshot $Entry
+  }
+
+  foreach ($Entry in @($State.Directories)) {
+    if (-not (Test-Path -LiteralPath $Entry.Path -PathType Container)) {
+      New-Item -Path $Entry.Path -ItemType Directory -Force | Out-Null
+    }
+    foreach ($File in @($Entry.Files)) {
+      Copy-Item -LiteralPath (Join-Path $Directory $File.BackupName) -Destination (Join-Path $Entry.Path $File.Name) -Force
+    }
+  }
+
+  Remove-Item -LiteralPath $Directory -Recurse -Force
+  Restart-WinRmIfRunning
+}
+
 $InstallLocation = $InstallLocation.Trim().TrimEnd('"')
 if ([string]::IsNullOrWhiteSpace($InstallLocation)) {
   throw 'InstallLocation is required when configuring PowerShell remoting.'
@@ -498,6 +714,22 @@ $DefaultEndpointName = if ([string]::IsNullOrWhiteSpace($PreReleaseLabel)) {
   "PowerShell.$MajorVersion"
 } else {
   "PowerShell.$MajorVersion-preview"
+}
+
+if ($Mode -eq 'Rollback') {
+  if (-not [string]::IsNullOrWhiteSpace($SnapshotId)) {
+    Restore-RemotingSnapshot -Id $SnapshotId
+  }
+  return
+}
+
+if (-not [string]::IsNullOrWhiteSpace($SnapshotId)) {
+  Save-RemotingSnapshot `
+    -Id $SnapshotId `
+    -RegistryRoot $WsManPluginRegistryPath `
+    -System32PsRoot $System32PowerShellDirectory `
+    -Major $MajorVersion `
+    -DefaultEndpointName $DefaultEndpointName
 }
 
 if ($Mode -eq 'Uninstall') {
@@ -567,7 +799,8 @@ if (Test-Path -LiteralPath $DefaultKeyPath) {
             -PluginFileValue $CurrentFileName `
             -CurrentInstallDirectory $ResolvedInstallLocation `
             -ProgramFilesRoot $ProgramFilesDirectory `
-            -System32PsRoot $System32PowerShellDirectory) {
+            -System32PsRoot $System32PowerShellDirectory `
+            -IncludeMissingTargets) {
         if (Set-WinRmPluginRegistryEntry `
               -RegistryRoot $WsManPluginRegistryPath `
               -EndpointName $DefaultEndpointName `

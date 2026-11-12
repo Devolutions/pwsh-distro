@@ -57,6 +57,88 @@ function Assert-PluginConfig {
   }
 }
 
+$ReviewRegressionFailures = [System.Collections.Generic.List[string]]::new()
+
+function Invoke-ReviewRegressionCase {
+  param(
+    [Parameter(Mandatory)] [string] $Name,
+    [Parameter(Mandatory)] [scriptblock] $Body,
+    [Parameter(Mandatory)] [AllowEmptyCollection()] [System.Collections.Generic.List[string]] $Failures
+  )
+
+  try {
+    & $Body
+    Write-Host "PASS $Name"
+  } catch {
+    $Failure = "$Name`: $($_.Exception.Message) $($_.ScriptStackTrace)"
+    $Failures.Add($Failure)
+    Write-Host "FAIL $Failure"
+  }
+}
+
+function Set-TestPluginConfig {
+  param(
+    [Parameter(Mandatory)] [string] $RegistryRoot,
+    [Parameter(Mandatory)] [string] $EndpointName,
+    [Parameter(Mandatory)] [string] $Filename,
+    [Parameter(Mandatory)] [string] $PsVersion
+  )
+
+  $KeyPath = Join-Path $RegistryRoot $EndpointName
+  New-Item -Path $KeyPath -Force | Out-Null
+  $Document = [xml] @'
+<PlugInConfiguration xmlns="http://schemas.microsoft.com/wbem/wsman/1/config/PluginConfiguration" Name="" Filename="" SDKVersion="2" XmlRenderingType="text" Enabled="True">
+  <InitializationParameters>
+    <Param Name="PSVersion" Value="" />
+  </InitializationParameters>
+</PlugInConfiguration>
+'@
+  $Document.PlugInConfiguration.SetAttribute('Name', $EndpointName)
+  $Document.PlugInConfiguration.SetAttribute('Filename', $Filename)
+  $Document.PlugInConfiguration.InitializationParameters.Param.SetAttribute('Value', $PsVersion)
+  Set-ItemProperty -LiteralPath $KeyPath -Name ConfigXML -Value $Document.OuterXml
+}
+
+function Assert-SafeDeferredRemotingCommand {
+  $ProductPath = Join-Path $PSScriptRoot 'assets\wix\Product.wxs'
+  [xml] $Product = Get-Content -LiteralPath $ProductPath -Raw
+  $CommandSetters = @($Product.SelectNodes("//*[local-name()='SetProperty' and @Id='EnablePSRemoting']"))
+  if ($CommandSetters.Count -ne 1) {
+    throw "Expected one EnablePSRemoting deferred-command setter, found $($CommandSetters.Count)."
+  }
+
+  $Command = [string] $CommandSetters[0].GetAttribute('Value')
+  if ($Command -match '(?i)\[SKIP_NETWORK_PROFILE_CHECK\]') {
+    throw 'The deferred command interpolates the untrusted SKIP_NETWORK_PROFILE_CHECK property directly.'
+  }
+  if ($Command -notmatch '(?i)-(?:SkipNetworkProfileCheck|Net)\s+"?\[(?<SafeProperty>[A-Z][A-Z0-9_]*)\]"?') {
+    throw 'The deferred command does not pass SkipNetworkProfileCheck through a named normalized property.'
+  }
+
+  $SafeProperty = $Matches.SafeProperty
+  $Assignments = @(
+    $Product.SelectNodes("//*[local-name()='SetProperty']") |
+      Where-Object { $_.GetAttribute('Id') -ieq $SafeProperty }
+  )
+  if ($Assignments.Count -lt 2) {
+    throw "Expected execute-sequence normalization assignments for '$SafeProperty' to both 0 and 1."
+  }
+
+  $Values = @($Assignments | ForEach-Object { $_.GetAttribute('Value') } | Sort-Object -Unique)
+  if ($Values.Count -ne 2 -or '0' -notin $Values -or '1' -notin $Values) {
+    throw "Normalized property '$SafeProperty' must be assigned only the controlled values 0 and 1."
+  }
+  $OneAssignment = @($Assignments | Where-Object { $_.GetAttribute('Value') -eq '1' })
+  if ($OneAssignment.Count -ne 1 -or
+      $OneAssignment[0].GetAttribute('Sequence') -ine 'execute' -or
+      $OneAssignment[0].GetAttribute('Condition') -notmatch '(?i)\bSKIP_NETWORK_PROFILE_CHECK\b') {
+    throw "The value 1 for '$SafeProperty' must be conditionally assigned from the raw property in the execute sequence."
+  }
+  if (@($Assignments | Where-Object { $_.GetAttribute('Value') -eq '0' -and $_.GetAttribute('Sequence') -ine 'execute' }).Count -gt 0) {
+    throw "The safe default value 0 for '$SafeProperty' must be assigned in the execute sequence."
+  }
+}
+
 try {
   $FakeProgramFiles = Join-Path $TempRoot 'Program Files'
   $DevolutionsShared = Join-Path $FakeProgramFiles 'Devolutions\PowerShell\7'
@@ -232,6 +314,275 @@ try {
     -ExpectedFilename '%ProgramFiles%\PowerShell\7\pwrshplugin.dll' `
     -ExpectedPsVersion '7'
   Write-Host 'PASS UninstallRemovesDevolutionsEndpointAndPreservesMicrosoftEndpoint'
+
+  Invoke-ReviewRegressionCase -Name 'UntrustedSkipProfileValueIsNormalizedBeforeDeferredCommand' -Failures $ReviewRegressionFailures -Body {
+    Assert-SafeDeferredRemotingCommand
+  }
+
+  Invoke-ReviewRegressionCase -Name 'UpgradeMigratesOnlyEndpointForPreviousCustomInstallPath' -Failures $ReviewRegressionFailures -Body {
+    $CaseRoot = Join-Path $TempRoot 'custom-upgrade'
+    $CaseRegistry = Join-Path $RegRoot 'CustomUpgrade'
+    $OldInstall = Join-Path $CaseRoot 'Tools\PowerShell\7-x64'
+    $NewInstall = Join-Path $CaseRoot 'Tools\PowerShell\7'
+    $OtherInstall = Join-Path $CaseRoot 'OtherPowerShell\7'
+    foreach ($Directory in @($OldInstall, $NewInstall, $OtherInstall)) {
+      New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+      Set-Content -LiteralPath (Join-Path $Directory 'pwrshplugin.dll') -Value 'stub' -Encoding ascii
+      Set-Content -LiteralPath (Join-Path $Directory 'System.Management.Automation.dll') -Value 'stub' -Encoding ascii
+    }
+    New-Item -Path $CaseRegistry -Force | Out-Null
+    Set-TestPluginConfig -RegistryRoot $CaseRegistry -EndpointName 'PowerShell.7' `
+      -Filename (Join-Path $OldInstall 'pwrshplugin.dll') -PsVersion '7.6'
+    Set-TestPluginConfig -RegistryRoot $CaseRegistry -EndpointName 'PowerShell.7.6.8' `
+      -Filename (Join-Path $OtherInstall 'pwrshplugin.dll') -PsVersion '7.6'
+    $OtherConfigBefore = (Get-ItemProperty -LiteralPath (Join-Path $CaseRegistry 'PowerShell.7.6.8') -Name ConfigXML).ConfigXML
+
+    Remove-Item -LiteralPath $OldInstall -Recurse -Force
+    if (Test-Path -LiteralPath $OldInstall) {
+      throw 'The previous custom install directory was not removed before simulating the upgrade.'
+    }
+
+    & $ScriptPath `
+      -InstallLocation $NewInstall `
+      -Mode Install `
+      -EnableRemoting '0' `
+      -MajorVersion '7' `
+      -PreReleaseLabel '' `
+      -WsManPluginRegistryPath $CaseRegistry `
+      -System32PowerShellDirectory (Join-Path $CaseRoot 'System32\PowerShell') `
+      -ProgramFilesDirectory (Join-Path $CaseRoot 'Program Files') `
+      -SkipServiceControl
+
+    $Migrated = [xml] (Get-ItemProperty -LiteralPath (Join-Path $CaseRegistry 'PowerShell.7') -Name ConfigXML).ConfigXML
+    if ($Migrated.PlugInConfiguration.Filename -cne (Join-Path $NewInstall 'pwrshplugin.dll') -or
+        $Migrated.PlugInConfiguration.InitializationParameters.Param.GetAttribute('Value') -cne '7') {
+      throw 'The endpoint targeting the previous custom install was not migrated to the new custom path and major version.'
+    }
+    $OtherConfigAfter = (Get-ItemProperty -LiteralPath (Join-Path $CaseRegistry 'PowerShell.7.6.8') -Name ConfigXML).ConfigXML
+    if ($OtherConfigAfter -cne $OtherConfigBefore) {
+      throw 'An endpoint targeting a different install was changed during migration.'
+    }
+  }
+
+  Invoke-ReviewRegressionCase -Name 'NewEndpointEscapesAmpersandInFilenameAndProducesValidConfigXml' -Failures $ReviewRegressionFailures -Body {
+    $CaseRoot = Join-Path $TempRoot 'xml-special'
+    $CaseRegistry = Join-Path $RegRoot 'XmlSpecial'
+    $SpecialInstall = Join-Path $CaseRoot 'A&B\PowerShell\7'
+    New-Item -ItemType Directory -Path $SpecialInstall -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $SpecialInstall 'pwrshplugin.dll') -Value 'stub' -Encoding ascii
+    Set-Content -LiteralPath (Join-Path $SpecialInstall 'System.Management.Automation.dll') -Value 'stub' -Encoding ascii
+    New-Item -Path $CaseRegistry -Force | Out-Null
+
+    & $ScriptPath `
+      -InstallLocation $SpecialInstall `
+      -Mode Install `
+      -EnableRemoting '1' `
+      -MajorVersion '7' `
+      -PreReleaseLabel '' `
+      -WsManPluginRegistryPath $CaseRegistry `
+      -System32PowerShellDirectory (Join-Path $CaseRoot 'System32\PowerShell') `
+      -ProgramFilesDirectory (Join-Path $CaseRoot 'Program Files') `
+      -SkipServiceControl
+
+    $StoredXml = (Get-ItemProperty -LiteralPath (Join-Path $CaseRegistry 'PowerShell.7') -Name ConfigXML).ConfigXML
+    try {
+      $Document = [xml] $StoredXml
+    } catch {
+      throw "New endpoint ConfigXML is not well-formed XML: $($_.Exception.Message)"
+    }
+    $ExpectedFilename = Join-Path $SpecialInstall 'pwrshplugin.dll'
+    if ($Document.PlugInConfiguration.Filename -cne $ExpectedFilename) {
+      throw "New endpoint Filename was '$($Document.PlugInConfiguration.Filename)', expected '$ExpectedFilename'."
+    }
+  }
+
+  Invoke-ReviewRegressionCase -Name 'CleanupRemovesNumericGeneratedEndpointsAndPreservesCustomJEA' -Failures $ReviewRegressionFailures -Body {
+    $CaseRoot = Join-Path $TempRoot 'endpoint-names'
+    $CaseRegistry = Join-Path $RegRoot 'EndpointNames'
+    $OldInstall = Join-Path $CaseRoot 'Devolutions\PowerShell\7-x64'
+    $NewInstall = Join-Path $CaseRoot 'Devolutions\PowerShell\7'
+    foreach ($Directory in @($OldInstall, $NewInstall)) {
+      New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+      Set-Content -LiteralPath (Join-Path $Directory 'pwrshplugin.dll') -Value 'stub' -Encoding ascii
+      Set-Content -LiteralPath (Join-Path $Directory 'System.Management.Automation.dll') -Value 'stub' -Encoding ascii
+    }
+    New-Item -Path $CaseRegistry -Force | Out-Null
+    foreach ($Endpoint in @('PowerShell.7.6.8', 'PowerShell.7.6.8.9')) {
+      Set-TestPluginConfig -RegistryRoot $CaseRegistry -EndpointName $Endpoint `
+        -Filename (Join-Path $OldInstall 'pwrshplugin.dll') -PsVersion '7.6'
+    }
+    Set-TestPluginConfig -RegistryRoot $CaseRegistry -EndpointName 'PowerShell.7.JEA' `
+      -Filename (Join-Path $OldInstall 'pwrshplugin.dll') -PsVersion '7.6'
+    $JeaConfigBefore = (Get-ItemProperty -LiteralPath (Join-Path $CaseRegistry 'PowerShell.7.JEA') -Name ConfigXML).ConfigXML
+
+    & $ScriptPath `
+      -InstallLocation $NewInstall `
+      -Mode Install `
+      -EnableRemoting '1' `
+      -MajorVersion '7' `
+      -PreReleaseLabel '' `
+      -WsManPluginRegistryPath $CaseRegistry `
+      -System32PowerShellDirectory (Join-Path $CaseRoot 'System32\PowerShell') `
+      -ProgramFilesDirectory (Join-Path $CaseRoot 'Program Files') `
+      -SkipServiceControl
+
+    foreach ($Endpoint in @('PowerShell.7.6.8', 'PowerShell.7.6.8.9')) {
+      if (Test-Path -LiteralPath (Join-Path $CaseRegistry $Endpoint)) {
+        throw "Automatically generated endpoint '$Endpoint' was not cleaned up."
+      }
+    }
+    $JeaKey = Join-Path $CaseRegistry 'PowerShell.7.JEA'
+    if (-not (Test-Path -LiteralPath $JeaKey)) {
+      throw 'Custom endpoint PowerShell.7.JEA was removed by generated-endpoint cleanup.'
+    }
+    $JeaConfigAfter = (Get-ItemProperty -LiteralPath $JeaKey -Name ConfigXML).ConfigXML
+    if ($JeaConfigAfter -cne $JeaConfigBefore) {
+      throw 'Custom endpoint PowerShell.7.JEA was modified by generated-endpoint cleanup.'
+    }
+  }
+
+  Invoke-ReviewRegressionCase -Name 'RollbackRestoresEndpointConfigLegacyFilesAndReloadsWinRm' -Failures $ReviewRegressionFailures -Body {
+    $CaseRoot = Join-Path $TempRoot 'rollback'
+    $OldInstall = Join-Path $CaseRoot 'Devolutions\PowerShell\7-x64'
+    $NewInstall = Join-Path $CaseRoot 'Devolutions\PowerShell\7'
+    foreach ($Directory in @($OldInstall, $NewInstall)) {
+      New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+      Set-Content -LiteralPath (Join-Path $Directory 'pwrshplugin.dll') -Value 'stub' -Encoding ascii
+      Set-Content -LiteralPath (Join-Path $Directory 'System.Management.Automation.dll') -Value 'stub' -Encoding ascii
+    }
+
+    $ProductPath = Join-Path $PSScriptRoot 'assets\wix\Product.wxs'
+    [xml] $Product = Get-Content -LiteralPath $ProductPath -Raw
+    foreach ($Pair in @(
+      @{ Forward = 'EnablePSRemoting'; Rollback = 'RollbackEnablePSRemoting' },
+      @{ Forward = 'DisablePSRemotingOnUninstall'; Rollback = 'RollbackDisablePSRemotingOnUninstall' }
+    )) {
+      $ForwardAction = @($Product.SelectNodes("//*[local-name()='CustomAction']") |
+        Where-Object { $_.GetAttribute('Id') -eq $Pair.Forward })
+      $RollbackAction = @($Product.SelectNodes("//*[local-name()='CustomAction']") |
+        Where-Object { $_.GetAttribute('Id') -eq $Pair.Rollback })
+      $RollbackCommand = @($Product.SelectNodes("//*[local-name()='SetProperty']") |
+        Where-Object { $_.GetAttribute('Id') -eq $Pair.Rollback })
+      if ($ForwardAction.Count -ne 1 -or $ForwardAction[0].GetAttribute('Execute') -ine 'deferred' -or
+          $RollbackAction.Count -ne 1 -or $RollbackAction[0].GetAttribute('Execute') -ine 'rollback' -or
+          $RollbackCommand.Count -ne 1 -or $RollbackCommand[0].GetAttribute('Value') -notmatch '(?i)-Mode Rollback\s+.*-(?:SnapshotId|Snap)\s+') {
+        throw "Deferred action '$($Pair.Forward)' does not have a rollback action using the remoting snapshot."
+      }
+    }
+
+    $PriorGetService = Get-Item Function:\Get-Service -ErrorAction SilentlyContinue
+    $PriorRestartService = Get-Item Function:\Restart-Service -ErrorAction SilentlyContinue
+    $WinRmServiceState = [pscustomobject]@{ RestartCount = 0 }
+    $GetServiceMock = {
+      param([string] $Name)
+      [pscustomobject]@{ Status = 'Running' }
+    }.GetNewClosure()
+    $RestartServiceMock = {
+      param([string] $Name, [switch] $Force, [switch] $Confirm, [string] $ErrorAction)
+      $WinRmServiceState.RestartCount++
+    }.GetNewClosure()
+    Set-Item Function:\Get-Service -Value $GetServiceMock
+    Set-Item Function:\Restart-Service -Value $RestartServiceMock
+
+    try {
+      foreach ($Operation in @('Install', 'Uninstall')) {
+        $CaseRegistry = Join-Path $RegRoot "Rollback$Operation"
+        $CaseSystem32 = Join-Path $CaseRoot "$Operation\System32\PowerShell"
+        $LegacySys32 = Join-Path $CaseSystem32 '7.6.8'
+        $SnapshotId = [guid]::NewGuid().ToString()
+        $SnapshotRoot = Join-Path $CaseRoot "$Operation\Snapshots"
+        New-Item -ItemType Directory -Path $LegacySys32 -Force | Out-Null
+        $LegacyDll = Join-Path $LegacySys32 'pwrshplugin.dll'
+        $LegacyConfig = Join-Path $LegacySys32 'RemotePowerShellConfig.txt'
+        Set-Content -LiteralPath $LegacyDll -Value "legacy-$Operation" -Encoding ascii
+        Set-Content -LiteralPath $LegacyConfig -Value "PSHOMEDIR=$OldInstall`r`nCORECLRDIR=$OldInstall" -Encoding utf8
+        New-Item -Path $CaseRegistry -Force | Out-Null
+        Set-TestPluginConfig -RegistryRoot $CaseRegistry -EndpointName 'PowerShell.7' `
+          -Filename (Join-Path $OldInstall 'pwrshplugin.dll') -PsVersion '7.6'
+        Set-TestPluginConfig -RegistryRoot $CaseRegistry -EndpointName 'PowerShell.7.6.8' `
+          -Filename $LegacyDll -PsVersion '7.6'
+        $DefaultConfigBefore = (Get-ItemProperty -LiteralPath (Join-Path $CaseRegistry 'PowerShell.7') -Name ConfigXML).ConfigXML
+        $VersionConfigBefore = (Get-ItemProperty -LiteralPath (Join-Path $CaseRegistry 'PowerShell.7.6.8') -Name ConfigXML).ConfigXML
+        $LegacyDllBefore = Get-Content -LiteralPath $LegacyDll -Raw
+        $LegacyConfigBefore = Get-Content -LiteralPath $LegacyConfig -Raw
+
+        if ($Operation -eq 'Install') {
+          & $ScriptPath `
+            -InstallLocation $NewInstall `
+            -Mode Install `
+            -EnableRemoting '1' `
+            -MajorVersion '7' `
+            -PreReleaseLabel '' `
+            -SnapshotId $SnapshotId `
+            -SnapshotRoot $SnapshotRoot `
+            -WsManPluginRegistryPath $CaseRegistry `
+            -System32PowerShellDirectory $CaseSystem32 `
+            -ProgramFilesDirectory (Join-Path $CaseRoot 'Program Files') `
+            -SkipServiceControl
+        } else {
+          & $ScriptPath `
+            -InstallLocation $OldInstall `
+            -Mode Uninstall `
+            -MajorVersion '7' `
+            -PreReleaseLabel '' `
+            -SnapshotId $SnapshotId `
+            -SnapshotRoot $SnapshotRoot `
+            -WsManPluginRegistryPath $CaseRegistry `
+            -System32PowerShellDirectory $CaseSystem32 `
+            -ProgramFilesDirectory (Join-Path $CaseRoot 'Program Files') `
+            -SkipServiceControl
+        }
+
+        if ((Test-Path -LiteralPath (Join-Path $CaseRegistry 'PowerShell.7.6.8')) -or
+            (Test-Path -LiteralPath $LegacySys32)) {
+          throw "$Operation did not remove the seeded legacy endpoint and System32 copy before rollback."
+        }
+        if ($Operation -eq 'Install') {
+          $Installed = [xml] (Get-ItemProperty -LiteralPath (Join-Path $CaseRegistry 'PowerShell.7') -Name ConfigXML).ConfigXML
+          if ($Installed.PlugInConfiguration.Filename -cne (Join-Path $NewInstall 'pwrshplugin.dll')) {
+            throw 'The install action did not change the default endpoint before rollback.'
+          }
+        } elseif (Test-Path -LiteralPath (Join-Path $CaseRegistry 'PowerShell.7')) {
+          throw 'The uninstall action did not remove the seeded default endpoint before rollback.'
+        }
+
+        & $ScriptPath `
+          -InstallLocation $OldInstall `
+          -Mode Rollback `
+          -MajorVersion '7' `
+          -PreReleaseLabel '' `
+          -SnapshotId $SnapshotId `
+          -SnapshotRoot $SnapshotRoot `
+          -WsManPluginRegistryPath $CaseRegistry `
+          -System32PowerShellDirectory $CaseSystem32 `
+          -ProgramFilesDirectory (Join-Path $CaseRoot 'Program Files')
+
+        $DefaultConfigAfter = (Get-ItemProperty -LiteralPath (Join-Path $CaseRegistry 'PowerShell.7') -Name ConfigXML).ConfigXML
+        $VersionConfigAfter = (Get-ItemProperty -LiteralPath (Join-Path $CaseRegistry 'PowerShell.7.6.8') -Name ConfigXML).ConfigXML
+        if ($DefaultConfigAfter -cne $DefaultConfigBefore -or $VersionConfigAfter -cne $VersionConfigBefore) {
+          throw "$Operation rollback did not restore the affected endpoint ConfigXML exactly."
+        }
+        if ((Get-Content -LiteralPath $LegacyDll -Raw) -cne $LegacyDllBefore -or
+            (Get-Content -LiteralPath $LegacyConfig -Raw) -cne $LegacyConfigBefore) {
+          throw "$Operation rollback did not restore the legacy System32 files exactly."
+        }
+      }
+      if ($WinRmServiceState.RestartCount -ne 2) {
+        throw "Expected WinRM to reload once after each rollback, observed $($WinRmServiceState.RestartCount) restart(s)."
+      }
+    } finally {
+      if ($null -eq $PriorGetService) {
+        Remove-Item Function:\Get-Service -ErrorAction SilentlyContinue
+      } else {
+        Set-Item Function:\Get-Service -Value $PriorGetService.ScriptBlock
+      }
+      if ($null -eq $PriorRestartService) {
+        Remove-Item Function:\Restart-Service -ErrorAction SilentlyContinue
+      } else {
+        Set-Item Function:\Restart-Service -Value $PriorRestartService.ScriptBlock
+      }
+    }
+  }
 } finally {
   if (Test-Path -LiteralPath "HKCU:\Software\Devolutions\PowerShellRemotingTests\$TestId") {
     Remove-Item -LiteralPath "HKCU:\Software\Devolutions\PowerShellRemotingTests\$TestId" -Recurse -Force -ErrorAction SilentlyContinue
@@ -239,4 +590,8 @@ try {
   if (Test-Path -LiteralPath $TempRoot) {
     Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
   }
+}
+
+if ($ReviewRegressionFailures.Count -gt 0) {
+  throw "Review regression tests failed:`n$($ReviewRegressionFailures -join "`n")"
 }
