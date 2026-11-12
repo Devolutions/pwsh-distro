@@ -26,9 +26,14 @@ try
     # If remoting is not enabled, it will enable it and then clean up after all the tests
     # have executed.
     #
+    $endpointCreated = $false
     if ($IsNotSkipped)
     {
-        $endpointName = "PowerShell.$($PSVersionTable.GitCommitId)"
+        $endpointName = "PowerShell.$($PSVersionTable.PSVersion.Major)"
+        if ($PSVersionTable.PSVersion.PreReleaseLabel)
+        {
+            $endpointName += "-preview"
+        }
 
         $matchedEndpoint = Get-PSSessionConfiguration $endpointName -ErrorAction SilentlyContinue
 
@@ -822,22 +827,25 @@ namespace PowershellTestConfigNamespace
             }
         }
 
-        It "Enable-PSSession Cmdlet creates a PSSession configuration with a name tied to PowerShell version." {
-            $endpointName = "PowerShell." + $PSVersionTable.GitCommitId.ToString()
-            $matchedEndpoint = Get-PSSessionConfiguration $endpointName -ErrorAction SilentlyContinue
-            $matchedEndpoint | Should -Not -BeNullOrEmpty
+        It "Enable-PSSession Cmdlet does not create a patch-pinned PSSession configuration or System32 plugin copy." {
+            $versionPinnedEndpoint = "PowerShell." + $PSVersionTable.GitCommitId.ToString()
+            $matchedEndpoint = Get-PSSessionConfiguration $versionPinnedEndpoint -ErrorAction SilentlyContinue
+            $matchedEndpoint | Should -BeNullOrEmpty
+
+            $system32VersionDir = Join-Path ([System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::Windows)) "System32\PowerShell\$($PSVersionTable.GitCommitId)"
+            Test-Path -LiteralPath $system32VersionDir | Should -BeFalse
         }
 
-        It "Enable-PSSession Cmdlet creates a default PSSession configuration untied to a specific PowerShell version." {
-            $dotPos = $PSVersionTable.PSVersion.ToString().IndexOf(".")
-            $endpointName = "PowerShell." + $PSVersionTable.PSVersion.ToString().Substring(0, $dotPos)
-            # any pre-release (a version with a dash) is a preview release
-            if ($PSVersionTable.GitCommitId.Contains("-"))
+        It "Enable-PSSession Cmdlet creates and refreshes a default PSSession configuration pointing to PSHOME." {
+            $endpointName = "PowerShell." + $PSVersionTable.PSVersion.Major
+            if ($PSVersionTable.PSVersion.PreReleaseLabel)
             {
                 $endpointName += "-preview"
             }
             $matchedEndpoint = Get-PSSessionConfiguration $endpointName -ErrorAction SilentlyContinue
             $matchedEndpoint | Should -Not -BeNullOrEmpty
+            $matchedEndpoint.PSVersion | Should -Be "$($PSVersionTable.PSVersion.Major)"
+            [System.Environment]::ExpandEnvironmentVariables($matchedEndpoint.Filename) | Should -Be (Join-Path $PSHOME "pwrshplugin.dll")
         }
     }
 }

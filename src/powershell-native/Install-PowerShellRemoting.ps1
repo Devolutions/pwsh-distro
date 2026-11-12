@@ -33,29 +33,186 @@ if (! ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity
     Write-Error "WinRM registration requires Administrator rights. To run this cmdlet, start PowerShell with the `"Run as administrator`" option."
     return
 }
+function Format-WinRmPluginPath
+{
+    param
+    (
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string] $PsHomePath
+    )
+
+    $trimmedPsHome = $PsHomePath.Trim().TrimEnd('\', '/')
+    $programFiles = $env:ProgramFiles
+    if (-not [string]::IsNullOrWhiteSpace($programFiles))
+    {
+        $trimmedProgramFiles = $programFiles.Trim().TrimEnd('\', '/')
+        if ($trimmedPsHome.Equals($trimmedProgramFiles, [System.StringComparison]::OrdinalIgnoreCase))
+        {
+            $trimmedPsHome = '%ProgramFiles%'
+        }
+        elseif ($trimmedPsHome.Length -gt $trimmedProgramFiles.Length -and
+                $trimmedPsHome.StartsWith($trimmedProgramFiles, [System.StringComparison]::OrdinalIgnoreCase) -and
+                ($trimmedPsHome[$trimmedProgramFiles.Length] -eq '\' -or $trimmedPsHome[$trimmedProgramFiles.Length] -eq '/'))
+        {
+            $trimmedPsHome = '%ProgramFiles%' + $trimmedPsHome.Substring($trimmedProgramFiles.Length)
+        }
+    }
+
+    return Join-Path $trimmedPsHome 'pwrshplugin.dll'
+}
+
+function Test-DevolutionsOrMissingInstallDirectory
+{
+    param
+    (
+        [string] $TargetDirectory,
+        [string] $CurrentPsHome
+    )
+
+    if ([string]::IsNullOrWhiteSpace($TargetDirectory))
+    {
+        return $false
+    }
+
+    try
+    {
+        $expandedTarget = [System.IO.Path]::GetFullPath([System.Environment]::ExpandEnvironmentVariables($TargetDirectory.Trim())).TrimEnd('\', '/')
+    }
+    catch
+    {
+        return $true
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($CurrentPsHome))
+    {
+        try
+        {
+            $normalizedCurrent = [System.IO.Path]::GetFullPath([System.Environment]::ExpandEnvironmentVariables($CurrentPsHome.Trim())).TrimEnd('\', '/')
+            if ($expandedTarget.Equals($normalizedCurrent, [System.StringComparison]::OrdinalIgnoreCase))
+            {
+                return $true
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    $normalizedSeparators = $expandedTarget.Replace('/', '\')
+    if ($normalizedSeparators -match '(?i)\\Devolutions\\PowerShell($|\\)')
+    {
+        return $true
+    }
+
+    $smaPath = Join-Path $expandedTarget 'System.Management.Automation.dll'
+    if (-not (Test-Path -LiteralPath $expandedTarget -PathType Container) -or
+        -not (Test-Path -LiteralPath $smaPath -PathType Leaf))
+    {
+        return $true
+    }
+
+    return $false
+}
+
+function Get-PsHomeFromPluginConfig
+{
+    param
+    (
+        [string] $ConfigFilePath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ConfigFilePath) -or -not (Test-Path -LiteralPath $ConfigFilePath -PathType Leaf))
+    {
+        return $null
+    }
+
+    foreach ($line in (Get-Content -LiteralPath $ConfigFilePath -ErrorAction SilentlyContinue))
+    {
+        $trimmed = $line.Trim()
+        if ($trimmed.Length -eq 0 -or $trimmed.StartsWith('#'))
+        {
+            continue
+        }
+
+        if ($trimmed.StartsWith('PSHOMEDIR=', [System.StringComparison]::OrdinalIgnoreCase))
+        {
+            $value = $trimmed.Substring(10).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($value))
+            {
+                return $value
+            }
+        }
+    }
+
+    return $null
+}
+
 function Register-WinRmPlugin
 {
     param
     (
-        #
-        # Expected Example:
-        # %windir%\\system32\\PowerShell\\6.0.0\\pwrshplugin.dll
-        #
         [string]
         [parameter(Mandatory=$true)]
         [ValidateNotNullOrEmpty()]
         $pluginAbsolutePath,
 
-        #
-        # Expected Example: powershell.6.0.0-beta.3
-        #
         [string]
         [parameter(Mandatory=$true)]
         [ValidateNotNullOrEmpty()]
-        $pluginEndpointName
+        $pluginEndpointName,
+
+        [string]
+        [parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        $pluginPsVersion
     )
 
     $regKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Plugin\$pluginEndpointName"
+
+    if (Test-Path -LiteralPath $regKey)
+    {
+        $existingProp = Get-ItemProperty -LiteralPath $regKey -Name ConfigXML -ErrorAction SilentlyContinue
+        if ($null -ne $existingProp -and -not [string]::IsNullOrWhiteSpace($existingProp.ConfigXML))
+        {
+            try
+            {
+                $doc = [xml]$existingProp.ConfigXML
+                $doc.PlugInConfiguration.SetAttribute('Filename', $pluginAbsolutePath)
+                $ns = $doc.PlugInConfiguration.NamespaceURI
+                $initParams = $doc.PlugInConfiguration['InitializationParameters']
+                if ($null -eq $initParams)
+                {
+                    $initParams = $doc.CreateElement('InitializationParameters', $ns)
+                    $null = $doc.PlugInConfiguration.PrependChild($initParams)
+                }
+
+                $psVersionNode = $null
+                foreach ($paramNode in @($initParams.ChildNodes))
+                {
+                    if ($paramNode.LocalName -eq 'Param' -and $paramNode.GetAttribute('Name') -ieq 'PSVersion')
+                    {
+                        $psVersionNode = $paramNode
+                        break
+                    }
+                }
+
+                if ($null -eq $psVersionNode)
+                {
+                    $psVersionNode = $doc.CreateElement('Param', $ns)
+                    $psVersionNode.SetAttribute('Name', 'PSVersion')
+                    $null = $initParams.AppendChild($psVersionNode)
+                }
+
+                $psVersionNode.SetAttribute('Value', $pluginPsVersion)
+                Set-ItemProperty -LiteralPath $regKey -Name ConfigXML -Value $doc.OuterXml
+                return
+            }
+            catch
+            {
+            }
+        }
+    }
 
     $pluginArchitecture = "64"
     if ($env:PROCESSOR_ARCHITECTURE -match "x86" -or $env:PROCESSOR_ARCHITECTURE -eq "ARM")
@@ -67,12 +224,12 @@ function Register-WinRmPlugin
     SDKVersion="2" XmlRenderingType="text" Enabled="True" OutputBufferingMode="Block" ProcessIdleTimeoutSec="0" Architecture="{2}"
     UseSharedProcess="false" RunAsUser="" RunAsPassword="" AutoRestart="false">
     <InitializationParameters>
-        <Param Name="PSVersion" Value="7.0"/>
+        <Param Name="PSVersion" Value="{3}"/>
     </InitializationParameters>
     <Resources>
         <Resource ResourceUri="http://schemas.microsoft.com/powershell/{0}" SupportsOptions="true" ExactMatch="true">
             <Security Uri="http://schemas.microsoft.com/powershell/{0}" ExactMatch="true"
-            Sddl="O:NSG:BAD:P(A;;GA;;;BA)S:P(AU;FA;GA;;;WD)(AU;SA;GXGW;;;WD)"/>
+            Sddl="O:NSG:BAD:P(A;;GA;;;BA)(A;;GA;;;RM)(A;;GA;;;IU)S:P(AU;FA;GA;;;WD)(AU;SA;GXGW;;;WD)"/>
             <Capability Type="Shell"/>
         </Resource>
     </Resources>
@@ -80,81 +237,211 @@ function Register-WinRmPlugin
     MaxConcurrentCommandsPerShell="1000" MaxShells="25" MaxIdleTimeoutms="43200000"/>
 </PlugInConfiguration>
 "@
-    $valueString = $regKeyValueFormatString -f $pluginEndpointName, $pluginAbsolutePath, $pluginArchitecture
+    $valueString = $regKeyValueFormatString -f $pluginEndpointName, $pluginAbsolutePath, $pluginArchitecture, $pluginPsVersion
 
     New-Item $regKey -Force > $null
-    New-ItemProperty -Path $regKey -Name ConfigXML -Value $valueString > $null
+    New-ItemProperty -Path $regKey -Name ConfigXML -Value $valueString -Force > $null
 }
 
-function New-PluginConfigFile
+function Remove-LegacyEndpointsAndPluginCopies
 {
-    [CmdletBinding(SupportsShouldProcess, ConfirmImpact="Medium")]
     param
     (
-        [string]
-        [parameter(Mandatory=$true)]
-        [ValidateNotNullOrEmpty()]
-        $pluginFile,
+        [Parameter(Mandatory = $true)]
+        [string] $MajorVersion,
 
-        [string]
-        [parameter(Mandatory=$true)]
-        [ValidateNotNullOrEmpty()]
-        $targetPsHomeDir
+        [Parameter(Mandatory = $true)]
+        [string] $TargetPsHome
     )
 
-    # This always overwrites the file with a new version of it if the
-    # script is invoked multiple times.
-    Set-Content -Path $pluginFile -Value "PSHOMEDIR=$targetPsHomeDir" -ErrorAction Stop
-    Add-Content -Path $pluginFile -Value "CORECLRDIR=$targetPsHomeDir" -ErrorAction Stop
+    $wsmanPluginRoot = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Plugin'
+    $windowsDir = if ($PSVersionTable.PSVersion -lt '6.0') { 'C:\Windows' } else { [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::Windows) }
+    $system32PsRoot = Join-Path (Join-Path $windowsDir 'System32') 'PowerShell'
+    $legacyPrefix = "PowerShell.$MajorVersion."
 
-    Write-Verbose "Created Plugin Config File: $pluginFile" -Verbose
+    if (Test-Path -LiteralPath $wsmanPluginRoot)
+    {
+        foreach ($key in @(Get-ChildItem -LiteralPath $wsmanPluginRoot -ErrorAction SilentlyContinue))
+        {
+            $name = $key.PSChildName
+            if (-not $name.StartsWith($legacyPrefix, [System.StringComparison]::OrdinalIgnoreCase))
+            {
+                continue
+            }
+
+            $prop = Get-ItemProperty -LiteralPath $key.PSPath -Name ConfigXML -ErrorAction SilentlyContinue
+            if ($null -eq $prop -or [string]::IsNullOrWhiteSpace($prop.ConfigXML))
+            {
+                continue
+            }
+
+            $fileNameValue = $null
+            try
+            {
+                $fileNameValue = ([xml]$prop.ConfigXML).PlugInConfiguration.Filename
+            }
+            catch
+            {
+                continue
+            }
+
+            if ([string]::IsNullOrWhiteSpace($fileNameValue))
+            {
+                continue
+            }
+
+            $shouldRemove = $false
+            try
+            {
+                $expandedFile = [System.IO.Path]::GetFullPath([System.Environment]::ExpandEnvironmentVariables($fileNameValue.Trim()))
+            }
+            catch
+            {
+                $expandedFile = $null
+                $shouldRemove = $true
+            }
+
+            if (-not $shouldRemove)
+            {
+                if (-not (Test-Path -LiteralPath $expandedFile -PathType Leaf))
+                {
+                    $shouldRemove = $true
+                }
+                else
+                {
+                    $pluginDir = Split-Path -Parent $expandedFile
+                    $configPath = Join-Path $pluginDir 'RemotePowerShellConfig.txt'
+                    $configuredPsHome = Get-PsHomeFromPluginConfig -ConfigFilePath $configPath
+                    if (-not [string]::IsNullOrWhiteSpace($configuredPsHome))
+                    {
+                        $shouldRemove = Test-DevolutionsOrMissingInstallDirectory -TargetDirectory $configuredPsHome -CurrentPsHome $TargetPsHome
+                    }
+                    elseif ($pluginDir.StartsWith($system32PsRoot + '\', [System.StringComparison]::OrdinalIgnoreCase))
+                    {
+                        $shouldRemove = $true
+                    }
+                    else
+                    {
+                        $shouldRemove = Test-DevolutionsOrMissingInstallDirectory -TargetDirectory $pluginDir -CurrentPsHome $TargetPsHome
+                    }
+                }
+            }
+
+            if ($shouldRemove)
+            {
+                Remove-Item -LiteralPath $key.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $system32PsRoot -PathType Container))
+    {
+        return
+    }
+
+    $activeDirs = @{}
+    if (Test-Path -LiteralPath $wsmanPluginRoot)
+    {
+        foreach ($key in @(Get-ChildItem -LiteralPath $wsmanPluginRoot -ErrorAction SilentlyContinue))
+        {
+            $prop = Get-ItemProperty -LiteralPath $key.PSPath -Name ConfigXML -ErrorAction SilentlyContinue
+            if ($null -eq $prop -or [string]::IsNullOrWhiteSpace($prop.ConfigXML))
+            {
+                continue
+            }
+
+            try
+            {
+                $fn = ([xml]$prop.ConfigXML).PlugInConfiguration.Filename
+                if (-not [string]::IsNullOrWhiteSpace($fn))
+                {
+                    $expanded = [System.IO.Path]::GetFullPath([System.Environment]::ExpandEnvironmentVariables($fn.Trim()))
+                    $dir = (Split-Path -Parent $expanded).TrimEnd('\', '/')
+                    $activeDirs[$dir.ToLowerInvariant()] = $true
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    foreach ($candidate in @(Get-ChildItem -LiteralPath $system32PsRoot -Directory -ErrorAction SilentlyContinue))
+    {
+        $leaf = $candidate.Name
+        if ($leaf -ine $MajorVersion -and
+            $leaf -ine "$MajorVersion-preview" -and
+            -not $leaf.StartsWith("$MajorVersion.", [System.StringComparison]::OrdinalIgnoreCase))
+        {
+            continue
+        }
+
+        $candidateFull = $candidate.FullName.TrimEnd('\', '/')
+        if ($activeDirs.ContainsKey($candidateFull.ToLowerInvariant()))
+        {
+            continue
+        }
+
+        $configPath = Join-Path $candidateFull 'RemotePowerShellConfig.txt'
+        $configuredPsHome = Get-PsHomeFromPluginConfig -ConfigFilePath $configPath
+        if (-not [string]::IsNullOrWhiteSpace($configuredPsHome) -and
+            -not (Test-DevolutionsOrMissingInstallDirectory -TargetDirectory $configuredPsHome -CurrentPsHome $TargetPsHome))
+        {
+            continue
+        }
+
+        foreach ($fileName in @('pwrshplugin.dll', 'RemotePowerShellConfig.txt'))
+        {
+            $filePath = Join-Path $candidateFull $fileName
+            if (Test-Path -LiteralPath $filePath -PathType Leaf)
+            {
+                Remove-Item -LiteralPath $filePath -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        if (@(Get-ChildItem -LiteralPath $candidateFull -Force -ErrorAction SilentlyContinue).Count -eq 0)
+        {
+            Remove-Item -LiteralPath $candidateFull -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Install-PluginEndpoint {
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact="Medium")]
     param (
-        [Parameter()] [bool] $Force,
-        [switch]
-        $VersionIndependent
+        [Parameter()] [bool] $Force
     )
-
-    ######################
-    #                    #
-    # Install the plugin #
-    #                    #
-    ######################
 
     if (-not [String]::IsNullOrEmpty($PowerShellHome))
     {
-        $targetPsHome = $PowerShellHome
-        $targetPsVersion = & "$targetPsHome\pwsh" -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+        $targetPsHome = (Resolve-Path -LiteralPath $PowerShellHome -ErrorAction Stop).Path
+        $targetPsVersion = (& "$targetPsHome\pwsh" -NoProfile -Command '$PSVersionTable.PSVersion.ToString()' | Select-Object -Last 1).Trim()
     }
     else
     {
-        ## Get the PSHome and PSVersion using the current powershell instance
-        $targetPsHome = $PSHOME
+        $targetPsHome = (Resolve-Path -LiteralPath $PSHOME -ErrorAction Stop).Path
         $targetPsVersion = $PSVersionTable.PSVersion.ToString()
     }
     Write-Verbose "PowerShellHome: $targetPsHome" -Verbose
 
-    # For default, not tied to the specific version endpoint, we apply
-    # only first number in the PSVersion string to the endpoint name.
-    # Example name: 'PowerShell.6'.
-    if ($VersionIndependent) {
-        $dotPos = $targetPsVersion.IndexOf(".")
-        if ($dotPos -ne -1) {
-            $targetPsVersion = $targetPsVersion.Substring(0, $dotPos)
-        }
+    $sourcePluginDll = Join-Path $targetPsHome "pwrshplugin.dll"
+    if (-not (Test-Path -LiteralPath $sourcePluginDll -PathType Leaf))
+    {
+        throw "WinRM Plugin DLL missing. Expected = $sourcePluginDll"
     }
 
-    Write-Verbose "Using PowerShell Version: $targetPsVersion" -Verbose
+    $isPreview = $targetPsVersion.Contains("-")
+    $dotPos = $targetPsVersion.IndexOf(".")
+    $targetMajorVersion = if ($dotPos -ne -1) { $targetPsVersion.Substring(0, $dotPos) } else { $targetPsVersion }
+    $endpointSuffix = if ($isPreview) { "$targetMajorVersion-preview" } else { $targetMajorVersion }
+    $pluginEndpointName = "PowerShell.$endpointSuffix"
 
-    $pluginEndpointName = "PowerShell.$targetPsVersion"
+    Write-Verbose "Using PowerShell Endpoint: $pluginEndpointName (PSVersion=$targetMajorVersion)" -Verbose
 
-    $endPoint = Get-PSSessionConfiguration $pluginEndpointName -Force:$Force -ErrorAction silentlycontinue 2>&1
+    $regKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Plugin\$pluginEndpointName"
+    $endPointExists = Test-Path -LiteralPath $regKey
 
-    # If endpoint exists and -Force parameter was not used, the endpoint would not be overwritten.
-    if ($endpoint -and !$Force)
+    if ($endPointExists -and !$Force)
     {
         Write-Error -Category ResourceExists -ErrorId "PSSessionConfigurationExists" -Message "Endpoint $pluginEndpointName already exists."
         return
@@ -164,69 +451,26 @@ function Install-PluginEndpoint {
         return
     }
 
-    if ($PSVersionTable.PSVersion -lt "6.0")
+    $pluginPath = Format-WinRmPluginPath -PsHomePath $targetPsHome
+    Register-WinRmPlugin -pluginAbsolutePath $pluginPath -pluginEndpointName $pluginEndpointName -pluginPsVersion $targetMajorVersion
+    Remove-LegacyEndpointsAndPluginCopies -MajorVersion $targetMajorVersion -TargetPsHome $targetPsHome
+
+    if ($PSVersionTable.PSVersion -ge '6.0')
     {
-        # This script is primarily used from Windows PowerShell for Win10 IoT and NanoServer to setup PSCore6 remoting endpoint
-        # so it's ok to hardcode to 'C:\Windows' for those systems
-        $pluginBasePath = Join-Path "C:\Windows\System32\PowerShell" $targetPsVersion
-    }
-    else
-    {
-        $pluginBasePath = Join-Path ([System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::Windows) + "\System32\PowerShell") $targetPsVersion
-    }
-
-    $resolvedPluginAbsolutePath = ""
-    if (! (Test-Path $pluginBasePath))
-    {
-        Write-Verbose "Creating $pluginBasePath"
-        $resolvedPluginAbsolutePath = New-Item -Type Directory -Path $pluginBasePath
-    }
-    else
-    {
-        $resolvedPluginAbsolutePath = Resolve-Path $pluginBasePath
-    }
-
-    $pluginPath = Join-Path $resolvedPluginAbsolutePath "pwrshplugin.dll"
-
-    # This is forced to ensure the file is placed correctly
-    Copy-Item $targetPsHome\pwrshplugin.dll $resolvedPluginAbsolutePath -Force -Verbose -ErrorAction Stop
-
-    $pluginFile = Join-Path $resolvedPluginAbsolutePath "RemotePowerShellConfig.txt"
-    New-PluginConfigFile $pluginFile (Resolve-Path $targetPsHome)
-
-    # Register the plugin
-    Register-WinRmPlugin $pluginPath $pluginEndpointName
-
-    ####################################################################
-    #                                                                  #
-    # Validations to confirm that everything was registered correctly. #
-    #                                                                  #
-    ####################################################################
-
-    if (! (Test-Path $pluginFile))
-    {
-        throw "WinRM Plugin configuration file not created. Expected = $pluginFile"
-    }
-
-    if (! (Test-Path $resolvedPluginAbsolutePath\pwrshplugin.dll))
-    {
-        throw "WinRM Plugin DLL missing. Expected = $resolvedPluginAbsolutePath\pwrshplugin.dll"
-    }
-
-    try
-    {
-        Write-Host "`nGet-PSSessionConfiguration $pluginEndpointName" -ForegroundColor "green"
-        Get-PSSessionConfiguration $pluginEndpointName -ErrorAction Stop
-    }
-    catch [Microsoft.PowerShell.Commands.WriteErrorException]
-    {
-        throw "No remoting session configuration matches the name $pluginEndpointName."
+        try
+        {
+            Write-Host "`nGet-PSSessionConfiguration $pluginEndpointName" -ForegroundColor "green"
+            Get-PSSessionConfiguration $pluginEndpointName -ErrorAction Stop
+        }
+        catch [Microsoft.PowerShell.Commands.WriteErrorException]
+        {
+            throw "No remoting session configuration matches the name $pluginEndpointName."
+        }
     }
 }
 
 Install-PluginEndpoint -Force $Force
-Install-PluginEndpoint -Force $Force -VersionIndependent
 
 Write-Host "Restarting WinRM to ensure that the plugin configuration change takes effect.`nThis is required for WinRM running on Windows SKUs prior to Windows 10." -ForegroundColor Magenta
-Restart-Service winrm
+Restart-Service winrm -Force -Confirm:$false
 
