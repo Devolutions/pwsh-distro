@@ -1081,7 +1081,7 @@ else
                 initParameters.Append(string.Format(CultureInfo.InvariantCulture,
                     initParamFormat,
                     ConfigurationDataFromXML.PSVERSIONTOKEN,
-                    PSSessionConfigurationCommandUtilities.ConstructVersionFormatForConfigXml(psVersion),
+                    PSSessionConfigurationCommandUtilities.FormatPSVersionForConfigXml(psVersion),
                     Environment.NewLine));
 
                 // Calculate MaxPSVersion from PSVersion
@@ -1454,6 +1454,25 @@ else
         }
 
         /// <summary>
+        /// Formats the PowerShell version persisted in the WinRM plugin configuration XML.
+        /// PowerShell 6+ uses a major-only version string so minor/patch upgrades do not leave stale metadata.
+        /// </summary>
+        internal static string FormatPSVersionForConfigXml(Version psVersion)
+        {
+            if (psVersion == null)
+            {
+                return null;
+            }
+
+            if (psVersion.Major >= 6)
+            {
+                return psVersion.Major.ToString(CultureInfo.InvariantCulture);
+            }
+
+            return ConstructVersionFormatForConfigXml(psVersion).ToString();
+        }
+
+        /// <summary>
         /// Takes array of group name string objects and returns a semicolon delimited string.
         /// </summary>
         /// <param name="groups"></param>
@@ -1465,14 +1484,330 @@ else
             return string.Join(';', groups);
         }
 
+        internal static string FormatWinrmPluginShellName(int majorVersion, string preReleaseLabel)
+        {
+            string major = majorVersion.ToString(CultureInfo.InvariantCulture);
+            return string.IsNullOrEmpty(preReleaseLabel)
+                ? string.Concat("PowerShell.", major)
+                : string.Concat("PowerShell.", major, "-preview");
+        }
+
+        internal static string FormatWinrmPluginDllPath(string psHome, string programFiles)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(psHome);
+
+            string trimmedPsHome = System.IO.Path.TrimEndingDirectorySeparator(psHome.Trim());
+            if (!string.IsNullOrWhiteSpace(programFiles))
+            {
+                string trimmedProgramFiles = System.IO.Path.TrimEndingDirectorySeparator(programFiles.Trim());
+                if (string.Equals(trimmedPsHome, trimmedProgramFiles, StringComparison.OrdinalIgnoreCase))
+                {
+                    trimmedPsHome = "%ProgramFiles%";
+                }
+                else if (trimmedPsHome.Length > trimmedProgramFiles.Length &&
+                         trimmedPsHome.StartsWith(trimmedProgramFiles, StringComparison.OrdinalIgnoreCase) &&
+                         (trimmedPsHome[trimmedProgramFiles.Length] == System.IO.Path.DirectorySeparatorChar ||
+                          trimmedPsHome[trimmedProgramFiles.Length] == System.IO.Path.AltDirectorySeparatorChar))
+                {
+                    trimmedPsHome = string.Concat(
+                        "%ProgramFiles%",
+                        trimmedPsHome.AsSpan(trimmedProgramFiles.Length));
+                }
+            }
+
+            return System.IO.Path.Combine(trimmedPsHome, RemotingConstants.PSPluginDLLName);
+        }
+
+        internal static bool IsDevolutionsOrMissingInstallDirectory(string targetDirectory, string currentPsHome)
+        {
+            if (string.IsNullOrWhiteSpace(targetDirectory))
+            {
+                return false;
+            }
+
+            string expandedTarget;
+            try
+            {
+                expandedTarget = System.IO.Path.TrimEndingDirectorySeparator(
+                    System.IO.Path.GetFullPath(Environment.ExpandEnvironmentVariables(targetDirectory.Trim())));
+            }
+            catch (Exception)
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(currentPsHome))
+            {
+                try
+                {
+                    string normalizedCurrentPsHome = System.IO.Path.TrimEndingDirectorySeparator(
+                        System.IO.Path.GetFullPath(Environment.ExpandEnvironmentVariables(currentPsHome.Trim())));
+                    if (string.Equals(expandedTarget, normalizedCurrentPsHome, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+                catch (Exception)
+                {
+                }
+            }
+
+            string normalizedSeparators = expandedTarget.Replace(
+                System.IO.Path.AltDirectorySeparatorChar,
+                System.IO.Path.DirectorySeparatorChar);
+            const string devolutionsSegment = "\\Devolutions\\PowerShell";
+            int segmentIndex = normalizedSeparators.IndexOf(devolutionsSegment, StringComparison.OrdinalIgnoreCase);
+            if (segmentIndex >= 0)
+            {
+                int afterSegment = segmentIndex + devolutionsSegment.Length;
+                if (afterSegment == normalizedSeparators.Length ||
+                    normalizedSeparators[afterSegment] == System.IO.Path.DirectorySeparatorChar)
+                {
+                    return true;
+                }
+            }
+
+            if (!Directory.Exists(expandedTarget) ||
+                !File.Exists(System.IO.Path.Combine(expandedTarget, "System.Management.Automation.dll")))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        internal static bool TryReadPsHomeFromPluginConfig(string configFilePath, out string psHomeDirectory)
+        {
+            psHomeDirectory = null;
+            if (string.IsNullOrWhiteSpace(configFilePath) || !File.Exists(configFilePath))
+            {
+                return false;
+            }
+
+            const string psHomeTag = "PSHOMEDIR=";
+            try
+            {
+                foreach (string rawLine in File.ReadLines(configFilePath))
+                {
+                    string trimmed = rawLine.Trim();
+                    if (trimmed.Length == 0 || trimmed[0] == '#')
+                    {
+                        continue;
+                    }
+
+                    if (trimmed.StartsWith(psHomeTag, StringComparison.OrdinalIgnoreCase))
+                    {
+                        string candidate = trimmed.Substring(psHomeTag.Length).Trim();
+                        if (!string.IsNullOrWhiteSpace(candidate))
+                        {
+                            psHomeDirectory = candidate;
+                            return true;
+                        }
+                    }
+                }
+            }
+            catch (Exception)
+            {
+            }
+
+            return false;
+        }
+
+        internal static bool IsSystem32PowerShellSubdirectory(string directoryPath, string system32PowerShellRoot = null)
+        {
+            if (string.IsNullOrWhiteSpace(directoryPath))
+            {
+                return false;
+            }
+
+            string root = string.IsNullOrWhiteSpace(system32PowerShellRoot)
+                ? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "PowerShell")
+                : system32PowerShellRoot;
+
+            try
+            {
+                string fullDir = System.IO.Path.TrimEndingDirectorySeparator(
+                    System.IO.Path.GetFullPath(Environment.ExpandEnvironmentVariables(directoryPath.Trim())));
+                string fullRoot = System.IO.Path.TrimEndingDirectorySeparator(
+                    System.IO.Path.GetFullPath(Environment.ExpandEnvironmentVariables(root.Trim())));
+                return fullDir.Length > fullRoot.Length &&
+                       fullDir.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase) &&
+                       fullDir[fullRoot.Length] == System.IO.Path.DirectorySeparatorChar;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        internal static bool ShouldRemoveLegacyPluginEndpoint(
+            string endpointName,
+            int majorVersion,
+            string pluginFileValue,
+            string currentPsHome,
+            string system32PowerShellRoot = null)
+        {
+            if (string.IsNullOrWhiteSpace(endpointName) || string.IsNullOrWhiteSpace(pluginFileValue))
+            {
+                return false;
+            }
+
+            string versionPrefix = string.Concat("PowerShell.", majorVersion.ToString(CultureInfo.InvariantCulture), ".");
+            if (!endpointName.StartsWith(versionPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            string expandedPluginFile;
+            try
+            {
+                expandedPluginFile = System.IO.Path.GetFullPath(Environment.ExpandEnvironmentVariables(pluginFileValue.Trim()));
+            }
+            catch (Exception)
+            {
+                return true;
+            }
+
+            if (!File.Exists(expandedPluginFile))
+            {
+                return true;
+            }
+
+            string pluginDir = System.IO.Path.GetDirectoryName(expandedPluginFile);
+            if (string.IsNullOrWhiteSpace(pluginDir))
+            {
+                return false;
+            }
+
+            string configFile = System.IO.Path.Combine(pluginDir, "RemotePowerShellConfig.txt");
+            if (TryReadPsHomeFromPluginConfig(configFile, out string configuredPsHome))
+            {
+                return IsDevolutionsOrMissingInstallDirectory(configuredPsHome, currentPsHome);
+            }
+
+            if (IsSystem32PowerShellSubdirectory(pluginDir, system32PowerShellRoot))
+            {
+                return true;
+            }
+
+            return IsDevolutionsOrMissingInstallDirectory(pluginDir, currentPsHome);
+        }
+
+        internal static void CleanupLegacySystem32PluginDirectories(
+            int majorVersion,
+            string currentPsHome,
+            IEnumerable<string> activePluginFileValues,
+            string system32PowerShellRoot = null)
+        {
+            string root = string.IsNullOrWhiteSpace(system32PowerShellRoot)
+                ? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "PowerShell")
+                : system32PowerShellRoot;
+
+            if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+            {
+                return;
+            }
+
+            var activeDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (activePluginFileValues != null)
+            {
+                foreach (string pluginFile in activePluginFileValues)
+                {
+                    if (string.IsNullOrWhiteSpace(pluginFile))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        string expanded = System.IO.Path.GetFullPath(Environment.ExpandEnvironmentVariables(pluginFile.Trim()));
+                        string dir = System.IO.Path.GetDirectoryName(expanded);
+                        if (!string.IsNullOrWhiteSpace(dir))
+                        {
+                            activeDirectories.Add(System.IO.Path.TrimEndingDirectorySeparator(dir));
+                        }
+                    }
+                    catch (Exception)
+                    {
+                    }
+                }
+            }
+
+            string majorText = majorVersion.ToString(CultureInfo.InvariantCulture);
+            string majorPreview = string.Concat(majorText, "-preview");
+            string majorDotPrefix = string.Concat(majorText, ".");
+
+            string[] candidateDirectories;
+            try
+            {
+                candidateDirectories = Directory.GetDirectories(root);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+
+            foreach (string candidate in candidateDirectories)
+            {
+                string trimmedCandidate = System.IO.Path.TrimEndingDirectorySeparator(candidate);
+                string leafName = System.IO.Path.GetFileName(trimmedCandidate);
+                if (!string.Equals(leafName, majorText, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(leafName, majorPreview, StringComparison.OrdinalIgnoreCase) &&
+                    !leafName.StartsWith(majorDotPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (activeDirectories.Contains(trimmedCandidate))
+                {
+                    continue;
+                }
+
+                string configFile = System.IO.Path.Combine(trimmedCandidate, "RemotePowerShellConfig.txt");
+                if (TryReadPsHomeFromPluginConfig(configFile, out string configuredPsHome) &&
+                    !IsDevolutionsOrMissingInstallDirectory(configuredPsHome, currentPsHome))
+                {
+                    continue;
+                }
+
+                foreach (string fileName in new[] { RemotingConstants.PSPluginDLLName, "RemotePowerShellConfig.txt" })
+                {
+                    string filePath = System.IO.Path.Combine(trimmedCandidate, fileName);
+                    try
+                    {
+                        if (File.Exists(filePath))
+                        {
+                            File.Delete(filePath);
+                        }
+                    }
+                    catch (Exception)
+                    {
+                    }
+                }
+
+                try
+                {
+                    if (Directory.Exists(trimmedCandidate) &&
+                        Directory.GetFileSystemEntries(trimmedCandidate).Length == 0)
+                    {
+                        Directory.Delete(trimmedCandidate, recursive: false);
+                    }
+                }
+                catch (Exception)
+                {
+                }
+            }
+        }
+
         /// <summary>
         /// Returns the default WinRM plugin shell name for this instance of PowerShell.
         /// </summary>
         /// <returns></returns>
         internal static string GetWinrmPluginShellName()
         {
-            // PowerShell uses a versioned directory to hold the plugin
-            return string.Concat("PowerShell.", PSVersionInfo.GitCommitId);
+            return FormatWinrmPluginShellName(
+                PSVersionInfo.PSCurrentVersion.Major,
+                PSVersionInfo.PSCurrentVersion.PreReleaseLabel);
         }
 
         /// <summary>
@@ -1481,9 +1816,9 @@ else
         /// <returns></returns>
         internal static string GetWinrmPluginDllPath()
         {
-            // PowerShell 6+ uses its versioned directory instead of system32
-            string pluginDllDirectory = System.IO.Path.Combine("%windir%\\system32\\PowerShell", PSVersionInfo.GitCommitId);
-            return System.IO.Path.Combine(pluginDllDirectory, RemotingConstants.PSPluginDLLName);
+            string psHome = Utils.DefaultPowerShellAppBase;
+            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            return FormatWinrmPluginDllPath(psHome, programFiles);
         }
 
         #endregion
@@ -4660,103 +4995,24 @@ $_ | Disable-PSSessionConfiguration -force $args[0] -whatif:$args[1] -confirm:$a
         private const string enableRemotingSbFormat = @"
 Set-StrictMode -Version Latest
 
-function New-PluginConfigFile
-{{
-[CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact=""Medium"")]
-param(
-    [Parameter()] [string] $pluginInstallPath
-)
-    $pluginConfigFile = Join-Path $pluginInstallPath ""RemotePowerShellConfig.txt""
-
-    # This always overwrites the file with a new version of it (if it already exists)
-    Set-Content -Path $pluginConfigFile -Value ""PSHOMEDIR=$PSHOME"" -ErrorAction Stop
-    Add-Content -Path $pluginConfigFile -Value ""CORECLRDIR=$PSHOME"" -ErrorAction Stop
-}}
-
-function Copy-PluginToEndpoint
-{{
-param(
-    [Parameter()] [string] $endpointDir
-)
-    $resolvedPluginInstallPath = """"
-    $pluginInstallPath = Join-Path ([System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::Windows) + ""\System32\PowerShell"") $endpointDir
-    if (!(Test-Path $pluginInstallPath))
-    {{
-        $resolvedPluginInstallPath = New-Item -Type Directory -Path $pluginInstallPath
-    }}
-    else
-    {{
-        $resolvedPluginInstallPath = Resolve-Path $pluginInstallPath
-    }}
-
-    if (!(Test-Path $resolvedPluginInstallPath\{4}))
-    {{
-        Copy-Item -Path $PSHOME\{4} -Destination $resolvedPluginInstallPath -Force -ErrorAction Stop
-        if (!(Test-Path $resolvedPluginInstallPath\{4}))
-        {{
-            Write-Error ($errorMsgUnableToInstallPlugin -f ""{4}"", $resolvedPluginInstallPath)
-            return $null
-        }}
-    }}
-
-    return $resolvedPluginInstallPath
-}}
-
-function Register-Endpoint
-{{
-param(
-    [Parameter()] [string] $configurationName
-)
-    #
-    # Section 1:
-    # Move pwrshplugin.dll from $PSHOME to the endpoint directory
-    #
-    # The plugin directory pattern for endpoint configuration is:
-    # '$env:WINDIR\System32\PowerShell\' + powershell_version,
-    # so we call Copy-PluginToEndpoint function only with the PowerShell version argument.
-
-    $pwshVersion = $configurationName.Replace(""PowerShell."", """")
-    $resolvedPluginInstallPath = Copy-PluginToEndpoint $pwshVersion
-    if (!$resolvedPluginInstallPath) {{
-        return
-    }}
-
-    #
-    # Section 2:
-    # Generate the Plugin Configuration File
-    #
-    New-PluginConfigFile $resolvedPluginInstallPath
-
-    #
-    # Section 3:
-    # Register the endpoint
-    #
-    $null = Register-PSSessionConfiguration -Name $configurationName -force -ErrorAction Stop
-
-    set-item -WarningAction SilentlyContinue wsman:\localhost\plugin\$configurationName\Quotas\MaxShellsPerUser -value ""25"" -confirm:$false
-    set-item -WarningAction SilentlyContinue wsman:\localhost\plugin\$configurationName\Quotas\MaxIdleTimeoutms -value {3} -confirm:$false
-    restart-service winrm -confirm:$false
-}}
-
-function Register-EndpointIfNotPresent
+function Ensure-DefaultEndpoint
 {{
 [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact=""Medium"")]
 param(
     [Parameter()] [string] $Name,
+    [Parameter()] [string] $ExpectedPluginPath,
+    [Parameter()] [string] $ExpectedPSVersion,
     [Parameter()] [bool] $Force,
     [Parameter()] [string] $queryForRegisterDefault,
     [Parameter()] [string] $captionForRegisterDefault
 )
-    #
-    # This cmdlet will make sure default powershell end points exist upon successful completion.
-    #
-    # Windows PowerShell:
-    #   Microsoft.PowerShell
-    #   Microsoft.PowerShell32 (wow64)
-    #
-    # PowerShell:
-    #   PowerShell.<version ID>
-    #
+    $expandedPluginPath = [System.Environment]::ExpandEnvironmentVariables($ExpectedPluginPath)
+    if (!(Test-Path -LiteralPath $expandedPluginPath -PathType Leaf))
+    {{
+        Write-Error ($errorMsgUnableToInstallPlugin -f ""{4}"", $PSHOME)
+        return $false
+    }}
+
     $errorCount = $error.Count
     $endPoint = Get-PSSessionConfiguration $Name -Force:$Force -ErrorAction silentlycontinue 2>&1
     $newErrorCount = $error.Count
@@ -4767,12 +5023,44 @@ param(
         $error.RemoveAt(0)
     }}
 
-    $qMessage = $queryForRegisterDefault -f ""$Name"",""Register-PSSessionConfiguration {0} -force""
-    if ((!$endpoint) -and
-        ($force  -or $pscmdlet.ShouldProcess($qMessage, $captionForRegisterDefault)))
+    $qMessage = $queryForRegisterDefault -f ""$Name"",""Register-PSSessionConfiguration $Name -force""
+    if (!$endpoint)
     {{
-        Register-Endpoint $Name
+        if ($Force -or $pscmdlet.ShouldProcess($qMessage, $captionForRegisterDefault))
+        {{
+            $null = Register-PSSessionConfiguration -Name $Name -NoServiceRestart -force -ErrorAction Stop
+            set-item -WarningAction SilentlyContinue ""wsman:\localhost\plugin\$Name\Quotas\MaxShellsPerUser"" -value ""25"" -confirm:$false
+            set-item -WarningAction SilentlyContinue ""wsman:\localhost\plugin\$Name\Quotas\MaxIdleTimeoutms"" -value {3} -confirm:$false
+            return $true
+        }}
+
+        return $false
     }}
+
+    $pluginRoot = ""WSMan:\localhost\Plugin\$Name""
+    $fileNameItem = Get-Item -LiteralPath ""$pluginRoot\Filename"" -ErrorAction SilentlyContinue
+    $psVersionItem = Get-Item -LiteralPath ""$pluginRoot\InitializationParameters\PSVersion"" -ErrorAction SilentlyContinue
+    $currentFileName = if ($null -ne $fileNameItem) {{ [string]$fileNameItem.Value }} else {{ $null }}
+    $currentPSVersion = if ($null -ne $psVersionItem) {{ [string]$psVersionItem.Value }} else {{ $null }}
+
+    if (($currentFileName -ne $ExpectedPluginPath) -or ($currentPSVersion -ne $ExpectedPSVersion))
+    {{
+        if ($Force -or $pscmdlet.ShouldProcess($qMessage, $captionForRegisterDefault))
+        {{
+            Set-Item -WarningAction SilentlyContinue -LiteralPath ""$pluginRoot\Filename"" -Value $ExpectedPluginPath -Confirm:$false
+            if (Test-Path -LiteralPath ""$pluginRoot\InitializationParameters\PSVersion"")
+            {{
+                Set-Item -WarningAction SilentlyContinue -LiteralPath ""$pluginRoot\InitializationParameters\PSVersion"" -Value $ExpectedPSVersion -Confirm:$false
+            }}
+            else
+            {{
+                $null = New-Item -WarningAction SilentlyContinue -Path ""$pluginRoot\InitializationParameters"" -ParamName ""PSVersion"" -ParamValue $ExpectedPSVersion -Force
+            }}
+            return $true
+        }}
+    }}
+
+    return $false
 }}
 
 function Enable-PSRemoting
@@ -4785,41 +5073,77 @@ param(
     [Parameter()] [string] $queryForSet,
     [Parameter()] [string] $captionForSet,
     [Parameter()] [bool] $skipNetworkProfileCheck,
-    [Parameter()] [string] $errorMsgUnableToInstallPlugin
+    [Parameter()] [string] $errorMsgUnableToInstallPlugin,
+    [Parameter()] [string] $defaultShellName,
+    [Parameter()] [string] $defaultPluginDllPath,
+    [Parameter()] [string] $majorVersionString,
+    [Parameter()] $shouldRemoveLegacyEndpoint,
+    [Parameter()] $cleanupSystem32Dirs
 )
 
     end
     {{
         # Enable all Session Configurations
         try {{
-            $null = $PSBoundParameters.Remove(""queryForRegisterDefault"")
-            $null = $PSBoundParameters.Remove(""captionForRegisterDefault"")
-            $null = $PSBoundParameters.Remove(""queryForSet"")
-            $null = $PSBoundParameters.Remove(""captionForSet"")
-            $null = $PSBoundParameters.Remove(""errorMsgUnableToInstallPlugin"")
-
-            $PSBoundParameters.Add(""Name"",""*"")
+            $needsServiceRestart = $false
+            $enableParams = @{{
+                Name = ""*""
+                Force = $Force
+                SkipNetworkProfileCheck = $skipNetworkProfileCheck
+                NoServiceRestart = $true
+                WhatIf = $WhatIfPreference
+                Confirm = ($ConfirmPreference -eq 'Low')
+            }}
+            if ($PSBoundParameters.ContainsKey('Confirm'))
+            {{
+                $enableParams['Confirm'] = $PSBoundParameters['Confirm']
+            }}
 
             # first try to enable all the sessions
-            Enable-PSSessionConfiguration @PSBoundParameters
+            Enable-PSSessionConfiguration @enableParams
 
-            Register-EndpointIfNotPresent -Name {0} $Force $queryForRegisterDefault $captionForRegisterDefault
-
-            # Create the default PSSession configuration, not tied to specific PowerShell version
-            # e. g. 'PowerShell.6'.
-            $powershellVersionMajor = $PSVersionTable.PSVersion.ToString()
-            $dotPos = $powershellVersionMajor.IndexOf(""."")
-            if ($dotPos -ne -1) {{
-                $powershellVersionMajor = $powershellVersionMajor.Substring(0, $dotPos)
-            }}
-            # If we are running a Preview version, we don't want to clobber the generic PowerShell.6 endpoint
-            # but instead create a PowerShell.6-Preview endpoint
-            if ($PSVersionTable.PSVersion.PreReleaseLabel)
+            if (Ensure-DefaultEndpoint -Name $defaultShellName -ExpectedPluginPath $defaultPluginDllPath -ExpectedPSVersion $majorVersionString -Force $Force -queryForRegisterDefault $queryForRegisterDefault -captionForRegisterDefault $captionForRegisterDefault)
             {{
-                $powershellVersionMajor += ""-preview""
+                $needsServiceRestart = $true
             }}
 
-            Register-EndpointIfNotPresent -Name (""PowerShell."" + $powershellVersionMajor) $Force $queryForRegisterDefault $captionForRegisterDefault
+            # Unregister legacy patch-pinned PowerShell.<Major>.* endpoints pointing to Devolutions PowerShell or missing paths
+            Get-ChildItem 'WSMan:\localhost\Plugin\' -Force:$Force -ErrorAction SilentlyContinue | ForEach-Object {{
+                $pluginFileNamePath = Join-Path $_.PSPath 'FileName'
+                if (!(Test-Path -LiteralPath $pluginFileNamePath))
+                {{
+                    return
+                }}
+
+                $pluginFileName = Get-Item -LiteralPath $pluginFileNamePath -ErrorAction SilentlyContinue
+                $pluginFileValue = if ($null -ne $pluginFileName) {{ [string]$pluginFileName.Value }} else {{ $null }}
+                if ($shouldRemoveLegacyEndpoint.Invoke([string]$_.Name, $pluginFileValue))
+                {{
+                    if ($Force -or $pscmdlet.ShouldProcess($_.Name, ""Unregister-PSSessionConfiguration""))
+                    {{
+                        $null = Unregister-PSSessionConfiguration -Name $_.Name -NoServiceRestart -Force -ErrorAction SilentlyContinue
+                        $needsServiceRestart = $true
+                    }}
+                }}
+            }}
+
+            if (!$WhatIfPreference)
+            {{
+                [string[]]$activePluginFiles = @(
+                    Get-ChildItem 'WSMan:\localhost\Plugin\' -Force:$Force -ErrorAction SilentlyContinue | ForEach-Object {{
+                        $pluginFileNamePath = Join-Path $_.PSPath 'FileName'
+                        if (Test-Path -LiteralPath $pluginFileNamePath)
+                        {{
+                            $item = Get-Item -LiteralPath $pluginFileNamePath -ErrorAction SilentlyContinue
+                            if ($null -ne $item -and $item.Value)
+                            {{
+                                [string]$item.Value
+                            }}
+                        }}
+                    }}
+                )
+                $cleanupSystem32Dirs.Invoke($activePluginFiles)
+            }}
 
             # remove the 'network deny all' tag
             Get-PSSessionConfiguration -Force:$Force | ForEach-Object {{
@@ -4829,6 +5153,7 @@ param(
                     $sddl = $_.psobject.members[""SecurityDescriptorSddl""].Value
                 }}
 
+                $sddlUpdated = $false
                 if ($sddl)
                 {{
                     # Construct SID for network users
@@ -4871,6 +5196,7 @@ param(
                         }}
 
                         $sddl = $sd.GetSddlForm(""all"")
+                        $sddlUpdated = $true
                     }}
                 }} ## end of if($sddl)
 
@@ -4878,8 +5204,21 @@ param(
                 if (($sddl) -and ($force -or $pscmdlet.ShouldProcess($qMessage, $captionForSet)))
                 {{
                     $null = Set-PSSessionConfiguration -Name $_.Name -SecurityDescriptorSddl $sddl -NoServiceRestart -force -WarningAction 0
+                    if ($sddlUpdated)
+                    {{
+                        $needsServiceRestart = $true
+                    }}
                 }}
             }} ## end of foreach-object
+
+            if ($needsServiceRestart -and !$WhatIfPreference)
+            {{
+                $svc = Get-Service -Name winrm -ErrorAction SilentlyContinue
+                if ($null -ne $svc -and $svc.Status -eq 'Running')
+                {{
+                    Restart-Service -Name winrm -Force -Confirm:$false
+                }}
+            }}
         }}
         catch {{
             throw
@@ -4887,7 +5226,7 @@ param(
     }} # end of end block
 }} # end of Enable-PSRemoting
 
-Enable-PSRemoting -force $args[0] -queryForRegisterDefault $args[1] -captionForRegisterDefault $args[2] -queryForSet $args[3] -captionForSet $args[4] -whatif:$args[5] -confirm:$args[6] -skipNetworkProfileCheck $args[7] -errorMsgUnableToInstallPlugin $args[8]
+Enable-PSRemoting -force $args[0] -queryForRegisterDefault $args[1] -captionForRegisterDefault $args[2] -queryForSet $args[3] -captionForSet $args[4] -whatif:$args[5] -confirm:$args[6] -skipNetworkProfileCheck $args[7] -errorMsgUnableToInstallPlugin $args[8] -defaultShellName $args[9] -defaultPluginDllPath $args[10] -majorVersionString $args[11] -shouldRemoveLegacyEndpoint $args[12] -cleanupSystem32Dirs $args[13]
 ";
 
         private static readonly ScriptBlock s_enableRemotingSb;
@@ -4983,6 +5322,23 @@ Enable-PSRemoting -force $args[0] -queryForRegisterDefault $args[1] -captionForR
             string setCaptionMessage = StringUtil.Format(RemotingErrorIdStrings.CSShouldProcessAction, "Set-PSSessionConfiguration");
             string setQueryMessage = RemotingErrorIdStrings.EcsShouldProcessTarget;
 
+            string defaultShellName = PSSessionConfigurationCommandUtilities.GetWinrmPluginShellName();
+            string defaultPluginDllPath = PSSessionConfigurationCommandUtilities.GetWinrmPluginDllPath();
+            int majorVersion = PSVersionInfo.PSVersion.Major;
+            string majorVersionString = majorVersion.ToString(CultureInfo.InvariantCulture);
+            string currentPsHome = Utils.DefaultPowerShellAppBase;
+            Func<string, string, bool> shouldRemoveLegacyEndpoint = (endpointName, pluginFileValue) =>
+                PSSessionConfigurationCommandUtilities.ShouldRemoveLegacyPluginEndpoint(
+                    endpointName,
+                    majorVersion,
+                    pluginFileValue,
+                    currentPsHome);
+            Action<string[]> cleanupSystem32Dirs = activePluginFiles =>
+                PSSessionConfigurationCommandUtilities.CleanupLegacySystem32PluginDirectories(
+                    majorVersion,
+                    currentPsHome,
+                    activePluginFiles);
+
             s_enableRemotingSb.InvokeUsingCmdlet(
                 contextCmdlet: this,
                 useLocalScope: true,
@@ -4999,7 +5355,12 @@ Enable-PSRemoting -force $args[0] -queryForRegisterDefault $args[1] -captionForR
                                                whatIf,
                                                confirm,
                                                _skipNetworkProfileCheck,
-                                               RemotingErrorIdStrings.UnableToInstallPlugin});
+                                               RemotingErrorIdStrings.UnableToInstallPlugin,
+                                               defaultShellName,
+                                               defaultPluginDllPath,
+                                               majorVersionString,
+                                               shouldRemoveLegacyEndpoint,
+                                               cleanupSystem32Dirs});
         }
 
         #endregion
