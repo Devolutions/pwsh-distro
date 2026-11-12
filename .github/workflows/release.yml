@@ -61,7 +61,7 @@ env:
   SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
   SDK_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
   PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
-  PSIGN_TOOL_PACKAGE_VERSION: "0.7.0"
+  PSIGN_TOOL_PACKAGE_VERSION: "0.8.2"
 
 jobs:
   sdk:
@@ -108,7 +108,7 @@ jobs:
     secrets: inherit
 
   prepare-cli:
-    name: Prepare release CLI archives and MSI installers
+    name: Prepare release CLI archives and Windows installers
     runs-on: windows-2025
     needs: [sdk, cli]
     if: ${{ always() && needs.cli.result == 'success' }}
@@ -154,6 +154,10 @@ jobs:
       - name: Test archive signing metadata preservation
         shell: pwsh
         run: ./eng/Test-SignPowerShellDistroArchive.ps1
+
+      - name: Test MSIX App Installer generation and bundle verification
+        shell: pwsh
+        run: ./package/msix/Test-PowerShellDistroAppInstaller.ps1
 
       - name: Install pinned psign tool
         if: ${{ fromJSON(needs.sdk.outputs.code-signed) }}
@@ -241,6 +245,35 @@ jobs:
           path: output/legacy-msi/Devolutions-PowerShell-*-win-arm64.msi
           if-no-files-found: error
 
+      - name: Build, sign, and verify PowerShell MSIX bundle and App Installer feed
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ needs.sdk.outputs.sdk-package-version }}
+          RELEASE_TAG: ${{ needs.sdk.outputs.release-tag }}
+          SIGN_MSIX: ${{ needs.sdk.outputs.code-signed }}
+          CODE_SIGNING_KEYVAULT_URL: ${{ secrets.CODE_SIGNING_KEYVAULT_URL }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          CODE_SIGNING_CLIENT_ID: ${{ secrets.CODE_SIGNING_CLIENT_ID }}
+          CODE_SIGNING_CLIENT_SECRET: ${{ secrets.CODE_SIGNING_CLIENT_SECRET }}
+          CODE_SIGNING_CERTIFICATE_NAME: ${{ secrets.CODE_SIGNING_CERTIFICATE_NAME }}
+          CODE_SIGNING_TIMESTAMP_SERVER: ${{ vars.CODE_SIGNING_TIMESTAMP_SERVER }}
+        run: |
+          & ./package/msix/New-ReleasePowerShellDistroMsix.ps1 `
+            -ArchiveDirectory ./cli-assets `
+            -PackageVersion $Env:PACKAGE_VERSION `
+            -Repository $Env:GITHUB_REPOSITORY `
+            -ReleaseTag $Env:RELEASE_TAG `
+            -SignMsix:([bool]::Parse($Env:SIGN_MSIX))
+
+      - name: Upload PowerShell MSIX bundle and App Installer feed
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-msix
+          path: |
+            output/msix/Devolutions-PowerShell-*-win.msixbundle
+            output/msix/Devolutions-PowerShell.appinstaller
+          if-no-files-found: error
+
   msi:
     name: Validate PowerShell MSI
     needs: [sdk, prepare-cli]
@@ -255,6 +288,22 @@ jobs:
       sign_msi: ${{ fromJSON(needs.sdk.outputs.code-signed) }}
       github-env: ${{ needs.sdk.outputs.package-env }}
       prepared_msi_artifacts: true
+    secrets: inherit
+
+  msix:
+    name: Validate PowerShell MSIX
+    needs: [sdk, prepare-cli]
+    if: ${{ always() && needs.prepare-cli.result == 'success' }}
+    uses: ./.github/workflows/powershell-msix.yml
+    permissions:
+      actions: read
+      contents: read
+    with:
+      package_version: ${{ needs.sdk.outputs.sdk-package-version }}
+      cli_artifact_name: PowerShell-Release-CLI-${{ needs.sdk.outputs.sdk-package-version }}
+      sign_msix: ${{ fromJSON(needs.sdk.outputs.code-signed) }}
+      github-env: ${{ needs.sdk.outputs.package-env }}
+      prepared_msix_artifacts: true
     secrets: inherit
 
   linux:
@@ -287,8 +336,8 @@ jobs:
   publish:
     name: Publish PowerShell release
     runs-on: ubuntu-24.04
-    needs: [sdk, cli, dotnet-runtime, prepare-cli, msi, linux, macos-pkg]
-    if: ${{ always() && fromJSON(needs.sdk.outputs.skip-publish) == false && needs.prepare-cli.result == 'success' && needs.msi.result == 'success' && needs.linux.result == 'success' && needs.macos-pkg.result == 'success' }}
+    needs: [sdk, cli, dotnet-runtime, prepare-cli, msi, msix, linux, macos-pkg]
+    if: ${{ always() && fromJSON(needs.sdk.outputs.skip-publish) == false && needs.prepare-cli.result == 'success' && needs.msi.result == 'success' && needs.msix.result == 'success' && needs.linux.result == 'success' && needs.macos-pkg.result == 'success' }}
     concurrency:
       group: powershell-release-publish
       cancel-in-progress: false
@@ -359,6 +408,12 @@ jobs:
           pattern: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-*-msi
           path: release-assets
           merge-multiple: true
+
+      - name: Download PowerShell MSIX bundle and App Installer feed
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-msix
+          path: release-assets
 
       - name: Download PowerShell Linux packages
         uses: actions/download-artifact@v8.0.1
@@ -471,6 +526,19 @@ jobs:
             throw "Expected exactly two PowerShell MSI installers in the release package directory, found $($MsiPackages.Count)."
           }
 
+          $MsixBundles = @(Get-ChildItem -File | Where-Object { $_.Name -ceq "Devolutions-PowerShell-$PackageVersion-win.msixbundle" } | Sort-Object Name)
+          if ($MsixBundles.Count -ne 1) {
+            throw "Expected Devolutions-PowerShell-$PackageVersion-win.msixbundle in the release package directory, found $($MsixBundles.Count)."
+          }
+          $AppInstallerFeeds = @(Get-ChildItem -File | Where-Object { $_.Name -ceq 'Devolutions-PowerShell.appinstaller' } | Sort-Object Name)
+          if ($AppInstallerFeeds.Count -ne 1) {
+            throw "Expected Devolutions-PowerShell.appinstaller in the release package directory, found $($AppInstallerFeeds.Count)."
+          }
+          & ../package/msix/Test-PowerShellDistroMsixPackage.ps1 `
+            -BundlePath $MsixBundles[0].FullName `
+            -AppInstallerPath $AppInstallerFeeds[0].FullName `
+            -PackageVersion $PackageVersion
+
           $ExpectedLinuxPackages = @(
             foreach ($Architecture in 'x64', 'arm64') {
               $DebArchitecture = if ($Architecture -eq 'x64') { 'amd64' } else { 'arm64' }
@@ -496,7 +564,7 @@ jobs:
             throw "Expected exactly one generated patch file in the release package directory, found $($PatchFiles.Count)."
           }
 
-          $ReleaseAssetFiles = @($NugetPackages) + @($CliArchives) + @($MsiPackages) + @($LinuxPackages) + @($MacPackages) + @($PatchFiles)
+          $ReleaseAssetFiles = @($NugetPackages) + @($CliArchives) + @($MsiPackages) + @($MsixBundles) + @($AppInstallerFeeds) + @($LinuxPackages) + @($MacPackages) + @($PatchFiles)
           $ReleaseAssetFiles = @($ReleaseAssetFiles | Sort-Object Name)
 
           $HashPath = 'checksums'
@@ -527,6 +595,8 @@ jobs:
             "| Code signed | $CodeSigned |",
             "| CLI archives | $($CliArchives.Count) |",
             "| MSI installers | $($MsiPackages.Count) |",
+            "| MSIX bundle | $($MsixBundles[0].Name) |",
+            "| App Installer feed | $($AppInstallerFeeds[0].Name) |",
             "| Linux packages | $($LinuxPackages.Count) |",
             "| macOS pkg installers | $($MacPackages.Count) |",
             "| Patch file | $($PatchFiles[0].Name) |"
