@@ -115,12 +115,26 @@ try {
     }
     if ($Table -eq 'InstallExecuteSequence') {
       $InstallProfile = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'InstallWindowsTerminalProfile' }) 'Windows Terminal profile installation action'
-      $RemoveProfile = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'RemoveWindowsTerminalProfile' }) 'Windows Terminal profile removal action'
+      $RollbackProfile = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'RollbackWindowsTerminalProfile' }) 'Windows Terminal profile rollback action'
       $InstallFiles = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'InstallFiles' }) 'InstallFiles'
       $RemoveFiles = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'RemoveFiles' }) 'RemoveFiles'
-      if ([int] $InstallProfile[1] -le [int] $InstallFiles[1] -or
-          [int] $RemoveProfile[1] -ge [int] $RemoveFiles[1]) {
-        throw 'Windows Terminal profile actions must install after files are installed and remove before files are removed.'
+      if ([int] $RollbackProfile[1] -le [int] $InstallFiles[1] -or
+          [int] $InstallProfile[1] -le [int] $RollbackProfile[1] -or
+          [int] $RemoveFiles[1] -ge [int] $InstallFiles[1]) {
+        throw 'Windows Terminal profile actions must schedule rollback before installation and after files are installed.'
+      }
+      $RemoveFilesRows = @(Get-MsiRows $Database 'SELECT FileKey, Component_, FileName, DirProperty, InstallMode FROM RemoveFile' 5)
+      $FragmentRemoveFile = Assert-OneRow @($RemoveFilesRows | Where-Object { $_.Fields[0] -eq 'RemoveWindowsTerminalProfileFile' }) 'Windows Terminal fragment RemoveFile entry'
+      $FragmentRemoveFolder = Assert-OneRow @($RemoveFilesRows | Where-Object { $_.Fields[0] -eq 'RemoveWindowsTerminalProfileFragmentDirectory' }) 'Windows Terminal fragment RemoveFolder entry'
+      if ($FragmentRemoveFile[1] -ne 'WindowsTerminalProfileCleanup' -or
+          ($FragmentRemoveFile[2] -split '\|')[-1] -ne 'profile.json' -or
+          $FragmentRemoveFile[3] -ne 'WindowsTerminalProfileFragmentDirectory' -or
+          [int] $FragmentRemoveFile[4] -ne 2 -or
+          $FragmentRemoveFolder[1] -ne 'WindowsTerminalProfileCleanup' -or
+          $FragmentRemoveFolder[2] -ne '' -or
+          $FragmentRemoveFolder[3] -ne 'WindowsTerminalProfileFragmentDirectory' -or
+          [int] $FragmentRemoveFolder[4] -ne 2) {
+        throw 'Windows Terminal fragment removal must use MSI RemoveFile/RemoveFolder on uninstall.'
       }
       $Remove = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'RemoveExistingProducts' }) 'RemoveExistingProducts'
       $Initialize = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'InstallInitialize' }) 'InstallInitialize'
