@@ -79,8 +79,7 @@ try {
   $SecureProperties = @($Secure[1] -split ';')
   if ($ProductVersion[1] -ne $MsiVersion -or $UpgradeCode[1] -ine $Codes[$Architecture] -or
       'OPPOSITE_ARCHITECTURE_INSTALLED' -notin $SecureProperties -or
-      'ENABLE_PSREMOTING' -notin $SecureProperties -or
-      'SKIP_NETWORK_PROFILE_CHECK' -notin $SecureProperties) {
+      'ENABLE_PSREMOTING' -notin $SecureProperties) {
     throw "MSI version, own UpgradeCode, or secure custom properties are incorrect in $File."
   }
 

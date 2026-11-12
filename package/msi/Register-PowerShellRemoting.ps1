@@ -8,9 +8,6 @@ param(
   [Alias('En')]
   [string] $EnableRemoting = '0',
 
-  [Alias('Net')]
-  [string] $SkipNetworkProfileCheck = '0',
-
   [Alias('Snap')]
   [string] $SnapshotId,
 
@@ -754,12 +751,11 @@ if (-not (Test-Path -LiteralPath $PluginDllPath -PathType Leaf)) {
 
 $ExpectedPluginValue = Format-WinRmPluginPath -PsHomePath $ResolvedInstallLocation -ProgramFilesRoot $ProgramFilesDirectory
 $EnableRequested = ($EnableRemoting -eq '1' -or $EnableRemoting -ieq 'true')
-$SkipNetCheck = ($SkipNetworkProfileCheck -eq '1' -or $SkipNetworkProfileCheck -ieq 'true')
 
 if ($EnableRequested) {
   if (-not $SkipServiceControl) {
     try {
-      Enable-PSRemoting -Force -SkipNetworkProfileCheck:$SkipNetCheck
+      Enable-PSRemoting -Force
     } catch {
       Write-Warning "Enable-PSRemoting reported an error; ensuring $DefaultEndpointName plugin registration directly: $($_.Exception.Message)"
     }

@@ -127,7 +127,6 @@
 
     <!-- Property: ENABLE_PSREMOTING -->
     <Property Id="ENABLE_PSREMOTING" Secure="yes" />
-    <Property Id="SKIP_NETWORK_PROFILE_CHECK" Secure="yes" />
     <Property Id="PREVIOUS_ENABLE_PSREMOTING">
       <RegistrySearch Id="GetSavedEnablePsRemoting" Root="HKLM" Key="$(var.InstallerPropertiesKey)" Name="EnablePsRemoting" Type="raw" />
     </Property>
@@ -157,9 +156,7 @@
     <CustomAction Id="RegisterManifest" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
     <SetProperty Id="enablePSRemotingNormalized" Action="EnablePSRemoting_SetDefault" Before="EnablePSRemoting" Sequence="execute" Value="0" />
     <SetProperty Id="enablePSRemotingNormalized" Action="EnablePSRemoting_SetToOne" After="EnablePSRemoting_SetDefault" Sequence="execute" Value="1" Condition="ENABLE_PSREMOTING=1 OR ENABLE_PSREMOTING=&quot;true&quot;" />
-    <SetProperty Id="skipNetworkProfileCheckNormalized" Action="SkipNetworkProfileCheck_SetDefault" After="EnablePSRemoting_SetToOne" Sequence="execute" Value="0" />
-    <SetProperty Id="skipNetworkProfileCheckNormalized" Action="SkipNetworkProfileCheck_SetToOne" After="SkipNetworkProfileCheck_SetDefault" Sequence="execute" Value="1" Condition="SKIP_NETWORK_PROFILE_CHECK=1 OR SKIP_NETWORK_PROFILE_CHECK=&quot;true&quot;" />
-    <SetProperty Id="EnablePSRemoting" Before="EnablePSRemoting" Sequence="execute" Value="&quot;[VersionFolder]pwsh.exe&quot; -NoP -NonI -EP Bypass -File &quot;[VersionFolder]Register-PowerShellRemoting.ps1&quot; -En [enablePSRemotingNormalized] -Net [skipNetworkProfileCheckNormalized] -Snap [ProductCode]" />
+    <SetProperty Id="EnablePSRemoting" Before="EnablePSRemoting" Sequence="execute" Value="&quot;[VersionFolder]pwsh.exe&quot; -NoP -NonI -EP Bypass -File &quot;[VersionFolder]Register-PowerShellRemoting.ps1&quot; -En [enablePSRemotingNormalized] -Snap [ProductCode]" />
     <CustomAction Id="EnablePSRemoting" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
     <SetProperty Id="RollbackEnablePSRemoting" Before="RollbackEnablePSRemoting" Sequence="execute" Value="&quot;[VersionFolder]pwsh.exe&quot; -NoP -NonI -EP Bypass -File &quot;[VersionFolder]Register-PowerShellRemoting.ps1&quot; -Mode Rollback -Snap [ProductCode]" />
     <CustomAction Id="RollbackEnablePSRemoting" DllEntry="WixQuietExec" Execute="rollback" Return="ignore" Impersonate="no" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />

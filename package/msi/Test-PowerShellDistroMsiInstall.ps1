@@ -257,7 +257,7 @@ try {
   }
 
   # Exercise WinRM remoting registration on legacy install, migration across upgrade, and removal on uninstall
-  Invoke-Msi '/i' $LegacyMsi -ExtraArguments 'ENABLE_PSREMOTING=1 SKIP_NETWORK_PROFILE_CHECK=1'
+  Invoke-Msi '/i' $LegacyMsi -ExtraArguments 'ENABLE_PSREMOTING=1'
   $RemotingKeyPath = Join-Path $WsManPluginRoot $RemotingEndpointName
   if (-not (Test-Path -LiteralPath $RemotingKeyPath)) {
     throw "MSI ENABLE_PSREMOTING=1 did not register $RemotingEndpointName."
@@ -269,7 +269,7 @@ try {
     throw "Legacy MSI ENABLE_PSREMOTING=1 did not configure $RemotingEndpointName to $ExpectedLegacyPlugin with PSVersion=$($LegacyVersion.Major)."
   }
 
-  Invoke-Msi '/i' $CurrentMsi -ExtraArguments 'SKIP_NETWORK_PROFILE_CHECK=1'
+  Invoke-Msi '/i' $CurrentMsi
   $CurrentRemotingDoc = [xml] (Get-ItemProperty -LiteralPath $RemotingKeyPath -Name ConfigXML).ConfigXML
   $ExpectedSharedPlugin = "%ProgramFiles%\Devolutions\PowerShell\$($Version.Major)\pwrshplugin.dll"
   if ($CurrentRemotingDoc.PlugInConfiguration.Filename -cne $ExpectedSharedPlugin -or

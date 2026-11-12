@@ -99,7 +99,7 @@ function Set-TestPluginConfig {
   Set-ItemProperty -LiteralPath $KeyPath -Name ConfigXML -Value $Document.OuterXml
 }
 
-function Assert-SafeDeferredRemotingCommand {
+function Assert-DefaultNetworkProfileCheck {
   $ProductPath = Join-Path $PSScriptRoot 'assets\wix\Product.wxs'
   [xml] $Product = Get-Content -LiteralPath $ProductPath -Raw
   $CommandSetters = @($Product.SelectNodes("//*[local-name()='SetProperty' and @Id='EnablePSRemoting']"))
@@ -108,34 +108,11 @@ function Assert-SafeDeferredRemotingCommand {
   }
 
   $Command = [string] $CommandSetters[0].GetAttribute('Value')
-  if ($Command -match '(?i)\[SKIP_NETWORK_PROFILE_CHECK\]') {
-    throw 'The deferred command interpolates the untrusted SKIP_NETWORK_PROFILE_CHECK property directly.'
+  if ($Command -match '(?i)SkipNetworkProfileCheck|SKIP_NETWORK_PROFILE_CHECK') {
+    throw 'The MSI deferred command must preserve the default network-profile check behavior.'
   }
-  if ($Command -notmatch '(?i)-(?:SkipNetworkProfileCheck|Net)\s+"?\[(?<SafeProperty>[A-Z][A-Z0-9_]*)\]"?') {
-    throw 'The deferred command does not pass SkipNetworkProfileCheck through a named normalized property.'
-  }
-
-  $SafeProperty = $Matches.SafeProperty
-  $Assignments = @(
-    $Product.SelectNodes("//*[local-name()='SetProperty']") |
-      Where-Object { $_.GetAttribute('Id') -ieq $SafeProperty }
-  )
-  if ($Assignments.Count -lt 2) {
-    throw "Expected execute-sequence normalization assignments for '$SafeProperty' to both 0 and 1."
-  }
-
-  $Values = @($Assignments | ForEach-Object { $_.GetAttribute('Value') } | Sort-Object -Unique)
-  if ($Values.Count -ne 2 -or '0' -notin $Values -or '1' -notin $Values) {
-    throw "Normalized property '$SafeProperty' must be assigned only the controlled values 0 and 1."
-  }
-  $OneAssignment = @($Assignments | Where-Object { $_.GetAttribute('Value') -eq '1' })
-  if ($OneAssignment.Count -ne 1 -or
-      $OneAssignment[0].GetAttribute('Sequence') -ine 'execute' -or
-      $OneAssignment[0].GetAttribute('Condition') -notmatch '(?i)\bSKIP_NETWORK_PROFILE_CHECK\b') {
-    throw "The value 1 for '$SafeProperty' must be conditionally assigned from the raw property in the execute sequence."
-  }
-  if (@($Assignments | Where-Object { $_.GetAttribute('Value') -eq '0' -and $_.GetAttribute('Sequence') -ine 'execute' }).Count -gt 0) {
-    throw "The safe default value 0 for '$SafeProperty' must be assigned in the execute sequence."
+  if (@($Product.SelectNodes("//*[local-name()='Property' and @Id='SKIP_NETWORK_PROFILE_CHECK']")).Count -gt 0) {
+    throw 'The MSI must not expose SKIP_NETWORK_PROFILE_CHECK as a public property.'
   }
 }
 
@@ -315,8 +292,8 @@ try {
     -ExpectedPsVersion '7'
   Write-Host 'PASS UninstallRemovesDevolutionsEndpointAndPreservesMicrosoftEndpoint'
 
-  Invoke-ReviewRegressionCase -Name 'UntrustedSkipProfileValueIsNormalizedBeforeDeferredCommand' -Failures $ReviewRegressionFailures -Body {
-    Assert-SafeDeferredRemotingCommand
+  Invoke-ReviewRegressionCase -Name 'MsiPreservesDefaultNetworkProfileCheck' -Failures $ReviewRegressionFailures -Body {
+    Assert-DefaultNetworkProfileCheck
   }
 
   Invoke-ReviewRegressionCase -Name 'UpgradeMigratesOnlyEndpointForPreviousCustomInstallPath' -Failures $ReviewRegressionFailures -Body {
