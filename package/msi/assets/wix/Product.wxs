@@ -155,11 +155,17 @@
     <CustomAction Id="RegisterManifest" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
     <SetProperty Id="EnablePSRemoting" Before="EnablePSRemoting" Sequence="execute" Value="&quot;[VersionFolder]pwsh.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;Enable-PSRemoting&quot;" />
     <CustomAction Id="EnablePSRemoting" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
+    <SetProperty Id="InstallWindowsTerminalProfile" Before="InstallWindowsTerminalProfile" Sequence="execute" Value="&quot;[VersionFolder]pwsh.exe&quot; -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[VersionFolder]Register-WindowsTerminalProfile.ps1&quot; -Action Install" />
+    <CustomAction Id="InstallWindowsTerminalProfile" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
+    <SetProperty Id="RemoveWindowsTerminalProfile" Before="RemoveWindowsTerminalProfile" Sequence="execute" Value="&quot;[VersionFolder]pwsh.exe&quot; -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[VersionFolder]Register-WindowsTerminalProfile.ps1&quot; -Action Uninstall" />
+    <CustomAction Id="RemoveWindowsTerminalProfile" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
     <InstallExecuteSequence>
       <!-- Do not remove shortcuts on upgrade to preserve user shortcuts pinned to Taskbar, see https://stackoverflow.com/a/33402698/1810304 -->
       <RemoveShortcuts Condition="Installed AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="RegisterManifest" After="InstallFiles" Condition="NOT Installed AND (REGISTER_MANIFEST=1)" />
       <Custom Action="EnablePSRemoting" After="InstallFiles" Condition="NOT Installed AND (ENABLE_PSREMOTING=1)" />
+      <Custom Action="InstallWindowsTerminalProfile" After="InstallFiles" Condition="NOT REMOVE" />
+      <Custom Action="RemoveWindowsTerminalProfile" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot;" />
     </InstallExecuteSequence>
     <UI>
       <Dialog Id="MyExitDialog" Width="370" Height="270" Title="!(loc.ExitDialog_Title)">
@@ -201,6 +207,7 @@
       <ComponentGroupRef Id="ApplicationFiles" />
       <ComponentRef Id="ApplicationProgramsMenuShortcut" />
       <ComponentRef Id="RegistryEntries" />
+      <ComponentRef Id="WindowsTerminalProfileScript" />
       <ComponentRef Id="SetPath" />
       <ComponentRef Id="ExplorerContextMenu" />
       <ComponentRef Id="PowerShellFileContextMenu" />
@@ -243,6 +250,9 @@
                   <RegistryValue Type="string" Value="[ProductCode]" Name="ProductCode" />
               </RegistryKey>
 
+            </Component>
+            <Component Id="WindowsTerminalProfileScript">
+              <File Id="WindowsTerminalProfileScriptFile" Source="$(var.WindowsTerminalProfileScript)" KeyPath="yes" />
             </Component>
             <!-- add ourselves to %PATH% so pwsh.exe can be started from Windows PowerShell or cmd.exe -->
             <Component Id="SetPath" Condition="ADD_PATH=1">

@@ -78,6 +78,8 @@ try {
 
 $ProgramFiles = [Environment]::GetFolderPath('ProgramFiles')
 $SharedPath = Join-Path $ProgramFiles "Devolutions\PowerShell\$($Version.Major)"
+$TerminalFragmentDirectory = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'Microsoft\Windows Terminal\Fragments\Devolutions.PowerShell'
+$TerminalFragmentPath = Join-Path $TerminalFragmentDirectory 'profile.json'
 $LegacyPath = Join-Path $ProgramFiles "Devolutions\PowerShell\$($LegacyVersion.Major)-$Architecture"
 $LegacyOppositePath = Join-Path $ProgramFiles "Devolutions\PowerShell\$($LegacyVersion.Major)-x64"
 $LogDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "pwsh-distro-msi-install-$([guid]::NewGuid().ToString('N'))"
@@ -132,6 +134,35 @@ function Assert-PowerShell {
   }
 }
 
+function Assert-WindowsTerminalProfile {
+  param(
+    [Parameter(Mandatory)] [string] $Directory,
+    [Parameter(Mandatory)] [bool] $ExpectedPresent
+  )
+
+  if (-not $ExpectedPresent) {
+    if (Test-Path -LiteralPath $TerminalFragmentPath) {
+      throw "Windows Terminal profile fragment was not removed: $TerminalFragmentPath"
+    }
+    return
+  }
+
+  if (-not (Test-Path -LiteralPath $TerminalFragmentPath -PathType Leaf)) {
+    throw "Windows Terminal profile fragment was not installed: $TerminalFragmentPath"
+  }
+  $ProfileDocument = Get-Content -LiteralPath $TerminalFragmentPath -Raw | ConvertFrom-Json
+  $Profiles = @($ProfileDocument.profiles)
+  $ExpectedCommandLine = '"' + (Join-Path $Directory 'pwsh.exe') + '"'
+  if ($Profiles.Count -ne 1 -or
+      $Profiles[0].guid -ne '{346bd64d-48b7-5053-a8ff-5815de1a38c2}' -or
+      $Profiles[0].name -ne 'PowerShell' -or
+      $Profiles[0].commandline -ne $ExpectedCommandLine -or
+      $Profiles[0].icon -ne 'ms-appx:///ProfileIcons/pwsh.png' -or
+      $Profiles[0].startingDirectory -ne '%USERPROFILE%') {
+    throw "Windows Terminal profile fragment does not target the installed PowerShell at $Directory."
+  }
+}
+
 function Assert-BlockedInstallation {
   param([string] $IncomingMsi)
 
@@ -148,32 +179,44 @@ try {
   if (Test-Path -LiteralPath $SharedPath) {
     throw "Expected a clean runner, but the MSI directory already exists: $SharedPath"
   }
+  if (Test-Path -LiteralPath $TerminalFragmentPath) {
+    throw "Expected a clean runner, but a Windows Terminal profile fragment already exists: $TerminalFragmentPath"
+  }
 
   Invoke-Msi '/i' $CurrentMsi
   Assert-PowerShell $SharedPath
+  Assert-WindowsTerminalProfile $SharedPath $true
   Invoke-Msi '/x' $CurrentMsi
+  Assert-WindowsTerminalProfile $SharedPath $false
   if (Test-Path -LiteralPath (Join-Path $SharedPath 'pwsh.exe')) {
     throw 'Fresh-install removal left PowerShell at the shared path.'
   }
 
   Invoke-Msi '/i' $LegacyMsi
   Assert-PowerShell $LegacyPath
+  Assert-WindowsTerminalProfile $LegacyPath $true
   Invoke-Msi '/i' $CurrentMsi
   Assert-PowerShell $SharedPath
+  Assert-WindowsTerminalProfile $SharedPath $true
   if (Test-Path -LiteralPath (Join-Path $LegacyPath 'pwsh.exe')) {
     throw "The prior MSI's $LegacyPath installation was not removed on upgrade."
   }
   Remove-Item -LiteralPath (Join-Path $SharedPath 'pwsh.exe')
+  Remove-Item -LiteralPath $TerminalFragmentPath
   Invoke-Msi '/fa' $CurrentProductCode
   Assert-PowerShell $SharedPath
+  Assert-WindowsTerminalProfile $SharedPath $true
 
   if ($OppositeMsi) {
     Assert-BlockedInstallation $OppositeMsi
+    Assert-WindowsTerminalProfile $SharedPath $true
     Invoke-Msi '/i' $LegacyOppositeMsi
     Assert-PowerShell $LegacyOppositePath
+    Assert-WindowsTerminalProfile $LegacyOppositePath $true
     Assert-BlockedInstallation $OppositeMsi
     Invoke-Msi '/fa' $CurrentProductCode
     Invoke-Msi '/x' $CurrentMsi
+    Assert-WindowsTerminalProfile $SharedPath $false
     if (Test-Path -LiteralPath (Join-Path $SharedPath 'pwsh.exe')) {
       throw 'Uninstall left the new PowerShell executable at the shared path.'
     }
@@ -184,8 +227,10 @@ try {
     Assert-PowerShell $SharedPath
     Assert-BlockedInstallation $CurrentMsi
     Invoke-Msi '/x' $OppositeMsi
+    Assert-WindowsTerminalProfile $SharedPath $false
   } else {
     Invoke-Msi '/x' $CurrentMsi
+    Assert-WindowsTerminalProfile $SharedPath $false
   }
 
   if (Test-Path -LiteralPath (Join-Path $SharedPath 'pwsh.exe')) {

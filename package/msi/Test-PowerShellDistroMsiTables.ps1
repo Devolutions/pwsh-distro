@@ -114,6 +114,14 @@ try {
       throw "FindRelatedProducts must run before LaunchConditions in $Table."
     }
     if ($Table -eq 'InstallExecuteSequence') {
+      $InstallProfile = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'InstallWindowsTerminalProfile' }) 'Windows Terminal profile installation action'
+      $RemoveProfile = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'RemoveWindowsTerminalProfile' }) 'Windows Terminal profile removal action'
+      $InstallFiles = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'InstallFiles' }) 'InstallFiles'
+      $RemoveFiles = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'RemoveFiles' }) 'RemoveFiles'
+      if ([int] $InstallProfile[1] -le [int] $InstallFiles[1] -or
+          [int] $RemoveProfile[1] -ge [int] $RemoveFiles[1]) {
+        throw 'Windows Terminal profile actions must install after files are installed and remove before files are removed.'
+      }
       $Remove = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'RemoveExistingProducts' }) 'RemoveExistingProducts'
       $Initialize = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'InstallInitialize' }) 'InstallInitialize'
       if ([int] $Remove[1] -ge [int] $Initialize[1]) {

@@ -85,6 +85,7 @@ try {
     "/p:BaseIntermediateOutputPath=$Work\obj\",
     "/p:OutputPath=$Work\bin\",
     "/p:PayloadDirectory=$Payload",
+    "/p:WindowsTerminalProfileScript=$MsiRoot\Register-WindowsTerminalProfile.ps1",
     "/p:MsiProductVersion=$MsiVersion",
     "/p:SimpleProductVersion=$($Version.Major)",
     "/p:SemanticVersion=$SemanticVersion",
