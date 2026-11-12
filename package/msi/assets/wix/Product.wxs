@@ -155,11 +155,17 @@
     <CustomAction Id="RegisterManifest" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
     <SetProperty Id="EnablePSRemoting" Before="EnablePSRemoting" Sequence="execute" Value="&quot;[VersionFolder]pwsh.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;Enable-PSRemoting&quot;" />
     <CustomAction Id="EnablePSRemoting" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
+    <SetProperty Id="InstallWindowsTerminalProfile" Before="InstallWindowsTerminalProfile" Sequence="execute" Value="&quot;[VersionFolder]pwsh.exe&quot; -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[VersionFolder]Register-WindowsTerminalProfile.ps1&quot;" />
+    <CustomAction Id="InstallWindowsTerminalProfile" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
+    <SetProperty Id="RollbackWindowsTerminalProfile" Before="RollbackWindowsTerminalProfile" Sequence="execute" Value="&quot;[SystemFolder]cmd.exe&quot; /d /c &quot;del /f /q &quot;&quot;[WindowsTerminalProfileFragmentDirectory]profile.json&quot;&quot; 2&gt;nul &amp; rmdir &quot;&quot;[WindowsTerminalProfileFragmentDirectory]&quot;&quot; 2&gt;nul &amp; exit /b 0&quot;" />
+    <CustomAction Id="RollbackWindowsTerminalProfile" DllEntry="WixQuietExec" Execute="rollback" Return="ignore" Impersonate="no" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
     <InstallExecuteSequence>
       <!-- Do not remove shortcuts on upgrade to preserve user shortcuts pinned to Taskbar, see https://stackoverflow.com/a/33402698/1810304 -->
       <RemoveShortcuts Condition="Installed AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="RegisterManifest" After="InstallFiles" Condition="NOT Installed AND (REGISTER_MANIFEST=1)" />
       <Custom Action="EnablePSRemoting" After="InstallFiles" Condition="NOT Installed AND (ENABLE_PSREMOTING=1)" />
+      <Custom Action="RollbackWindowsTerminalProfile" After="InstallFiles" Condition="NOT Installed AND NOT REMOVE" />
+      <Custom Action="InstallWindowsTerminalProfile" After="RollbackWindowsTerminalProfile" Condition="NOT REMOVE" />
     </InstallExecuteSequence>
     <UI>
       <Dialog Id="MyExitDialog" Width="370" Height="270" Title="!(loc.ExitDialog_Title)">
@@ -201,6 +207,8 @@
       <ComponentGroupRef Id="ApplicationFiles" />
       <ComponentRef Id="ApplicationProgramsMenuShortcut" />
       <ComponentRef Id="RegistryEntries" />
+      <ComponentRef Id="WindowsTerminalProfileScript" />
+      <ComponentRef Id="WindowsTerminalProfileCleanup" />
       <ComponentRef Id="SetPath" />
       <ComponentRef Id="ExplorerContextMenu" />
       <ComponentRef Id="PowerShellFileContextMenu" />
@@ -243,6 +251,9 @@
                   <RegistryValue Type="string" Value="[ProductCode]" Name="ProductCode" />
               </RegistryKey>
 
+            </Component>
+            <Component Id="WindowsTerminalProfileScript">
+              <File Id="WindowsTerminalProfileScriptFile" Source="$(var.WindowsTerminalProfileScript)" KeyPath="yes" />
             </Component>
             <!-- add ourselves to %PATH% so pwsh.exe can be started from Windows PowerShell or cmd.exe -->
             <Component Id="SetPath" Condition="ADD_PATH=1">
@@ -332,6 +343,21 @@
             <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />
             <RegistryValue Root="HKCU" Key="Software\Devolutions\PowerShell\ProgramsMenuShortcut\$(var.SimpleProductVersion)\$(sys.BUILDARCH)" Name="installed" Type="integer" Value="1" KeyPath="yes" />
           </Component>
+        </Directory>
+      </StandardDirectory>
+      <StandardDirectory Id="CommonAppDataFolder">
+        <Directory Id="WindowsTerminalMicrosoftDirectory" Name="Microsoft">
+          <Directory Id="WindowsTerminalDirectory" Name="Windows Terminal">
+            <Directory Id="WindowsTerminalFragmentsDirectory" Name="Fragments">
+              <Directory Id="WindowsTerminalProfileFragmentDirectory" Name="Devolutions.PowerShell">
+                <Component Id="WindowsTerminalProfileCleanup">
+                  <RemoveFile Id="RemoveWindowsTerminalProfileFile" Name="profile.json" On="uninstall" />
+                  <RemoveFolder Id="RemoveWindowsTerminalProfileFragmentDirectory" On="uninstall" />
+                  <RegistryValue Root="HKLM" Key="Software\Devolutions\PowerShell\InstalledVersions\$(var.UpgradeCode)" Name="WindowsTerminalFragment" Type="integer" Value="1" KeyPath="yes" />
+                </Component>
+              </Directory>
+            </Directory>
+          </Directory>
         </Directory>
       </StandardDirectory>
     </Package>
