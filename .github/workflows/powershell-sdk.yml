@@ -137,7 +137,7 @@ env:
   MULTI_PWSH_APPHOST_PACKAGE_VERSION: "0.14.2"
   MULTI_PWSH_APPHOST_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
   PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
-  PSIGN_TOOL_PACKAGE_VERSION: "0.7.0"
+  PSIGN_TOOL_PACKAGE_VERSION: "0.8.2"
 jobs:
   preflight:
     name: Preflight
@@ -174,6 +174,10 @@ jobs:
       - name: Test SDK dependency profile
         shell: pwsh
         run: ./eng/Test-PowerShellSdkDependencyProfile.ps1
+
+      - name: Test MSIX App Installer generation and bundle verification
+        shell: pwsh
+        run: ./package/msix/Test-PowerShellDistroAppInstaller.ps1
 
       - name: Package information
         id: info
@@ -1252,6 +1256,12 @@ jobs:
           echo "::notice::SDKCodeSigningSecretsAvailable: $HasSigningSecrets"
           echo "::notice::SDKCodeSigningSignDryRun: $SignDryRun"
           echo "::notice::SDKPackageWillBeCodeSigned: $ShouldSign"
+
+      - name: Setup .NET SDK for psign tool
+        if: steps.signing-mode.outputs.should_sign == 'true'
+        uses: actions/setup-dotnet@v5.3.0
+        with:
+          dotnet-version: "10.0.x"
 
       - name: Install pinned psign tool
         if: steps.signing-mode.outputs.should_sign == 'true'

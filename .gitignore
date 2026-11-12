@@ -9,5 +9,8 @@ patchsets/
 *.nupkg
 *.tar.gz
 *.msi
+*.msix
+*.msixbundle
+*.appinstaller
 *.pkg
 *.wixpdb
