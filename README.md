@@ -90,6 +90,8 @@ msiexec.exe /i .\Devolutions-PowerShell-7.6.10.0-win-x64.msi /quiet /norestart A
   msiexec.exe /x .\Devolutions-PowerShell-7.6.10.0-win-x64.msi /quiet /norestart
   ```
 
+When WinRM remoting is enabled—either via the MSI **Enable Devolutions PowerShell remoting** option (`ENABLE_PSREMOTING=1`) or by running `Enable-PSRemoting`, `Register-PSSessionConfiguration`, or `Install-PowerShellRemoting.ps1` from an elevated Devolutions `pwsh.exe`—only the version-independent `PowerShell.7` (`PowerShell.7-preview` on prereleases) session configuration is registered. It points directly to `$PSHOME\pwrshplugin.dll` (`%ProgramFiles%\Devolutions\PowerShell\7\pwrshplugin.dll`) with `PSVersion = 7`, instead of copying `pwrshplugin.dll` and `RemotePowerShellConfig.txt` into `%WINDIR%\System32\PowerShell\<version>\`. Existing `PowerShell.7` registrations are updated in place across upgrades, preserving custom SDDLs and quotas so WinRM remoting and Hyper-V PowerShell Direct continue working without manual re-registration. Legacy `PowerShell.7.*` endpoints and `%WINDIR%\System32\PowerShell\7*` copies targeting Devolutions PowerShell or missing paths are cleaned up. Full MSI uninstall removes Devolutions-owned remoting endpoints while leaving side-by-side Microsoft PowerShell registrations untouched.
+
 #### MSIX bundle and automatic updates (Windows 11)
 
 For per-user installation **without administrator privileges** and automatic background updates on **Windows 11 version 21H2 (build 22000) or later**, install from the App Installer feed:

@@ -80,22 +80,41 @@ $ProgramFiles = [Environment]::GetFolderPath('ProgramFiles')
 $SharedPath = Join-Path $ProgramFiles "Devolutions\PowerShell\$($Version.Major)"
 $TerminalFragmentDirectory = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'Microsoft\Windows Terminal\Fragments\Devolutions.PowerShell'
 $TerminalFragmentPath = Join-Path $TerminalFragmentDirectory 'profile.json'
+$WsManPluginRoot = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Plugin'
+$RemotingEndpointName = "PowerShell.$($Version.Major)"
+$InstallerPropertiesRegistryPath = "HKLM:\Software\Devolutions\PowerShell\InstallerProperties\$Architecture"
 $LegacyPath = Join-Path $ProgramFiles "Devolutions\PowerShell\$($LegacyVersion.Major)-$Architecture"
 $LegacyOppositePath = Join-Path $ProgramFiles "Devolutions\PowerShell\$($LegacyVersion.Major)-x64"
 $LogDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "pwsh-distro-msi-install-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $LogDirectory | Out-Null
 $Succeeded = $false
+$SavedWsManPlugins = @{}
+if (Test-Path -LiteralPath $WsManPluginRoot) {
+  foreach ($PluginKey in @(Get-ChildItem -LiteralPath $WsManPluginRoot -ErrorAction SilentlyContinue)) {
+    if ($PluginKey.PSChildName -ieq $RemotingEndpointName -or
+        $PluginKey.PSChildName.StartsWith("$RemotingEndpointName.", [System.StringComparison]::OrdinalIgnoreCase)) {
+      $Prop = Get-ItemProperty -LiteralPath $PluginKey.PSPath -Name ConfigXML -ErrorAction SilentlyContinue
+      if ($null -ne $Prop -and -not [string]::IsNullOrWhiteSpace($Prop.ConfigXML)) {
+        $SavedWsManPlugins[$PluginKey.PSChildName] = [string] $Prop.ConfigXML
+      }
+    }
+  }
+}
 
 function Invoke-Msi {
   param(
     [string] $Action,
     [string] $Msi,
     [int[]] $ExpectedExitCodes = @(0),
-    [switch] $ExpectArchitectureBlock
+    [switch] $ExpectArchitectureBlock,
+    [string] $ExtraArguments = ''
   )
 
   $Log = Join-Path $LogDirectory "$([guid]::NewGuid().ToString('N')).log"
   $Arguments = "$Action `"$Msi`" /qn /norestart /l*v `"$Log`""
+  if (-not [string]::IsNullOrWhiteSpace($ExtraArguments)) {
+    $Arguments += " $ExtraArguments"
+  }
   $ExitCode = (Start-Process -FilePath msiexec.exe -ArgumentList $Arguments -Wait -PassThru).ExitCode
   if ($ExitCode -notin $ExpectedExitCodes) {
     if (Test-Path -LiteralPath $Log) {
@@ -236,8 +255,40 @@ try {
   if (Test-Path -LiteralPath (Join-Path $SharedPath 'pwsh.exe')) {
     throw 'Uninstall left the new PowerShell executable at the shared path.'
   }
+
+  # Exercise WinRM remoting registration on legacy install, migration across upgrade, and removal on uninstall
+  Invoke-Msi '/i' $LegacyMsi -ExtraArguments 'ENABLE_PSREMOTING=1'
+  $RemotingKeyPath = Join-Path $WsManPluginRoot $RemotingEndpointName
+  if (-not (Test-Path -LiteralPath $RemotingKeyPath)) {
+    throw "MSI ENABLE_PSREMOTING=1 did not register $RemotingEndpointName."
+  }
+  $LegacyRemotingDoc = [xml] (Get-ItemProperty -LiteralPath $RemotingKeyPath -Name ConfigXML).ConfigXML
+  $ExpectedLegacyPlugin = "%ProgramFiles%\Devolutions\PowerShell\$($LegacyVersion.Major)-$Architecture\pwrshplugin.dll"
+  if ($LegacyRemotingDoc.PlugInConfiguration.Filename -cne $ExpectedLegacyPlugin -or
+      ($LegacyRemotingDoc.PlugInConfiguration.InitializationParameters.Param | Where-Object { $_.Name -ieq 'PSVersion' }).Value -cne "$($LegacyVersion.Major)") {
+    throw "Legacy MSI ENABLE_PSREMOTING=1 did not configure $RemotingEndpointName to $ExpectedLegacyPlugin with PSVersion=$($LegacyVersion.Major)."
+  }
+
+  Invoke-Msi '/i' $CurrentMsi
+  $CurrentRemotingDoc = [xml] (Get-ItemProperty -LiteralPath $RemotingKeyPath -Name ConfigXML).ConfigXML
+  $ExpectedSharedPlugin = "%ProgramFiles%\Devolutions\PowerShell\$($Version.Major)\pwrshplugin.dll"
+  if ($CurrentRemotingDoc.PlugInConfiguration.Filename -cne $ExpectedSharedPlugin -or
+      ($CurrentRemotingDoc.PlugInConfiguration.InitializationParameters.Param | Where-Object { $_.Name -ieq 'PSVersion' }).Value -cne "$($Version.Major)") {
+    throw "Upgraded MSI did not migrate $RemotingEndpointName to $ExpectedSharedPlugin with PSVersion=$($Version.Major)."
+  }
+  $VersionPinnedPluginKey = Join-Path $WsManPluginRoot "PowerShell.$($Version.Major).$($Version.Minor).$($Version.Build)"
+  $System32VersionCopyDir = Join-Path ([Environment]::GetFolderPath('Windows')) "System32\PowerShell\$($Version.Major).$($Version.Minor).$($Version.Build)"
+  if ((Test-Path -LiteralPath $VersionPinnedPluginKey) -or (Test-Path -LiteralPath $System32VersionCopyDir)) {
+    throw 'MSI remoting setup unexpectedly created a patch-pinned endpoint or System32\PowerShell plugin copy.'
+  }
+
+  Invoke-Msi '/x' $CurrentMsi
+  if (Test-Path -LiteralPath $RemotingKeyPath) {
+    throw "MSI uninstall did not remove the Devolutions-owned $RemotingEndpointName WSMan plugin."
+  }
+
   $Succeeded = $true
-  Write-Host "Passed $Architecture fresh install, same-architecture upgrade, repair, and uninstall tests."
+  Write-Host "Passed $Architecture fresh install, same-architecture upgrade, repair, WinRM remoting, and uninstall tests."
 } finally {
   $CleanupFailures = @()
   foreach ($Msi in @($CurrentMsi, $LegacyMsi, $OppositeMsi, $LegacyOppositeMsi)) {
@@ -247,6 +298,30 @@ try {
         $CleanupFailures += "Cleanup of $Msi returned MSI exit code $ExitCode."
       }
     }
+  }
+  if (Test-Path -LiteralPath $InstallerPropertiesRegistryPath) {
+    Remove-Item -LiteralPath $InstallerPropertiesRegistryPath -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  if (Test-Path -LiteralPath $WsManPluginRoot) {
+    foreach ($PluginKey in @(Get-ChildItem -LiteralPath $WsManPluginRoot -ErrorAction SilentlyContinue)) {
+      if ($PluginKey.PSChildName -ieq $RemotingEndpointName -or
+          $PluginKey.PSChildName.StartsWith("$RemotingEndpointName.", [System.StringComparison]::OrdinalIgnoreCase)) {
+        if (-not $SavedWsManPlugins.ContainsKey($PluginKey.PSChildName)) {
+          Remove-Item -LiteralPath $PluginKey.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+      }
+    }
+  }
+  foreach ($SavedEntry in $SavedWsManPlugins.GetEnumerator()) {
+    $RestoreKeyPath = Join-Path $WsManPluginRoot $SavedEntry.Key
+    if (-not (Test-Path -LiteralPath $RestoreKeyPath)) {
+      New-Item -Path $RestoreKeyPath -Force | Out-Null
+    }
+    Set-ItemProperty -LiteralPath $RestoreKeyPath -Name ConfigXML -Value $SavedEntry.Value
+  }
+  $WinRmService = Get-Service -Name 'winrm' -ErrorAction SilentlyContinue
+  if ($null -ne $WinRmService -and $WinRmService.Status -eq 'Running') {
+    Restart-Service -Name 'winrm' -Force -Confirm:$false -ErrorAction SilentlyContinue
   }
   if ($Succeeded -and $CleanupFailures.Count -eq 0) {
     Remove-Item -LiteralPath $LogDirectory -Recurse -Force

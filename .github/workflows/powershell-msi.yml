@@ -148,6 +148,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "Unable to extract $ArchivePath"
           }
+          & ./package/msi/Test-RegisterPowerShellRemoting.ps1
           & ./package/msi/New-PowerShellDistroMsi.ps1 -PayloadDirectory $PayloadDirectory -PackageVersion $PackageVersion -Architecture $Env:ARCHITECTURE -OutputDirectory (Join-Path $PWD 'output\msi')
           & ./package/msi/Test-PowerShellDistroMsiTables.ps1 `
             -MsiPath (Join-Path $PWD "output\msi\Devolutions-PowerShell-$PackageVersion-win-$Env:ARCHITECTURE.msi") `

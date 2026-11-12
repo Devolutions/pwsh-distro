@@ -27,7 +27,7 @@ $Payload = (Resolve-Path -LiteralPath $PayloadDirectory -ErrorAction Stop).Path
 if (-not (Test-Path -LiteralPath $Payload -PathType Container)) {
   throw "Payload directory was not found: $Payload"
 }
-foreach ($File in 'pwsh.exe', 'LICENSE.txt', 'ThirdPartyNotices.txt') {
+foreach ($File in 'pwsh.exe', 'pwrshplugin.dll', 'LICENSE.txt', 'ThirdPartyNotices.txt') {
   if (-not (Test-Path -LiteralPath (Join-Path $Payload $File) -PathType Leaf)) {
     throw "MSI payload is missing $File in $Payload"
   }
@@ -86,6 +86,7 @@ try {
     "/p:OutputPath=$Work\bin\",
     "/p:PayloadDirectory=$Payload",
     "/p:WindowsTerminalProfileScript=$MsiRoot\Register-WindowsTerminalProfile.ps1",
+    "/p:PowerShellRemotingScript=$MsiRoot\Register-PowerShellRemoting.ps1",
     "/p:MsiProductVersion=$MsiVersion",
     "/p:SimpleProductVersion=$($Version.Major)",
     "/p:SemanticVersion=$SemanticVersion",

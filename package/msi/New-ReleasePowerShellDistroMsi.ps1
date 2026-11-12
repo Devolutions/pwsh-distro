@@ -45,6 +45,7 @@ $PowerShellVersion = $PackageVersion -replace '\.\d+$', ''
 $OutputDirectory = Join-Path $PWD 'output\msi'
 $LegacyOutputDirectory = Join-Path $PWD 'output\legacy-msi'
 $Work = Join-Path $PWD 'output\msi-payload'
+& (Join-Path $PSScriptRoot 'Test-RegisterPowerShellRemoting.ps1')
 New-Item -ItemType Directory -Path $Work | Out-Null
 try {
   foreach ($Architecture in 'x64', 'arm64') {

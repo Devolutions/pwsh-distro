@@ -76,9 +76,18 @@ try {
   $ProductVersion = Assert-OneRow @($Properties | Where-Object { $_.Fields[0] -eq 'ProductVersion' }) 'ProductVersion'
   $UpgradeCode = Assert-OneRow @($Properties | Where-Object { $_.Fields[0] -eq 'UpgradeCode' }) 'UpgradeCode'
   $Secure = Assert-OneRow @($Properties | Where-Object { $_.Fields[0] -eq 'SecureCustomProperties' }) 'SecureCustomProperties'
+  $SecureProperties = @($Secure[1] -split ';')
   if ($ProductVersion[1] -ne $MsiVersion -or $UpgradeCode[1] -ine $Codes[$Architecture] -or
-      'OPPOSITE_ARCHITECTURE_INSTALLED' -notin ($Secure[1] -split ';')) {
-    throw "MSI version, own UpgradeCode, or secure cross-architecture property is incorrect in $File."
+      'OPPOSITE_ARCHITECTURE_INSTALLED' -notin $SecureProperties -or
+      'ENABLE_PSREMOTING' -notin $SecureProperties) {
+    throw "MSI version, own UpgradeCode, or secure custom properties are incorrect in $File."
+  }
+
+  $FileRows = @(Get-MsiRows $Database 'SELECT File, Component_, FileName FROM File' 3)
+  $RemotingScriptFile = Assert-OneRow @($FileRows | Where-Object { $_.Fields[0] -eq 'PowerShellRemotingScriptFile' }) 'PowerShell remoting script file'
+  if ($RemotingScriptFile[1] -ne 'PowerShellRemotingScript' -or
+      ($RemotingScriptFile[2] -split '\|')[-1] -ne 'Register-PowerShellRemoting.ps1') {
+    throw "MSI PowerShellRemotingScriptFile row is incorrect in $File."
   }
 
   $Directories = @(Get-MsiRows $Database 'SELECT Directory, Directory_Parent, DefaultDir FROM Directory' 3)
@@ -114,10 +123,32 @@ try {
       throw "FindRelatedProducts must run before LaunchConditions in $Table."
     }
     if ($Table -eq 'InstallExecuteSequence') {
+      $ExecuteConditions = @(Get-MsiRows $Database 'SELECT Action, Condition, Sequence FROM InstallExecuteSequence' 3)
+      $EnableRemotingAction = Assert-OneRow @($ExecuteConditions | Where-Object { $_.Fields[0] -eq 'EnablePSRemoting' }) 'EnablePSRemoting action'
+      $RollbackEnableRemotingAction = Assert-OneRow @($ExecuteConditions | Where-Object { $_.Fields[0] -eq 'RollbackEnablePSRemoting' }) 'RollbackEnablePSRemoting action'
+      $DisableRemotingAction = Assert-OneRow @($ExecuteConditions | Where-Object { $_.Fields[0] -eq 'DisablePSRemotingOnUninstall' }) 'DisablePSRemotingOnUninstall action'
+      $RollbackDisableRemotingAction = Assert-OneRow @($ExecuteConditions | Where-Object { $_.Fields[0] -eq 'RollbackDisablePSRemotingOnUninstall' }) 'RollbackDisablePSRemotingOnUninstall action'
+      $CommitRemotingSnapshotAction = Assert-OneRow @($ExecuteConditions | Where-Object { $_.Fields[0] -eq 'CommitPSRemotingSnapshot' }) 'CommitPSRemotingSnapshot action'
       $InstallProfile = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'InstallWindowsTerminalProfile' }) 'Windows Terminal profile installation action'
-      $RollbackProfile = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'RollbackWindowsTerminalProfile' }) 'Windows Terminal profile rollback action'
+      $RollbackProfile = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'RollbackWindowsTerminalProfile' }) 'RollbackWindowsTerminalProfile action'
       $InstallFiles = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'InstallFiles' }) 'InstallFiles'
       $RemoveFiles = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'RemoveFiles' }) 'RemoveFiles'
+      if ($EnableRemotingAction[1] -ne 'NOT REMOVE' -or
+          [int] $EnableRemotingAction[2] -le [int] $InstallFiles[1]) {
+        throw 'EnablePSRemoting must run after InstallFiles whenever the product is not being removed.'
+      }
+      if ($DisableRemotingAction[1] -ne 'Installed AND (REMOVE="ALL") AND (NOT UPGRADINGPRODUCTCODE)' -or
+          [int] $DisableRemotingAction[2] -ge [int] $RemoveFiles[1]) {
+        throw 'DisablePSRemotingOnUninstall must run before RemoveFiles only on full uninstall.'
+      }
+      if ($RollbackEnableRemotingAction[1] -ne $EnableRemotingAction[1] -or
+          [int] $RollbackEnableRemotingAction[2] -ge [int] $EnableRemotingAction[2] -or
+          $RollbackDisableRemotingAction[1] -ne $DisableRemotingAction[1] -or
+          [int] $RollbackDisableRemotingAction[2] -ge [int] $DisableRemotingAction[2] -or
+          $CommitRemotingSnapshotAction[1] -notmatch 'NOT REMOVE.*REMOVE="ALL"' -or
+          [int] $CommitRemotingSnapshotAction[2] -le [int] $InstallProfile[1]) {
+        throw 'WinRM rollback actions must be scheduled before their matching changes, and snapshot cleanup must run only at commit.'
+      }
       if ([int] $RollbackProfile[1] -le [int] $InstallFiles[1] -or
           [int] $InstallProfile[1] -le [int] $RollbackProfile[1] -or
           [int] $RemoveFiles[1] -ge [int] $InstallFiles[1]) {

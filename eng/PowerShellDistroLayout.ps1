@@ -41,6 +41,7 @@ function Get-RequiredDistroRelativePaths {
   }
   if ($Rid -like 'win-*') {
     $RequiredPaths += @(
+      'Install-PowerShellRemoting.ps1',
       'Microsoft.PowerShell.GraphicalHost.dll',
       'Microsoft.PowerShell.GraphicalHost.dll.config',
       'Microsoft.PowerShell.GraphicalHost.xml',
@@ -48,6 +49,7 @@ function Get-RequiredDistroRelativePaths {
       'PowerShellCoreExecutionPolicy.adml',
       'PowerShellCoreExecutionPolicy.admx',
       'PresentationFramework.dll',
+      'pwrshplugin.dll',
       'RegisterManifest.ps1',
       'System.Windows.Forms.dll',
       'WindowsBase.dll',
