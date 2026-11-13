@@ -83,7 +83,7 @@ try {
   $Identity.SetAttribute('Version', '7.6.10.0')
   $Manifest.Save($ManifestPath)
 
-  $FeedPath = Join-Path $Directory 'Devolutions-PowerShell.appinstaller'
+  $FeedPath = Join-Path $Directory 'Devolutions.PowerShell.appinstaller'
   & $Generator -ManifestPath $ManifestPath -Repository 'Devolutions/pwsh-distro' -OutputPath $FeedPath
 
   [xml] $FeedDoc = Get-Content -LiteralPath $FeedPath -Raw
@@ -94,14 +94,14 @@ try {
 
   Assert-True ($FeedRoot.NamespaceURI -ceq 'http://schemas.microsoft.com/appx/appinstaller/2021') 'Wrong App Installer schema.'
   Assert-True ($FeedRoot.GetAttribute('Version') -ceq '7.6.10.0') 'Wrong feed version.'
-  Assert-True ($FeedRoot.GetAttribute('Uri') -ceq 'https://github.com/Devolutions/pwsh-distro/releases/latest/download/Devolutions-PowerShell.appinstaller') 'Feed URI must use the stable latest-release download URL.'
+  Assert-True ($FeedRoot.GetAttribute('Uri') -ceq 'https://github.com/Devolutions/pwsh-distro/releases/latest/download/Devolutions.PowerShell.appinstaller') 'Feed URI must use the stable latest-release download URL.'
   Assert-True ($null -ne $MainBundle) 'MainBundle must be present.'
   Assert-True ($null -eq $FeedRoot.SelectSingleNode('ai:MainPackage', $FeedNs)) 'MainPackage must not be present.'
   Assert-True (-not $MainBundle.HasAttribute('ProcessorArchitecture')) 'MainBundle must not select a single architecture.'
   Assert-True ($MainBundle.GetAttribute('Name') -ceq 'Devolutions.PowerShell') 'Wrong package identity Name.'
   Assert-True ($MainBundle.GetAttribute('Publisher') -ceq $Publisher) 'Publisher XML escaping did not round-trip.'
   Assert-True ($MainBundle.GetAttribute('Version') -ceq '7.6.10.0') 'Wrong MainBundle version.'
-  Assert-True ($MainBundle.GetAttribute('Uri') -ceq 'https://github.com/Devolutions/pwsh-distro/releases/download/v7.6.10.0/Devolutions-PowerShell-7.6.10.0-win.msixbundle') 'Bundle URI must be pinned to the release tag.'
+  Assert-True ($MainBundle.GetAttribute('Uri') -ceq 'https://github.com/Devolutions/pwsh-distro/releases/download/v7.6.10.0/Devolutions.PowerShell-7.6.10.0-win.msixbundle') 'Bundle URI must be pinned to the release tag.'
 
   $OnLaunch = $FeedRoot.SelectSingleNode('ai:UpdateSettings/ai:OnLaunch', $FeedNs)
   Assert-True ($null -ne $OnLaunch) 'OnLaunch must be present.'
@@ -119,7 +119,7 @@ try {
     [xml] $NextDoc = Get-Content -LiteralPath $FeedPath -Raw
     $NextBundle = $NextDoc.DocumentElement.SelectSingleNode('ai:MainBundle', $FeedNs)
     Assert-True ($NextDoc.DocumentElement.GetAttribute('Uri') -ceq $FeedRoot.GetAttribute('Uri')) "Feed URI must stay constant across version $NextVersion."
-    Assert-True ($NextBundle.GetAttribute('Uri') -ceq "https://github.com/Devolutions/pwsh-distro/releases/download/v$NextVersion/Devolutions-PowerShell-$NextVersion-win.msixbundle") "MainBundle URI did not update for $NextVersion."
+    Assert-True ($NextBundle.GetAttribute('Uri') -ceq "https://github.com/Devolutions/pwsh-distro/releases/download/v$NextVersion/Devolutions.PowerShell-$NextVersion-win.msixbundle") "MainBundle URI did not update for $NextVersion."
   }
 
   $Identity.SetAttribute('Version', '7.6.10.1')
@@ -127,7 +127,7 @@ try {
   & $Generator -ManifestPath $ManifestPath -Repository 'Devolutions/pwsh-distro' -ReleaseTag 'release/v7.6.10.1' -OutputPath $FeedPath
   [xml] $EscapedTagDoc = Get-Content -LiteralPath $FeedPath -Raw
   $EscapedBundle = $EscapedTagDoc.DocumentElement.SelectSingleNode('ai:MainBundle', $FeedNs)
-  Assert-True ($EscapedBundle.GetAttribute('Uri') -ceq 'https://github.com/Devolutions/pwsh-distro/releases/download/release%2Fv7.6.10.1/Devolutions-PowerShell-7.6.10.1-win.msixbundle') 'Custom release tags must be URL-escaped.'
+  Assert-True ($EscapedBundle.GetAttribute('Uri') -ceq 'https://github.com/Devolutions/pwsh-distro/releases/download/release%2Fv7.6.10.1/Devolutions.PowerShell-7.6.10.1-win.msixbundle') 'Custom release tags must be URL-escaped.'
 
   # Restore 7.6.10.1 default tag feed for bundle verification tests.
   & $Generator -ManifestPath $ManifestPath -Repository 'Devolutions/pwsh-distro' -OutputPath $FeedPath
@@ -190,7 +190,7 @@ try {
 
   $BundleManifestPath = Join-Path $Directory 'AppxBundleManifest.xml'
   function New-SyntheticBundle {
-    param([string] $FileName = 'Devolutions-PowerShell-7.6.10.1-win.msixbundle')
+    param([string] $FileName = 'Devolutions.PowerShell-7.6.10.1-win.msixbundle')
     $BundleManifest.Save($BundleManifestPath)
     $OutBundle = Join-Path $Directory $FileName
     if (Test-Path -LiteralPath $OutBundle) {
@@ -315,25 +315,39 @@ try {
       [System.IO.File]::WriteAllBytes((Join-Path $Entry.Dir 'pwsh.exe'), $PeBytes)
     }
 
-    # Verify relative OutputDirectory resolution after Push-Location (where $PWD differs from [Environment]::CurrentDirectory).
+    $ArchiveDirectory = Join-Path $Directory 'archives'
+    New-Item -ItemType Directory -Path $ArchiveDirectory | Out-Null
     Push-Location $Directory
     try {
-      & $ReleaseBuilder `
-        -X64PayloadDirectory '.\payload-x64' `
-        -Arm64PayloadDirectory '.\payload-arm64' `
-        -PackageVersion '7.6.10.1' `
-        -Repository 'Devolutions/pwsh-distro' `
-        -OutputDirectory '.\out-unsigned'
+      foreach ($Revision in 0, 1) {
+        $ArchiveVersion = "7.6.10.$Revision"
+        foreach ($Architecture in 'x64', 'arm64') {
+          $ArchivePath = Join-Path $ArchiveDirectory "PowerShell-$ArchiveVersion-windows-$Architecture.tar.gz"
+          & tar -czf $ArchivePath -C (Join-Path $Directory "payload-$Architecture") .
+          if ($LASTEXITCODE -ne 0) { throw "Unable to create test archive: $ArchivePath" }
+        }
+        $RelativeOutput = if ($Revision -eq 0) { '.\out-revision-zero' } else { '.\out-unsigned' }
+        & $ReleaseBuilder `
+          -ArchiveDirectory '.\archives' `
+          -PackageVersion $ArchiveVersion `
+          -Repository 'Devolutions/pwsh-distro' `
+          -OutputDirectory $RelativeOutput
+        $OutputBundle = Join-Path $RelativeOutput "Devolutions.PowerShell-$ArchiveVersion-win.msixbundle"
+        Assert-True (Test-Path -LiteralPath $OutputBundle -PathType Leaf) "ArchiveRevision$Revision must package four-part archives and resolve relative OutputDirectory against `$PWD."
+        & $Verifier -BundlePath $OutputBundle `
+          -AppInstallerPath (Join-Path $RelativeOutput 'Devolutions.PowerShell.appinstaller') `
+          -PackageVersion $ArchiveVersion
+      }
     } finally {
       Pop-Location
     }
     $UnsignedOut = Join-Path $Directory 'out-unsigned'
-    Assert-True (Test-Path -LiteralPath (Join-Path $UnsignedOut 'Devolutions-PowerShell-7.6.10.1-win.msixbundle') -PathType Leaf) 'Relative OutputDirectory must resolve against $PWD.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $UnsignedOut 'Devolutions.PowerShell-7.6.10.1-win.msixbundle') -PathType Leaf) 'Relative OutputDirectory must resolve against $PWD.'
 
     Assert-Fails {
       & $InstallVerifier `
-        -BundlePath (Join-Path $UnsignedOut 'Devolutions-PowerShell-7.6.10.1-win.msixbundle') `
-        -AppInstallerPath (Join-Path $UnsignedOut 'Devolutions-PowerShell.appinstaller') `
+        -BundlePath (Join-Path $UnsignedOut 'Devolutions.PowerShell-7.6.10.1-win.msixbundle') `
+        -AppInstallerPath (Join-Path $UnsignedOut 'Devolutions.PowerShell.appinstaller') `
         -Architecture 'x64'
     } 'Test-PowerShellDistroMsixInstall.ps1 must reject invocations that omit both -RequireSignature and -AllowEphemeralTestSigning.'
 
@@ -343,10 +357,10 @@ try {
     if ($MakeAppxCandidates.Count -gt 0) {
       $MakeAppxExe = $MakeAppxCandidates[0].FullName
       $UnbundledDir = Join-Path $Directory 'unbundled-check'
-      & $MakeAppxExe unbundle /o /p (Join-Path $UnsignedOut 'Devolutions-PowerShell-7.6.10.1-win.msixbundle') /d $UnbundledDir *> $null
+      & $MakeAppxExe unbundle /o /p (Join-Path $UnsignedOut 'Devolutions.PowerShell-7.6.10.1-win.msixbundle') /d $UnbundledDir *> $null
       Assert-True ($LASTEXITCODE -eq 0) 'makeappx unbundle must extract the generated MSIX bundle.'
       $UnpackedX64Dir = Join-Path $Directory 'unpacked-x64-check'
-      & $MakeAppxExe unpack /o /p (Join-Path $UnbundledDir 'Devolutions-PowerShell-7.6.10.1-win-x64.msix') /d $UnpackedX64Dir *> $null
+      & $MakeAppxExe unpack /o /p (Join-Path $UnbundledDir 'Devolutions.PowerShell-7.6.10.1-win-x64.msix') /d $UnpackedX64Dir *> $null
       Assert-True ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath (Join-Path $UnpackedX64Dir 'pwsh.exe') -PathType Leaf)) 'makeappx unpack must extract inner MSIX payload.'
     }
 
@@ -393,7 +407,7 @@ try {
         -PfxPath $PfxPath `
         -PfxPassword 'testpass'
 
-      [xml] $SignedFeed = Get-Content -LiteralPath (Join-Path $SignedOut 'Devolutions-PowerShell.appinstaller') -Raw
+      [xml] $SignedFeed = Get-Content -LiteralPath (Join-Path $SignedOut 'Devolutions.PowerShell.appinstaller') -Raw
       $SignedMainBundle = $SignedFeed.DocumentElement.SelectSingleNode("*[local-name()='MainBundle']")
       Assert-True ($SignedMainBundle.GetAttribute('Publisher') -ceq $EvSubject) 'Signed MSIX feed Publisher must match the active MSIX signing certificate, not legacy pwsh.exe.'
     }

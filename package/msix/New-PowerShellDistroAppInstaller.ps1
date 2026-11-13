@@ -9,7 +9,7 @@ param(
 
   [string] $BundleFileName,
 
-  [string] $FeedFileName = 'Devolutions-PowerShell.appinstaller',
+  [string] $FeedFileName = 'Devolutions.PowerShell.appinstaller',
 
   [Parameter(Mandatory)]
   [string] $OutputPath
@@ -55,7 +55,7 @@ if ($Version.Major -gt 65535 -or $Version.Minor -gt 65535 -or $Version.Build -gt
 
 $EffectiveReleaseTag = if ([string]::IsNullOrWhiteSpace($ReleaseTag)) { "v$VersionText" } else { $ReleaseTag.Trim() }
 $EffectiveBundleFileName = if ([string]::IsNullOrWhiteSpace($BundleFileName)) {
-  "Devolutions-PowerShell-$VersionText-win.msixbundle"
+  "Devolutions.PowerShell-$VersionText-win.msixbundle"
 } else {
   $BundleFileName.Trim()
 }

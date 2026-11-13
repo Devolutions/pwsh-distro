@@ -107,6 +107,18 @@ jobs:
       dotnet_runtime_run_id: ${{ inputs.dotnet_runtime_run_id || needs.dotnet-runtime.outputs.workflow-run-id }}
     secrets: inherit
 
+  microsoft-msi:
+    name: Repackage Microsoft PowerShell MSI
+    needs: sdk
+    if: ${{ needs.sdk.outputs.channel == '7.7' }}
+    uses: ./.github/workflows/powershell-microsoft-msi.yml
+    with:
+      upstream_tag: ${{ needs.sdk.outputs.powershell-release-tag }}
+      package_version: ${{ needs.sdk.outputs.sdk-package-version }}
+      github-env: ${{ needs.sdk.outputs.package-env }}
+      sign_msi: ${{ fromJSON(needs.sdk.outputs.code-signed) }}
+    secrets: inherit
+
   prepare-cli:
     name: Prepare release CLI archives and Windows installers
     runs-on: windows-2025
@@ -131,18 +143,18 @@ jobs:
       - name: Download PowerShell CLI packages
         uses: actions/download-artifact@v8.0.1
         with:
-          pattern: PowerShell-${{ needs.sdk.outputs.powershell-version }}-*
+          pattern: PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-*
           path: cli-assets
           merge-multiple: true
 
       - name: Validate PowerShell CLI packages
         shell: pwsh
         run: |
-          $PowerShellVersion = '${{ needs.sdk.outputs.powershell-version }}'
+          $PackageVersion = '${{ needs.sdk.outputs.sdk-package-version }}'
           $ExpectedArchives = @(
             foreach ($Platform in 'windows', 'macos', 'linux', 'linux-musl') {
               foreach ($Architecture in 'x64', 'arm64') {
-                "PowerShell-$PowerShellVersion-$Platform-$Architecture.tar.gz"
+                "PowerShell-$PackageVersion-$Platform-$Architecture.tar.gz"
               }
             }
           )
@@ -227,29 +239,29 @@ jobs:
       - name: Upload x64 PowerShell MSI
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-x64-msi
-          path: output/msi/Devolutions-PowerShell-*-win-x64.msi
+          name: Devolutions.PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-x64-msi
+          path: output/msi/Devolutions.PowerShell-*-win-x64.msi
           if-no-files-found: error
 
       - name: Upload ARM64 PowerShell MSI
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-arm64-msi
-          path: output/msi/Devolutions-PowerShell-*-win-arm64.msi
+          name: Devolutions.PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-arm64-msi
+          path: output/msi/Devolutions.PowerShell-*-win-arm64.msi
           if-no-files-found: error
 
       - name: Upload x64 previous-layout MSI test fixture
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: Devolutions-PowerShell-legacy-${{ needs.sdk.outputs.sdk-package-version }}-win-x64-msi
-          path: output/legacy-msi/Devolutions-PowerShell-*-win-x64.msi
+          name: Devolutions.PowerShell-legacy-${{ needs.sdk.outputs.sdk-package-version }}-win-x64-msi
+          path: output/legacy-msi/Devolutions.PowerShell-*-win-x64.msi
           if-no-files-found: error
 
       - name: Upload ARM64 previous-layout MSI test fixture
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: Devolutions-PowerShell-legacy-${{ needs.sdk.outputs.sdk-package-version }}-win-arm64-msi
-          path: output/legacy-msi/Devolutions-PowerShell-*-win-arm64.msi
+          name: Devolutions.PowerShell-legacy-${{ needs.sdk.outputs.sdk-package-version }}-win-arm64-msi
+          path: output/legacy-msi/Devolutions.PowerShell-*-win-arm64.msi
           if-no-files-found: error
 
       - name: Build, sign, and verify PowerShell MSIX bundle and App Installer feed
@@ -275,10 +287,10 @@ jobs:
       - name: Upload PowerShell MSIX bundle and App Installer feed
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-msix
+          name: Devolutions.PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-msix
           path: |
-            output/msix/Devolutions-PowerShell-*-win.msixbundle
-            output/msix/Devolutions-PowerShell.appinstaller
+            output/msix/Devolutions.PowerShell-*-win.msixbundle
+            output/msix/Devolutions.PowerShell.appinstaller
           if-no-files-found: error
 
   msi:
@@ -343,8 +355,8 @@ jobs:
   publish:
     name: Publish PowerShell release
     runs-on: ubuntu-24.04
-    needs: [sdk, cli, dotnet-runtime, prepare-cli, msi, msix, linux, macos-pkg]
-    if: ${{ always() && fromJSON(needs.sdk.outputs.skip-publish) == false && needs.prepare-cli.result == 'success' && needs.msi.result == 'success' && needs.msix.result == 'success' && needs.linux.result == 'success' && needs.macos-pkg.result == 'success' }}
+    needs: [sdk, cli, dotnet-runtime, prepare-cli, msi, microsoft-msi, msix, linux, macos-pkg]
+    if: ${{ always() && fromJSON(needs.sdk.outputs.skip-publish) == false && needs.prepare-cli.result == 'success' && needs.msi.result == 'success' && (needs.microsoft-msi.result == 'success' || (needs.sdk.outputs.channel != '7.7' && needs.microsoft-msi.result == 'skipped')) && needs.msix.result == 'success' && needs.linux.result == 'success' && needs.macos-pkg.result == 'success' }}
     concurrency:
       group: powershell-release-publish
       cancel-in-progress: false
@@ -412,27 +424,49 @@ jobs:
       - name: Download PowerShell MSI packages
         uses: actions/download-artifact@v8.0.1
         with:
-          pattern: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-*-msi
+          pattern: Devolutions.PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-*-msi
           path: release-assets
           merge-multiple: true
+
+      - name: Download tested Microsoft PowerShell MSIs and provenance
+        if: ${{ needs.sdk.outputs.channel == '7.7' }}
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: ${{ needs.microsoft-msi.outputs.artifact_name }}
+          path: microsoft-msi-assets
+
+      - name: Include Microsoft PowerShell release assets
+        if: ${{ needs.sdk.outputs.channel == '7.7' }}
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ needs.sdk.outputs.sdk-package-version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($Name in @(
+            "Microsoft.PowerShell-$Env:PACKAGE_VERSION-win-x64.msi",
+            "Microsoft.PowerShell-$Env:PACKAGE_VERSION-win-arm64.msi",
+            "Microsoft.PowerShell-$Env:PACKAGE_VERSION-source.json"
+          )) {
+            Copy-Item -LiteralPath (Join-Path 'microsoft-msi-assets' $Name) -Destination release-assets
+          }
 
       - name: Download PowerShell MSIX bundle and App Installer feed
         uses: actions/download-artifact@v8.0.1
         with:
-          name: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-msix
+          name: Devolutions.PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-win-msix
           path: release-assets
 
       - name: Download PowerShell Linux packages
         uses: actions/download-artifact@v8.0.1
         with:
-          pattern: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-linux-*-packages
+          pattern: Devolutions.PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-linux-*-packages
           path: release-assets
           merge-multiple: true
 
       - name: Download PowerShell macOS pkg installers
         uses: actions/download-artifact@v8.0.1
         with:
-          pattern: Devolutions-PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-osx-*-pkg
+          pattern: Devolutions.PowerShell-${{ needs.sdk.outputs.sdk-package-version }}-osx-*-pkg
           path: release-assets
           merge-multiple: true
 
@@ -515,11 +549,10 @@ jobs:
             throw "Expected SDK packages $($ExpectedPackageNames -join ', ') in the release package directory; found $($NugetPackages.Name -join ', ')."
           }
 
-          $PowerShellVersion = '${{ needs.sdk.outputs.powershell-version }}'
           $ExpectedArchives = @(
             foreach ($Platform in 'windows', 'macos', 'linux', 'linux-musl') {
               foreach ($Architecture in 'x64', 'arm64') {
-                "PowerShell-$PowerShellVersion-$Platform-$Architecture.tar.gz"
+                "PowerShell-$PackageVersion-$Platform-$Architecture.tar.gz"
               }
             }
           )
@@ -528,18 +561,31 @@ jobs:
             throw "Expected CLI archives $($ExpectedArchives -join ', '); found $($CliArchives.Name -join ', ')."
           }
 
-          $MsiPackages = @(Get-ChildItem -File | Where-Object { $_.Name -like 'Devolutions-PowerShell-*.msi' } | Sort-Object Name)
+          $MsiPackages = @(Get-ChildItem -File | Where-Object { $_.Name -like 'Devolutions.PowerShell-*.msi' } | Sort-Object Name)
           if ($MsiPackages.Count -ne 2) {
             throw "Expected exactly two PowerShell MSI installers in the release package directory, found $($MsiPackages.Count)."
           }
 
-          $MsixBundles = @(Get-ChildItem -File | Where-Object { $_.Name -ceq "Devolutions-PowerShell-$PackageVersion-win.msixbundle" } | Sort-Object Name)
-          if ($MsixBundles.Count -ne 1) {
-            throw "Expected Devolutions-PowerShell-$PackageVersion-win.msixbundle in the release package directory, found $($MsixBundles.Count)."
+          $ExpectedMicrosoftAssets = @(
+            if ('${{ needs.sdk.outputs.channel }}' -eq '7.7') {
+              "Microsoft.PowerShell-$PackageVersion-win-x64.msi"
+              "Microsoft.PowerShell-$PackageVersion-win-arm64.msi"
+              "Microsoft.PowerShell-$PackageVersion-source.json"
+            }
+          )
+          $MicrosoftAssets = @(Get-ChildItem -File | Where-Object { $_.Name -like 'Microsoft.PowerShell-*' })
+          if ($MicrosoftAssets.Count -ne $ExpectedMicrosoftAssets.Count -or
+              @($ExpectedMicrosoftAssets | Where-Object { $_ -cnotin $MicrosoftAssets.Name }).Count -gt 0) {
+            throw "Expected Microsoft release assets $($ExpectedMicrosoftAssets -join ', '); found $($MicrosoftAssets.Name -join ', ')."
           }
-          $AppInstallerFeeds = @(Get-ChildItem -File | Where-Object { $_.Name -ceq 'Devolutions-PowerShell.appinstaller' } | Sort-Object Name)
+
+          $MsixBundles = @(Get-ChildItem -File | Where-Object { $_.Name -ceq "Devolutions.PowerShell-$PackageVersion-win.msixbundle" } | Sort-Object Name)
+          if ($MsixBundles.Count -ne 1) {
+            throw "Expected Devolutions.PowerShell-$PackageVersion-win.msixbundle in the release package directory, found $($MsixBundles.Count)."
+          }
+          $AppInstallerFeeds = @(Get-ChildItem -File | Where-Object { $_.Name -ceq 'Devolutions.PowerShell.appinstaller' } | Sort-Object Name)
           if ($AppInstallerFeeds.Count -ne 1) {
-            throw "Expected Devolutions-PowerShell.appinstaller in the release package directory, found $($AppInstallerFeeds.Count)."
+            throw "Expected Devolutions.PowerShell.appinstaller in the release package directory, found $($AppInstallerFeeds.Count)."
           }
           & ../package/msix/Test-PowerShellDistroMsixPackage.ps1 `
             -BundlePath $MsixBundles[0].FullName `
@@ -561,7 +607,7 @@ jobs:
             throw "Expected Linux packages $($ExpectedLinuxPackages -join ', '); found $($LinuxPackages.Name -join ', ')."
           }
 
-          $MacPackages = @(Get-ChildItem -File | Where-Object { $_.Name -like 'Devolutions-PowerShell-*-osx-*.pkg' } | Sort-Object Name)
+          $MacPackages = @(Get-ChildItem -File | Where-Object { $_.Name -like 'Devolutions.PowerShell-*-osx-*.pkg' } | Sort-Object Name)
           if ($MacPackages.Count -ne 2) {
             throw "Expected exactly two PowerShell macOS pkg installers in the release package directory, found $($MacPackages.Count)."
           }
@@ -571,7 +617,7 @@ jobs:
             throw "Expected exactly one generated patch file in the release package directory, found $($PatchFiles.Count)."
           }
 
-          $ReleaseAssetFiles = @($NugetPackages) + @($CliArchives) + @($MsiPackages) + @($MsixBundles) + @($AppInstallerFeeds) + @($LinuxPackages) + @($MacPackages) + @($PatchFiles)
+          $ReleaseAssetFiles = @($NugetPackages) + @($CliArchives) + @($MsiPackages) + @($MicrosoftAssets) + @($MsixBundles) + @($AppInstallerFeeds) + @($LinuxPackages) + @($MacPackages) + @($PatchFiles)
           $ReleaseAssetFiles = @($ReleaseAssetFiles | Sort-Object Name)
 
           $HashPath = 'checksums'
@@ -602,12 +648,21 @@ jobs:
             "| Code signed | $CodeSigned |",
             "| CLI archives | $($CliArchives.Count) |",
             "| MSI installers | $($MsiPackages.Count) |",
+            "| Microsoft-payload MSI installers | $(@($MicrosoftAssets | Where-Object Extension -eq '.msi').Count) |",
             "| MSIX bundle | $($MsixBundles[0].Name) |",
             "| App Installer feed | $($AppInstallerFeeds[0].Name) |",
             "| Linux packages | $($LinuxPackages.Count) |",
             "| macOS pkg installers | $($MacPackages.Count) |",
             "| Patch file | $($PatchFiles[0].Name) |"
           )
+          if ($ExpectedMicrosoftAssets.Count -gt 0) {
+            $ReleaseNotes += @(
+              "",
+              "Microsoft.PowerShell-*.msi contains unmodified Microsoft binaries, packaged and installer-signed by Devolutions when code signing is enabled.",
+              'These install to C:\Program Files\PowerShell\7 and upgrade the original Microsoft stable MSI installation. Devolutions.PowerShell-*.msi installs the downstream build separately under C:\Program Files\Devolutions\PowerShell\7.',
+              'Microsoft-payload MSIs do not include downstream patches or Devolutions installer remoting/Terminal-fragment integrations. Configure remoting with the upstream PowerShell tools if required.'
+            )
+          }
           Set-Content -Path $NotesPath -Value $ReleaseNotes -Encoding utf8
 
           . ../eng/PowerShellChannelConfig.ps1

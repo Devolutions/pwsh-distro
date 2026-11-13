@@ -165,8 +165,7 @@ jobs:
             $PackageVersion = $Env:PACKAGE_VERSION
           }
 
-          $PowerShellVersion = $PackageVersion -replace '\.\d+$', ''
-          $ArchiveName = "PowerShell-$PowerShellVersion-macos-$Env:ARCHITECTURE.tar.gz"
+          $ArchiveName = "PowerShell-$PackageVersion-macos-$Env:ARCHITECTURE.tar.gz"
           $ArchiveDirectory = Join-Path $PWD 'archives'
           $PayloadDirectory = Join-Path $PWD 'payload'
           New-Item -ItemType Directory -Path $ArchiveDirectory, $PayloadDirectory -Force | Out-Null
@@ -179,7 +178,7 @@ jobs:
               throw "Unable to download $ArchiveName from $Env:RELEASE_TAG."
             }
           } else {
-            $ArtifactName = "PowerShell-$PowerShellVersion-macos-$Env:ARCHITECTURE"
+            $ArtifactName = "PowerShell-$PackageVersion-macos-$Env:ARCHITECTURE"
             & gh run download $Env:CLI_RUN_ID --repo $Env:GITHUB_REPOSITORY --name $ArtifactName --dir $ArchiveDirectory
             if ($LASTEXITCODE -ne 0) {
               throw "Unable to download $ArchiveName from CLI run $Env:CLI_RUN_ID."
@@ -207,7 +206,7 @@ jobs:
             $PackageArguments.Keychain = $Env:SIGNING_KEYCHAIN
           }
           & ./package/macos/New-PowerShellDistroMacPkg.ps1 @PackageArguments
-          $PkgPath = Join-Path $OutputDirectory "Devolutions-PowerShell-$PackageVersion-osx-$Env:ARCHITECTURE.pkg"
+          $PkgPath = Join-Path $OutputDirectory "Devolutions.PowerShell-$PackageVersion-osx-$Env:ARCHITECTURE.pkg"
           & ./package/macos/Test-PowerShellDistroMacPkg.ps1 -PkgPath $PkgPath -Architecture $Env:ARCHITECTURE -PackageVersion $PackageVersion -RequireSignature:([bool] $Env:CODE_SIGNING_IDENTITY)
           "pkg-path=$PkgPath" >> $Env:GITHUB_OUTPUT
           "package-version=$PackageVersion" >> $Env:GITHUB_OUTPUT
@@ -250,7 +249,7 @@ jobs:
       - name: Upload PowerShell macOS pkg
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: Devolutions-PowerShell-${{ inputs.release_tag || inputs.package_version }}-osx-${{ matrix.arch }}-pkg
+          name: Devolutions.PowerShell-${{ inputs.release_tag || inputs.package_version }}-osx-${{ matrix.arch }}-pkg
           path: output/pkg/*.pkg
           if-no-files-found: error
 
@@ -273,7 +272,7 @@ jobs:
       - name: Download macOS pkg installers
         uses: actions/download-artifact@v8.0.1
         with:
-          pattern: Devolutions-PowerShell-${{ inputs.release_tag || inputs.package_version }}-osx-*-pkg
+          pattern: Devolutions.PowerShell-${{ inputs.release_tag || inputs.package_version }}-osx-*-pkg
           path: pkgs
           merge-multiple: true
 
@@ -284,8 +283,8 @@ jobs:
           REQUIRE_NOTARIZATION: ${{ inputs.sign_pkg }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $Pkg = @(Get-ChildItem -LiteralPath ./pkgs -Filter "Devolutions-PowerShell-*-osx-$Env:ARCHITECTURE.pkg" -File)
-          if ($Pkg.Count -ne 1 -or $Pkg[0].Name -notmatch '^Devolutions-PowerShell-(?<version>\d+\.\d+\.\d+\.\d+)-osx-') {
+          $Pkg = @(Get-ChildItem -LiteralPath ./pkgs -Filter "Devolutions.PowerShell-*-osx-$Env:ARCHITECTURE.pkg" -File)
+          if ($Pkg.Count -ne 1 -or $Pkg[0].Name -notmatch '^Devolutions\.PowerShell-(?<version>\d+\.\d+\.\d+\.\d+)-osx-') {
             throw "Expected one macOS pkg for $Env:ARCHITECTURE."
           }
           $TestArguments = @{

@@ -145,7 +145,6 @@ jobs:
             $PackageVersion = $Env:PACKAGE_VERSION
           }
 
-          $PowerShellVersion = $PackageVersion -replace '\.\d+$', ''
           $ArchiveDirectory = Join-Path $PWD 'archives'
           New-Item -ItemType Directory -Path $ArchiveDirectory -Force | Out-Null
 
@@ -153,7 +152,7 @@ jobs:
             Write-Host "Using current-run CLI artifact $Env:CLI_ARTIFACT_NAME."
           } elseif ($Env:RELEASE_TAG) {
             foreach ($Architecture in 'x64', 'arm64') {
-              $ArchiveName = "PowerShell-$PowerShellVersion-windows-$Architecture.tar.gz"
+              $ArchiveName = "PowerShell-$PackageVersion-windows-$Architecture.tar.gz"
               & gh release download $Env:RELEASE_TAG --repo $Env:GITHUB_REPOSITORY --pattern $ArchiveName --dir $ArchiveDirectory
               if ($LASTEXITCODE -ne 0) {
                 throw "Unable to download $ArchiveName from $Env:RELEASE_TAG."
@@ -161,7 +160,7 @@ jobs:
             }
           } else {
             foreach ($Architecture in 'x64', 'arm64') {
-              $ArtifactName = "PowerShell-$PowerShellVersion-windows-$Architecture"
+              $ArtifactName = "PowerShell-$PackageVersion-windows-$Architecture"
               & gh run download $Env:CLI_RUN_ID --repo $Env:GITHUB_REPOSITORY --name $ArtifactName --dir $ArchiveDirectory
               if ($LASTEXITCODE -ne 0) {
                 throw "Unable to download $ArtifactName from CLI run $Env:CLI_RUN_ID."
@@ -179,10 +178,10 @@ jobs:
       - name: Upload PowerShell MSIX bundle and App Installer feed
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: Devolutions-PowerShell-${{ inputs.release_tag || inputs.package_version }}-win-msix
+          name: Devolutions.PowerShell-${{ inputs.release_tag || inputs.package_version }}-win-msix
           path: |
-            output/msix/Devolutions-PowerShell-*-win.msixbundle
-            output/msix/Devolutions-PowerShell.appinstaller
+            output/msix/Devolutions.PowerShell-*-win.msixbundle
+            output/msix/Devolutions.PowerShell.appinstaller
           if-no-files-found: error
 
   test:
@@ -208,7 +207,7 @@ jobs:
       - name: Download PowerShell MSIX bundle and App Installer feed
         uses: actions/download-artifact@v8.0.1
         with:
-          name: Devolutions-PowerShell-${{ inputs.release_tag || inputs.package_version }}-win-msix
+          name: Devolutions.PowerShell-${{ inputs.release_tag || inputs.package_version }}-win-msix
           path: current-msix
 
       - name: Exercise MSIX verification, install, upgrade, execution, and uninstall
@@ -218,8 +217,8 @@ jobs:
           REQUIRE_SIGNATURE: ${{ inputs.sign_msix }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $Bundles = @(Get-ChildItem -LiteralPath ./current-msix -Filter 'Devolutions-PowerShell-*-win.msixbundle' -File)
-          $Feeds = @(Get-ChildItem -LiteralPath ./current-msix -Filter 'Devolutions-PowerShell.appinstaller' -File)
+          $Bundles = @(Get-ChildItem -LiteralPath ./current-msix -Filter 'Devolutions.PowerShell-*-win.msixbundle' -File)
+          $Feeds = @(Get-ChildItem -LiteralPath ./current-msix -Filter 'Devolutions.PowerShell.appinstaller' -File)
           if ($Bundles.Count -ne 1 -or $Feeds.Count -ne 1) {
             throw "Expected one MSIX bundle and one App Installer feed, found $($Bundles.Count) bundle(s) and $($Feeds.Count) feed(s)."
           }

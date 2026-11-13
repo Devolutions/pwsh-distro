@@ -23,6 +23,8 @@ Download CLI installers and archives from [**GitHub Releases**](https://github.c
 
 Release tags follow `vX.Y.Z.R`, where `X.Y.Z` matches the upstream PowerShell version (such as `7.6.10` or `7.7.0`) and `R` is the Devolutions downstream revision (`0`, `1`, ...). Matching upstream `PowerShell/PowerShell`, GitHub's `Latest` badge tracks the highest GA line (`7.7.x`); select the latest `v7.6.x.R` tag on the [Releases page](https://github.com/Devolutions/pwsh-distro/releases) when deploying **7.6 LTS**.
 
+New versioned release assets use the full **`X.Y.Z.R`**, including revision `.0`, so revisions of the same upstream release have distinct filenames. This applies to CLI archives (`PowerShell-7.7.0.1-windows-x64.tar.gz`), both MSI families (including `Microsoft.PowerShell-7.7.0.1-win-x64.msi`), other installers, and provenance/patch files. Upstream tags and payload versions remain `X.Y.Z`. Exceptions are NuGet's normalized `.nupkg` version (revision `.0` is omitted) and the intentionally unversioned `Devolutions.PowerShell.appinstaller` update feed.
+
 ---
 
 ## Installing Devolutions PowerShell CLI
@@ -47,8 +49,12 @@ Self-contained installers and archives include the `.NET` runtime—no separate 
 
 The Windows MSI installer is the recommended option for desktops, servers, enterprise deployments, and machines pinning the **7.6 LTS** channel. Each release publishes signed installers for both 64-bit Intel/AMD (`x64`) and Windows on ARM (`arm64`):
 
-- `Devolutions-PowerShell-<X.Y.Z.R>-win-x64.msi`
-- `Devolutions-PowerShell-<X.Y.Z.R>-win-arm64.msi`
+- `Devolutions.PowerShell-<X.Y.Z.R>-win-x64.msi`
+- `Devolutions.PowerShell-<X.Y.Z.R>-win-arm64.msi`
+
+Releases up to and including `v7.7.0.0` and `v7.6.10.0` use a `Devolutions-PowerShell-` prefix instead (for example `Devolutions-PowerShell-7.6.10.0-win-x64.msi`); the commands below use those published names.
+
+New 7.7 releases additionally include `Microsoft.PowerShell-<X.Y.Z.R>-win-<arch>.msi`: Microsoft's unmodified ZIP payload repackaged and installer-signed by Devolutions. These install to `C:\Program Files\PowerShell\7` and upgrade Microsoft's original MSI, whereas `Devolutions.PowerShell-*` installs the patched distribution separately under `C:\Program Files\Devolutions\PowerShell\7`. See [Microsoft ZIP-to-MSI repackaging](#microsoft-powershell-77-zip-to-msi-repackaging) for the differences.
 
 **Interactive install:**
 
@@ -97,17 +103,17 @@ When WinRM remoting is enabled—either via the MSI **Enable Devolutions PowerSh
 For per-user installation **without administrator privileges** and automatic background updates on **Windows 11 version 21H2 (build 22000) or later**, install from the App Installer feed:
 
 ```powershell
-Add-AppxPackage -AppInstallerFile https://github.com/Devolutions/pwsh-distro/releases/latest/download/Devolutions-PowerShell.appinstaller
+Add-AppxPackage -AppInstallerFile https://github.com/Devolutions/pwsh-distro/releases/latest/download/Devolutions.PowerShell.appinstaller
 ```
 
 - Registers the `pwsh.exe` App Execution Alias under `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe` and disables filesystem/registry write virtualization.
 - Checks silently for updates from GitHub Releases in the background (and defers applying updates while `pwsh.exe` is running on **Windows 11 24H2 / build 26100+**).
 - **Channel note**: The MSIX auto-update feed tracks the repository's `Latest` GA release (`7.7.x`). To stay pinned to **7.6 LTS**, use the [MSI installer](#msi-installer-recommended) or [portable archive](#portable-archive-windows) instead.
-- **Windows 10 (1809–22H2)**: Install `Devolutions-PowerShell-<X.Y.Z.R>-win.msixbundle` directly (`Add-AppxPackage -Path .\Devolutions-PowerShell-<X.Y.Z.R>-win.msixbundle`). Windows 10 ignores `uap13:AutoUpdate`, so updates are manual on Windows 10.
+- **Windows 10 (1809–22H2)**: Install `Devolutions.PowerShell-<X.Y.Z.R>-win.msixbundle` directly (`Add-AppxPackage -Path .\Devolutions.PowerShell-<X.Y.Z.R>-win.msixbundle`). Windows 10 ignores `uap13:AutoUpdate`, so updates are manual on Windows 10.
 
 #### Portable archive (Windows)
 
-Use the self-contained `.tar.gz` archive (`PowerShell-<X.Y.Z>-windows-x64.tar.gz` or `PowerShell-<X.Y.Z>-windows-arm64.tar.gz`) when you want an isolated, side-by-side copy of `pwsh.exe` without running an installer or elevating privileges:
+Use the self-contained `.tar.gz` archive (`PowerShell-<X.Y.Z.R>-windows-x64.tar.gz` or `PowerShell-<X.Y.Z.R>-windows-arm64.tar.gz`) when you want an isolated, side-by-side copy of `pwsh.exe` without running an installer or elevating privileges. Releases through `v7.7.0.0` and `v7.6.10.0` used three-part archive filenames; the historical download examples below retain those published names:
 
 ```powershell
 Invoke-WebRequest `
@@ -127,8 +133,8 @@ tar -xzf .\PowerShell-7.6.10-windows-x64.tar.gz -C .\pwsh-cli
 
 Each release provides Apple-signed and notarized installer packages for **Apple silicon** (`arm64`) and **Intel** (`x64`) Macs running macOS 12 Monterey or later:
 
-- `Devolutions-PowerShell-<X.Y.Z.R>-osx-arm64.pkg` (Apple silicon)
-- `Devolutions-PowerShell-<X.Y.Z.R>-osx-x64.pkg` (Intel)
+- `Devolutions.PowerShell-<X.Y.Z.R>-osx-arm64.pkg` (Apple silicon)
+- `Devolutions.PowerShell-<X.Y.Z.R>-osx-x64.pkg` (Intel)
 
 Download the `.pkg` from [**GitHub Releases**](https://github.com/Devolutions/pwsh-distro/releases) and double-click it in Finder, or install from Terminal:
 
@@ -206,7 +212,7 @@ pwsh -NoLogo -Command '$PSVersionTable'
 
 #### Alpine Linux and portable Linux archives
 
-Alpine Linux uses the `linux-musl` `.tar.gz` archive (`PowerShell-<X.Y.Z>-linux-musl-x64.tar.gz` or `arm64`):
+Alpine Linux uses the `linux-musl` `.tar.gz` archive (`PowerShell-<X.Y.Z.R>-linux-musl-x64.tar.gz` or `arm64`):
 
 ```sh
 apk add --no-cache ca-certificates icu-libs krb5-libs libgcc libstdc++ openssl tzdata
@@ -216,7 +222,7 @@ tar -xzf ./PowerShell-7.6.10-linux-musl-x64.tar.gz -C ./pwsh-cli
 ./pwsh-cli/pwsh -NoLogo -Command '$PSVersionTable'
 ```
 
-For any glibc 2.28+ Linux distribution without root access, extract `PowerShell-<X.Y.Z>-linux-x64.tar.gz` or `PowerShell-<X.Y.Z>-linux-arm64.tar.gz` the same way.
+For any glibc 2.28+ Linux distribution without root access, extract `PowerShell-<X.Y.Z.R>-linux-x64.tar.gz` or `PowerShell-<X.Y.Z.R>-linux-arm64.tar.gz` the same way.
 
 ---
 
@@ -402,14 +408,14 @@ Installer scripts under `package/` repackage unpacked CLI archives locally for t
 
 # Windows MSIX bundle + App Installer feed (requires Windows SDK makeappx)
 .\package\msix\New-ReleasePowerShellDistroMsix.ps1 -X64PayloadDirectory .\pwsh-cli-x64 -Arm64PayloadDirectory .\pwsh-cli-arm64 -PackageVersion 7.6.10.0 -OutputDirectory .\output\msix
-.\package\msix\Test-PowerShellDistroMsixPackage.ps1 -BundlePath .\output\msix\Devolutions-PowerShell-7.6.10.0-win.msixbundle -AppInstallerPath .\output\msix\Devolutions-PowerShell.appinstaller -PackageVersion 7.6.10.0
+.\package\msix\Test-PowerShellDistroMsixPackage.ps1 -BundlePath .\output\msix\Devolutions.PowerShell-7.6.10.0-win.msixbundle -AppInstallerPath .\output\msix\Devolutions.PowerShell.appinstaller -PackageVersion 7.6.10.0
 .\package\msix\Test-PowerShellDistroAppInstaller.ps1
 ```
 
 ```powershell
 # macOS .pkg (requires macOS pkgbuild/productbuild; omit -Install on Test-PowerShellDistroMacPkg.ps1 to avoid modifying /usr/local)
 ./package/macos/New-PowerShellDistroMacPkg.ps1 -PayloadDirectory ./pwsh-cli -PackageVersion 7.6.10.0 -Architecture arm64 -OutputDirectory ./output/pkg
-./package/macos/Test-PowerShellDistroMacPkg.ps1 -PkgPath ./output/pkg/Devolutions-PowerShell-7.6.10.0-osx-arm64.pkg -Architecture arm64 -PackageVersion 7.6.10.0
+./package/macos/Test-PowerShellDistroMacPkg.ps1 -PkgPath ./output/pkg/Devolutions.PowerShell-7.6.10.0-osx-arm64.pkg -Architecture arm64 -PackageVersion 7.6.10.0
 
 # Linux .deb / .rpm (requires Linux with dpkg-deb or rpmbuild; Distribution: deb, rh, cm, azl4)
 ./package/linux/New-PowerShellDistroLinuxPackage.ps1 -PayloadDirectory ./pwsh-cli -PackageVersion 7.6.10.0 -Architecture x64 -Distribution deb -OutputDirectory ./output/linux
@@ -431,7 +437,7 @@ Installer scripts under `package/` repackage unpacked CLI archives locally for t
 | PowerShell 7.7 (STS) SDK package | `Devolutions.PowerShell.SDK` / `7.7.0.0` workflow default; `7.7.0` latest published package |
 | PowerShell 7.7 (STS) .NET runtime workflow | `v11.0.0` |
 | Latest downstream release tag | `v7.7.0.0` (`7.7` STS / `Latest`), `v7.6.10.0` (`7.6` LTS) |
-| Latest PowerShell CLI release assets | `PowerShell-<version>-<os>-<arch>.tar.gz` for Windows, macOS, Linux, and Alpine Linux on x64 and arm64 |
+| Latest PowerShell CLI release assets | `PowerShell-<X.Y.Z.R>-<os>-<arch>.tar.gz` for Windows, macOS, Linux, and Alpine Linux on x64 and arm64 |
 | PowerShell SDK package source | `https://api.nuget.org/v3/index.json` |
 | multi-pwsh apphost package | `Devolutions.MultiPwsh.Cli` / `0.14.2` |
 | multi-pwsh apphost package source | `https://api.nuget.org/v3/index.json` |
@@ -450,17 +456,34 @@ All workflows are manual and started from the GitHub Actions **Run workflow** bu
 | Workflow | Purpose | Output |
 | --- | --- | --- |
 | `.github/workflows/powershell-sdk.yml` | Builds PowerShell from source, vendors and signs the source-built payload, and validates the SDK package in a sample `.NET` app with opt-in apphost import. Runs manually or as a reusable workflow. | `PowerShell-SDK-Release-X.Y.Z.R` artifact containing the SDK `.nupkg`. |
-| `.github/workflows/powershell-cli.yml` | Restores a pinned or workflow-built SDK package and builds self-contained Windows, macOS, glibc Linux, and Alpine Linux CLI archives for x64 and arm64. | `PowerShell-<version>-<os>-<arch>` `.tar.gz` artifacts, including `linux-musl` for Alpine. |
-| `.github/workflows/powershell-msi.yml` | Packages published Windows CLI archives, CLI workflow artifacts, or the current release's prepared CLI archives, then signs and verifies the MSI when enabled. | `Devolutions-PowerShell-<tag-or-version>-win-<arch>-msi` artifacts containing an x64 or ARM64 `.msi`. |
-| `.github/workflows/powershell-msix.yml` | Packages Windows x64 and ARM64 CLI archives into a combined MSIX bundle with embedded and standalone GitHub Releases App Installer auto-update feeds, signs when enabled, and tests installation and upgrades on x64 and ARM64 Windows. | `Devolutions-PowerShell-<tag-or-version>-win-msix` artifact containing `Devolutions-PowerShell-X.Y.Z.R-win.msixbundle` and `Devolutions-PowerShell.appinstaller`. |
-| `.github/workflows/powershell-linux.yml` | Repackages Linux CLI archives as deb and RPM packages and tests installation, execution, and removal across supported distributions. | `Devolutions-PowerShell-<version>-linux-<arch>-packages` artifacts with one deb and three RPMs per architecture. |
-| `.github/workflows/powershell-macos-pkg.yml` | Packages published macOS CLI archives, CLI workflow artifacts, or the current release's prepared CLI archives into macOS installer packages, then tests installation on native Intel and Apple silicon runners. | `Devolutions-PowerShell-<tag-or-version>-osx-<arch>-pkg` artifacts containing an x64 or arm64 `.pkg`. |
-| `.github/workflows/release.yml` | Orchestrates the SDK, CLI, MSI, MSIX, Linux, and macOS pkg workflows, signs release-ready CLI, MSI, and MSIX artifacts, publishes the SDK package, and creates the GitHub release. | GitHub release `vX.Y.Z.R` with the SDK `.nupkg`, eight CLI archives, two Windows MSIs, the Windows MSIX bundle and App Installer feed, eight Linux packages, two macOS pkgs, the downstream patch, and checksums. |
+| `.github/workflows/powershell-cli.yml` | Restores a pinned or workflow-built SDK package and builds self-contained Windows, macOS, glibc Linux, and Alpine Linux CLI archives for x64 and arm64. | `PowerShell-<X.Y.Z.R>-<os>-<arch>` `.tar.gz` artifacts, including `linux-musl` for Alpine. |
+| `.github/workflows/powershell-msi.yml` | Packages published Windows CLI archives, CLI workflow artifacts, or the current release's prepared CLI archives, then signs and verifies the MSI when enabled. | `Devolutions.PowerShell-<tag-or-version>-win-<arch>-msi` artifacts containing an x64 or ARM64 `.msi`. |
+| `.github/workflows/powershell-microsoft-msi.yml` | Repackages Microsoft's published PowerShell 7.7 Windows ZIPs without rebuilding PowerShell, signs the MSI with Devolutions' certificate when enabled, and tests native x64/ARM64 installation and upgrade from Microsoft's original MSI. Runs manually or is called by `release.yml` for 7.7. | `Microsoft.PowerShell-<X.Y.Z.R>-win-msi` artifact with `Microsoft.PowerShell-<X.Y.Z.R>-win-<arch>.msi` x64 and ARM64 MSIs, `hashes.sha256`, and `Microsoft.PowerShell-<X.Y.Z.R>-source.json`. |
+| `.github/workflows/powershell-msix.yml` | Packages Windows x64 and ARM64 CLI archives into a combined MSIX bundle with embedded and standalone GitHub Releases App Installer auto-update feeds, signs when enabled, and tests installation and upgrades on x64 and ARM64 Windows. | `Devolutions.PowerShell-<tag-or-version>-win-msix` artifact containing `Devolutions.PowerShell-X.Y.Z.R-win.msixbundle` and `Devolutions.PowerShell.appinstaller`. |
+| `.github/workflows/powershell-linux.yml` | Repackages Linux CLI archives as deb and RPM packages and tests installation, execution, and removal across supported distributions. | `Devolutions.PowerShell-<version>-linux-<arch>-packages` artifacts with one deb and three RPMs per architecture. |
+| `.github/workflows/powershell-macos-pkg.yml` | Packages published macOS CLI archives, CLI workflow artifacts, or the current release's prepared CLI archives into macOS installer packages, then tests installation on native Intel and Apple silicon runners. | `Devolutions.PowerShell-<tag-or-version>-osx-<arch>-pkg` artifacts containing an x64 or arm64 `.pkg`. |
+| `.github/workflows/release.yml` | Orchestrates the SDK, CLI, MSI, MSIX, Linux, and macOS pkg workflows, signs release-ready CLI, MSI, and MSIX artifacts, publishes the SDK package, and creates the GitHub release. | GitHub release `vX.Y.Z.R` with the SDK `.nupkg`, eight CLI archives, two Devolutions Windows MSIs, two additional Microsoft-payload Windows MSIs and provenance for 7.7, the Windows MSIX bundle and App Installer feed, eight Linux packages, two macOS pkgs, the downstream patch, and checksums. |
 | `.github/workflows/dotnet-runtime.yml` | Builds the `.NET` runtime for the selected channel (`v10.0.5` for `7.6`, `v11.0.0` for `7.7`) across Windows, macOS, glibc Linux, and Alpine Linux on x64 and arm64. Native builds use `awakecoding/llvm-prebuilt`; Linux builds use Microsoft's `.NET 10`/`.NET 11` cross-build images. | `DotNet-Runtime-<channel>-<rid>` artifacts containing the source-built runtime packs. |
+
+## Microsoft PowerShell 7.7 ZIP-to-MSI repackaging
+
+**PowerShell Release** automatically calls the separate **Microsoft PowerShell MSI** workflow (`powershell-microsoft-msi.yml`) for channel **7.7**, using the same upstream tag, package revision, signing environment, and signing mode as the rest of the release. Both tested MSIs and their provenance are published alongside the source-built packages on the same GitHub release and included in its global `checksums`. Publication waits for the Microsoft MSI tests; a failed repackaging or test blocks the 7.7 release. Channel 7.6 skips this workflow and retains its existing release contents.
+
+The workflow can also run manually with `upstream_tag=v7.7.0`, `package_revision=0`, and `github-env=publish-test` or `publish-prod`. Manual runs sign by default (`sign_msi=true`) and produce Actions artifacts without creating a release. Only published **7.7 GA** tags (`v7.7.Z`) are accepted; previews, other channels, x86, and framework-dependent ZIPs are excluded. Both self-contained Windows x64 and ARM64 ZIPs come directly from `PowerShell/PowerShell`. The workflow verifies Microsoft's `hashes.sha256`, the payload version, and valid Microsoft Corporation Authenticode signatures before wrapping the payload with WiX 4.
+
+This is **installer-only repackaging**: no source submodules, SDK/runtime builds, binary patching, icon replacement, ReadyToRun conversion, or payload re-signing. PowerShell files retain Microsoft's signatures, licensing, notices, launcher, and upstream behavior; downstream hosting/remoting patches and the multi-pwsh launcher are **not** included. Only the MSI is signed by Devolutions, using the existing Azure Key Vault secrets and timestamp variable below; missing signing configuration fails any signing-enabled run. Unsigned release dry-runs remain possible without signing secrets.
+
+The Microsoft-payload MSIs default to **`C:\Program Files\PowerShell\7`**, matching Microsoft's original stable x64 and ARM64 installers. They use Microsoft's original stable architecture-specific UpgradeCodes, preserve a previously saved custom install root, and **upgrade/replace an existing Microsoft stable MSI**, rather than writing over a separately registered product. Installing the opposite architecture is blocked until the existing architecture is uninstalled. These packages can coexist with source-built `Devolutions.PowerShell-*` MSIs under `C:\Program Files\Devolutions\PowerShell\7`; they do not upgrade or remove that distribution.
+
+The lightweight installer registers a Start menu shortcut, configurable `ADD_PATH` (default `1`, preserving a saved choice), and Microsoft's `PowerShellCore\InstalledVersions` discovery entries used by Windows Terminal. It deliberately does not install Devolutions-specific Terminal fragments or manage remoting endpoints, event manifests, Explorer menus, or Microsoft Update registration. Configure any required remoting/integrations using the upstream tools; inherited endpoints from an older MSI may need reconfiguration after upgrading.
+
+Package versions and filenames use `7.7.Z.R` and encode MSI versions as `7.7.(Z * 100 + R)`; increase `package_revision` (`0..99`) when repackaging the same upstream release. After installation tests pass, the `Microsoft.PowerShell-7.7.Z.R-win-msi` artifact contains `Microsoft.PowerShell-7.7.Z.R-win-x64.msi`, `Microsoft.PowerShell-7.7.Z.R-win-arm64.msi`, `hashes.sha256`, and `Microsoft.PowerShell-7.7.Z.R-source.json`. The provenance records the full package version, upstream three-part tag, ZIP hashes, and installer signing mode. The MSI product name identifies Devolutions as the repackager; the `Microsoft.` file prefix identifies the binary source, not a Microsoft-issued MSI. Native x64/ARM64 CI tests cover fresh installation at the original path, upgrade from Microsoft's signed 7.6.10 MSI, repair, cross-architecture rejection, payload signatures, discovery registration, and uninstall. These tests run in Windows PowerShell on disposable GitHub-hosted runners because they replace the runner's installed PowerShell.
+
+The same `package\msi\Test-MicrosoftPowerShellMsiInstall.ps1` test can run inside **Windows Sandbox** with `-WindowsSandbox`, using matching-architecture repackaged and original Microsoft MSI paths. The switch verifies the Sandbox container marker and `WDAGUtilityAccount`; it does not permit testing on the host. Run it in the guest's Windows PowerShell (`powershell.exe`), not inside the PowerShell installation being replaced. `-RequireSignature` additionally requires a signed installer; installed Microsoft payload signatures are verified even for an unsigned local test MSI.
 
 ## Publishing PowerShell releases
 
-The release workflow publishes only after the SDK has been validated, every CLI archive, both MSI installers, the MSIX bundle and App Installer feed, and both macOS pkg installers have been built, and the MSI, MSIX, Linux, Alpine, and macOS installation tests have passed. ReadyToRun CLI archives are signed before installer packaging, so installers contain the final CLI payload. The release version is `<powerShellVersion>.<sdk_package_revision>`, such as `7.6.10.0` or `7.7.0.0`.
+The release workflow publishes only after the SDK has been validated, every CLI archive, both source-built MSI installers, the MSIX bundle and App Installer feed, and both macOS pkg installers have been built, and the MSI, MSIX, Linux, Alpine, and macOS installation tests have passed. For 7.7, both Microsoft-payload MSIs must also be built and their installation tests must pass. ReadyToRun CLI archives are signed before source-built installer packaging, so those installers contain the final CLI payload; Microsoft-payload MSIs always retain Microsoft's ZIP binaries unchanged. The release version is `<powerShellVersion>.<sdk_package_revision>`, such as `7.6.10.0` or `7.7.0.0`.
 
 Manual inputs:
 
@@ -496,7 +519,7 @@ Before validation and CLI packaging, the SDK workflow signs source-built assembl
 | `DEVOLUTIONSBOT_TOKEN` | Org secret | Checks out the private `Devolutions/actions` repository |
 | `NUGET_BOT_USERNAME` | Secret | NuGet.org account username for `NuGet/login@v1` OIDC publishing |
 
-Production releases require **four approval rounds**: SDK signing; one Windows job that prepares/signs all eight CLI archives and builds/signs both MSI installers and the MSIX bundle; the two macOS pkg signing and notarization jobs; and final publishing after all MSI, MSIX, Linux, Alpine, and macOS installation tests succeed (`skip-publish=true` omits the fourth round). Publishing uses `publish-test` and `publish-prod` environments with `NuGet/login@v1` OIDC, pushes the validated `.nupkg` to NuGet.org, and creates the `Devolutions PowerShell vX.Y.Z.R` GitHub release—passing `--latest=false` whenever a higher non-draft, non-prerelease `vA.B.C.R` release already exists (`Test-ShouldMarkGitHubReleaseLatest`).
+Production releases require environment approvals for SDK signing; the Windows job that prepares/signs all eight CLI archives and builds/signs both source-built MSI installers and the MSIX bundle; the Microsoft MSI repackaging jobs for 7.7; the two macOS pkg signing and notarization jobs; and final publishing after all required installation tests succeed (`skip-publish=true` omits final publishing). Publishing uses `publish-test` and `publish-prod` environments with `NuGet/login@v1` OIDC, pushes the validated `.nupkg` to NuGet.org, and creates the `Devolutions PowerShell vX.Y.Z.R` GitHub release—passing `--latest=false` whenever a higher non-draft, non-prerelease `vA.B.C.R` release already exists (`Test-ShouldMarkGitHubReleaseLatest`).
 
 CLI archive signing replaces only selected PE entries while preserving tar permissions, ownership, timestamps, and symlinks (`./eng/Test-SignPowerShellDistroArchive.ps1` exercises metadata preservation offline).
 
@@ -527,7 +550,7 @@ Verify `<TargetFramework>` from `pwsh-src-<channel>/PowerShell.Common.props` and
 - **CLI repackaging & custom icons**: `powershell-cli.yml` consumes `Devolutions.PowerShell.SDK` as a normal NuGet consumer (with `Root` apphost, XML docs, PSGallery modules, localized resources, optional compatibility packages, and `Microsoft.WindowsDesktop.App.Runtime.<rid>` on Windows). Windows and macOS launchers recolor the PowerShell icon with Devolutions blue (`#0068C3`, `package/powershell-icon.svg`); signed releases re-sign the modified executables, while local/unsigned builds leave them unsigned.
 - **Linux launcher & native compatibility**: `powershell-cli.yml` builds the pinned `multi-pwsh` launcher from Rust source for glibc 2.28 and Alpine `musl`, and builds both ARM64 `Microsoft.PowerShell.Native` variants from pinned source so RHEL 8 and Alpine ARM64 are supported.
 - **macOS cross-validation & notarization**: `osx-x64` SDK and CLI jobs build on `macos-15` (Apple silicon) and skip Rosetta execution probes, while `powershell-macos-pkg.yml` tests installation on native Intel and Apple silicon runners, signs Mach-O binaries with hardened-runtime + `package/macos/assets/pwsh-entitlements.plist`, and notarizes/staples the product archive. The `/usr/local/bin/pwsh` wrapper script is used instead of a symlink so `multi-pwsh` does not treat it as a manager shim.
-- **Windows MSI & MSIX internals**: WiX 4 MSI versions encode `X.Y.Z.R` as `X.Y.(Z * 100 + R)` (`R` in `0..99`) so downstream revisions upgrade cleanly, including migration from legacy `7-<arch>` paths to `C:\Program Files\Devolutions\PowerShell\7`. MSIX bundles embed a byte-for-byte copy of `Devolutions-PowerShell.appinstaller` as `Update.appinstaller` (`uap13:AutoUpdate` + `uap17:UpdateWhileInUse`) and stamp `Identity/@Publisher` from the active signing certificate subject.
+- **Windows MSI & MSIX internals**: WiX 4 MSI versions encode `X.Y.Z.R` as `X.Y.(Z * 100 + R)` (`R` in `0..99`) so downstream revisions upgrade cleanly, including migration from legacy `7-<arch>` paths to `C:\Program Files\Devolutions\PowerShell\7`. MSIX bundles embed a byte-for-byte copy of `Devolutions.PowerShell.appinstaller` as `Update.appinstaller` (`uap13:AutoUpdate` + `uap17:UpdateWhileInUse`) and stamp `Identity/@Publisher` from the active signing certificate subject.
 
 ### Third-party notices
 

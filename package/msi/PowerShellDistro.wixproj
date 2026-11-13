@@ -1,9 +1,14 @@
 <Project Sdk="WixToolset.Sdk/4.0.6">
   <PropertyGroup>
     <OutputType>Package</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Distribution Condition="'$(Distribution)' == ''">Devolutions</Distribution>
     <DefineConstants>ProductSourcePath=$(PayloadDirectory);WindowsTerminalProfileScript=$(MSBuildProjectDirectory)\Register-WindowsTerminalProfile.ps1;PowerShellRemotingScript=$(MSBuildProjectDirectory)\Register-PowerShellRemoting.ps1;ProductName=Devolutions PowerShell;ProductVersion=$(MsiProductVersion);SimpleProductVersion=$(SimpleProductVersion);ProductSemanticVersion=$(SemanticVersion);IsPreview=False</DefineConstants>
+    <DefineConstants Condition="'$(Distribution)' == 'Microsoft'">$(DefineConstants);MicrosoftLicenseRtf=$(MicrosoftLicenseRtf)</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="assets\wix\MicrosoftProduct.wxs" Condition="'$(Distribution)' == 'Microsoft'" />
+    <Compile Include="assets\wix\Product.wxs" Condition="'$(Distribution)' == 'Devolutions'" />
     <PackageReference Include="WixToolset.Heat" Version="4.0.6" />
     <PackageReference Include="WixToolset.UI.wixext" Version="4.0.6" />
     <PackageReference Include="WixToolset.Util.wixext" Version="4.0.6" />

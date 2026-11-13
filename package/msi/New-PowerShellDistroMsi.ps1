@@ -12,7 +12,10 @@ param(
   [string] $Architecture,
 
   [Parameter(Mandatory)]
-  [string] $OutputDirectory
+  [string] $OutputDirectory,
+
+  [ValidateSet('Devolutions', 'Microsoft')]
+  [string] $Distribution = 'Devolutions'
 )
 
 Set-StrictMode -Version 3.0
@@ -71,7 +74,7 @@ if ($Output.StartsWith($Payload.TrimEnd('\') + '\', [System.StringComparison]::O
   throw "MSI output must be outside the payload directory: $Output"
 }
 New-Item -ItemType Directory -Path $Output -Force | Out-Null
-$MsiPath = Join-Path $Output "Devolutions-PowerShell-$PackageVersion-win-$Architecture.msi"
+$MsiPath = Join-Path $Output "$Distribution.PowerShell-$PackageVersion-win-$Architecture.msi"
 if (Test-Path -LiteralPath $MsiPath) {
   throw "MSI output already exists: $MsiPath"
 }
@@ -81,6 +84,12 @@ New-Item -ItemType Directory -Path $Work | Out-Null
 try {
   $Packages = Join-Path $Work 'packages'
   $Project = Join-Path $MsiRoot 'PowerShellDistro.wixproj'
+  $LicenseRtf = Join-Path $Work 'License.rtf'
+  if ($Distribution -eq 'Microsoft') {
+    $License = [System.IO.File]::ReadAllText((Join-Path $Payload 'LICENSE.txt'))
+    $EscapedLicense = $License.Replace('\', '\\').Replace('{', '\{').Replace('}', '\}') -replace '\r?\n', '\par '
+    [System.IO.File]::WriteAllText($LicenseRtf, "{\rtf1\ansi $EscapedLicense}")
+  }
   $BuildProperties = @(
     "/p:BaseIntermediateOutputPath=$Work\obj\",
     "/p:OutputPath=$Work\bin\",
@@ -90,6 +99,8 @@ try {
     "/p:MsiProductVersion=$MsiVersion",
     "/p:SimpleProductVersion=$($Version.Major)",
     "/p:SemanticVersion=$SemanticVersion",
+    "/p:Distribution=$Distribution",
+    "/p:MicrosoftLicenseRtf=$LicenseRtf",
     "/p:InstallerPlatform=$Architecture",
     '/p:Configuration=Release'
   )

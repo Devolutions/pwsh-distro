@@ -41,7 +41,6 @@ if ($SignMsi) {
 }
 
 $ArchiveRoot = (Resolve-Path -LiteralPath $ArchiveDirectory).Path
-$PowerShellVersion = $PackageVersion -replace '\.\d+$', ''
 $OutputDirectory = Join-Path $PWD 'output\msi'
 $LegacyOutputDirectory = Join-Path $PWD 'output\legacy-msi'
 $Work = Join-Path $PWD 'output\msi-payload'
@@ -49,7 +48,7 @@ $Work = Join-Path $PWD 'output\msi-payload'
 New-Item -ItemType Directory -Path $Work | Out-Null
 try {
   foreach ($Architecture in 'x64', 'arm64') {
-    $ArchivePath = Join-Path $ArchiveRoot "PowerShell-$PowerShellVersion-windows-$Architecture.tar.gz"
+    $ArchivePath = Join-Path $ArchiveRoot "PowerShell-$PackageVersion-windows-$Architecture.tar.gz"
     if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
       throw "Release archive was not found: $ArchivePath"
     }
@@ -63,7 +62,7 @@ try {
     & (Join-Path $PSScriptRoot 'New-PowerShellDistroMsi.ps1') `
       -PayloadDirectory $PayloadDirectory -PackageVersion $PackageVersion `
       -Architecture $Architecture -OutputDirectory $OutputDirectory
-    $MsiPath = Join-Path $OutputDirectory "Devolutions-PowerShell-$PackageVersion-win-$Architecture.msi"
+    $MsiPath = Join-Path $OutputDirectory "Devolutions.PowerShell-$PackageVersion-win-$Architecture.msi"
     & (Join-Path $PSScriptRoot 'Test-PowerShellDistroMsiTables.ps1') `
       -MsiPath $MsiPath -Architecture $Architecture -PackageVersion $PackageVersion
     & (Join-Path $PSScriptRoot 'New-LegacyPowerShellDistroMsiFixture.ps1') `

@@ -123,7 +123,7 @@ if ($Output.StartsWith($Payload.TrimEnd('/') + '/', [System.StringComparison]::O
   throw "macOS pkg output must be outside the payload directory: $Output"
 }
 New-Item -ItemType Directory -Path $Output -Force | Out-Null
-$PkgPath = Join-Path $Output "Devolutions-PowerShell-$PackageVersion-osx-$Architecture.pkg"
+$PkgPath = Join-Path $Output "Devolutions.PowerShell-$PackageVersion-osx-$Architecture.pkg"
 if (Test-Path -LiteralPath $PkgPath) {
   throw "macOS pkg output already exists: $PkgPath"
 }

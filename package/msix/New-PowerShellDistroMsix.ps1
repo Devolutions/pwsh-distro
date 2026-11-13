@@ -134,7 +134,7 @@ if ($Output.StartsWith($Payload.TrimEnd('\') + '\', [System.StringComparison]::O
   throw "MSIX output must be outside the payload directory: $Output"
 }
 New-Item -ItemType Directory -Path $Output -Force | Out-Null
-$MsixPath = Join-Path $Output "Devolutions-PowerShell-$PackageVersion-win-$Architecture.msix"
+$MsixPath = Join-Path $Output "Devolutions.PowerShell-$PackageVersion-win-$Architecture.msix"
 if (Test-Path -LiteralPath $MsixPath) {
   throw "MSIX output already exists: $MsixPath"
 }
