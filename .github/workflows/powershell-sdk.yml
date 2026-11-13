@@ -137,7 +137,7 @@ env:
   MULTI_PWSH_APPHOST_PACKAGE_VERSION: "0.14.2"
   MULTI_PWSH_APPHOST_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
   PSIGN_SOURCE_REPOSITORY: "Devolutions/psign"
-  PSIGN_SOURCE_REF: "copilot/msix-bundle-signing-offsets"
+  PSIGN_SOURCE_REF: "a90b81d93564d9918a3154925b194b5bf05937e9"
   PSIGN_RUST_TOOLCHAIN: "stable"
 jobs:
   preflight:
