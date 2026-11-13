@@ -43,6 +43,7 @@ function Invoke-Msi {
 
   $Log = Join-Path $LogRoot "$([guid]::NewGuid().ToString('N')).log"
   $Process = Start-Process msiexec.exe -ArgumentList "$Action `"$Path`" /qn /norestart /l*v `"$Log`" $ExtraArguments" -Wait -PassThru
+  Write-Host "msiexec $Action $Path exited with $($Process.ExitCode). Log: $Log"
   if ($Process.ExitCode -notin @($ExpectedExitCode, $(if ($ExpectedExitCode -eq 0) { 3010 } else { $ExpectedExitCode }))) {
     Get-Content -LiteralPath $Log -Tail 60 | Write-Host
     throw "msiexec returned $($Process.ExitCode), expected $ExpectedExitCode. Log: $Log"
@@ -82,10 +83,12 @@ try {
   # Remove only registered Microsoft stable products; fail rather than delete an unowned installation directory.
   foreach ($Code in $Codes.Values) {
     foreach ($Product in @($Installer.RelatedProducts($Code))) {
+      Write-Host "Removing installed PowerShell product $Product (upgrade code $Code)."
       Invoke-Msi '/x' $Product
     }
   }
   if (Test-Path -LiteralPath (Join-Path $InstallRoot 'pwsh.exe')) {
+    Get-Item -LiteralPath (Join-Path $InstallRoot 'pwsh.exe') | Format-List FullName, Length, VersionInfo | Out-String | Write-Host
     throw "An unmanaged PowerShell installation remains at $InstallRoot."
   }
   $SavedPropertiesPath = 'HKLM:\Software\Microsoft\PowerShellCore\InstallerProperties'
