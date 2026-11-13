@@ -38,7 +38,7 @@ if ($OppositeMsiPath) {
   $OppositeMsi = (Resolve-Path -LiteralPath $OppositeMsiPath -ErrorAction Stop).Path
   $LegacyOppositeMsi = (Resolve-Path -LiteralPath $LegacyOppositeMsiPath -ErrorAction Stop).Path
 }
-$NamePattern = "^Devolutions-PowerShell-(?<version>\d+\.\d+\.\d+\.\d+)-win-$Architecture\.msi$"
+$NamePattern = "^Devolutions\.PowerShell-(?<version>\d+\.\d+\.\d+\.\d+)-win-$Architecture\.msi$"
 if ([System.IO.Path]::GetFileName($CurrentMsi) -notmatch $NamePattern) {
   throw "Unexpected MSI filename: $CurrentMsi"
 }
@@ -51,7 +51,7 @@ if ($LegacyVersion -ge $Version) {
   throw 'The legacy MSI must have an earlier version of the same architecture.'
 }
 if ($OppositeMsi) {
-  $OppositeNamePattern = '^Devolutions-PowerShell-(?<version>\d+\.\d+\.\d+\.\d+)-win-x64\.msi$'
+  $OppositeNamePattern = '^Devolutions\.PowerShell-(?<version>\d+\.\d+\.\d+\.\d+)-win-x64\.msi$'
   if ([System.IO.Path]::GetFileName($OppositeMsi) -notmatch $OppositeNamePattern -or
       [version] $Matches.version -ne $Version) {
     throw 'The opposite-architecture MSI must match the current package version.'

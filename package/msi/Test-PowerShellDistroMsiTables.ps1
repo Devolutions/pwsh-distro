@@ -9,7 +9,10 @@ param(
 
   [Parameter(Mandatory)]
   [ValidatePattern('^\d+\.\d+\.\d+\.\d+$')]
-  [string] $PackageVersion
+  [string] $PackageVersion,
+
+  [ValidateSet('Devolutions', 'Microsoft')]
+  [string] $Distribution = 'Devolutions'
 )
 
 Set-StrictMode -Version 3.0
@@ -63,10 +66,19 @@ $Codes = @{
   x64 = '{D26B2030-FE59-4BBE-9CFC-8A5F5F934B38}'
   arm64 = '{CEA78373-E1E6-425C-B8D9-CD7E18F6821E}'
 }
+if ($Distribution -eq 'Microsoft') {
+  $Codes = @{
+    x64 = '{31AB5147-9A97-4452-8443-D9709F0516E1}'
+    arm64 = '{75C68AB2-09D8-46B8-B697-D829BDD4C94F}'
+  }
+}
 $Opposite = if ($Architecture -eq 'x64') { 'arm64' } else { 'x64' }
 $Version = [version] $PackageVersion
 $MsiVersion = "$($Version.Major).$($Version.Minor).$($Version.Build * 100 + $Version.Revision)"
 $File = (Resolve-Path -LiteralPath $MsiPath -ErrorAction Stop).Path
+if ([System.IO.Path]::GetFileName($File) -cne "$Distribution.PowerShell-$PackageVersion-win-$Architecture.msi") {
+  throw "MSI filename must include the full downstream package version $PackageVersion."
+}
 $Installer = New-Object -ComObject WindowsInstaller.Installer
 $Database = $null
 try {
@@ -79,8 +91,62 @@ try {
   $SecureProperties = @($Secure[1] -split ';')
   if ($ProductVersion[1] -ne $MsiVersion -or $UpgradeCode[1] -ine $Codes[$Architecture] -or
       'OPPOSITE_ARCHITECTURE_INSTALLED' -notin $SecureProperties -or
-      'ENABLE_PSREMOTING' -notin $SecureProperties) {
+      ($Distribution -eq 'Devolutions' -and 'ENABLE_PSREMOTING' -notin $SecureProperties)) {
     throw "MSI version, own UpgradeCode, or secure custom properties are incorrect in $File."
+  }
+
+  if ($Distribution -eq 'Microsoft') {
+    $Manufacturer = Assert-OneRow @($Properties | Where-Object { $_.Fields[0] -eq 'Manufacturer' }) 'Microsoft-payload MSI manufacturer'
+    $ProductName = Assert-OneRow @($Properties | Where-Object { $_.Fields[0] -eq 'ProductName' }) 'Microsoft-payload MSI product name'
+    if ($Manufacturer[1] -cne 'Devolutions' -or
+        $ProductName[1] -cne "PowerShell $($Version.Major)-$Architecture (repackaged by Devolutions)") {
+      throw 'The Microsoft-payload installer must clearly identify Devolutions as its repackager.'
+    }
+    foreach ($Expected in @(
+      @('INSTALLFOLDER', 'ProgramFiles64Folder', 'PowerShell'),
+      @('VersionFolder', 'INSTALLFOLDER', "$($Version.Major)")
+    )) {
+      $Directory = Assert-OneRow @(Get-MsiRows $Database "SELECT Directory, Directory_Parent, DefaultDir FROM Directory WHERE Directory='$($Expected[0])'" 3) "Microsoft directory $($Expected[0])"
+      if ($Directory[1] -ne $Expected[1] -or ($Directory[2] -split '\|')[-1] -ne $Expected[2]) {
+        throw "Microsoft MSI directory $($Expected[0]) does not match the upstream installation layout."
+      }
+    }
+    $Registry = @(Get-MsiRows $Database 'SELECT `Root`, `Key`, `Name`, `Value` FROM `Registry`' 4)
+    foreach ($Entry in @(
+      @('SemanticVersion', "$($Version.Major).$($Version.Minor).$($Version.Build)"),
+      @('InstallLocation', '[VersionFolder]'),
+      @('ProductCode', '[ProductCode]')
+    )) {
+      $Row = Assert-OneRow @($Registry | Where-Object {
+        $_.Fields[1] -ieq "Software\Microsoft\PowerShellCore\InstalledVersions\$($Codes[$Architecture].Trim('{}'))" -and
+        $_.Fields[2] -eq $Entry[0]
+      }) "Microsoft installed-version $($Entry[0])"
+      if ($Row[0] -ne '2' -or $Row[3] -ne $Entry[1]) {
+        throw "Incorrect Microsoft PowerShell discovery entry: $($Entry[0])."
+      }
+    }
+    if (@($Registry | Where-Object { $_.Fields[1] -like 'Software\Devolutions\PowerShell\*' }).Count -gt 0) {
+      throw 'Microsoft MSI must not own Devolutions distribution registry entries.'
+    }
+    $Upgrades = @(Get-MsiRows $Database 'SELECT UpgradeCode, ActionProperty FROM Upgrade' 2)
+    $Own = Assert-OneRow @($Upgrades | Where-Object { $_.Fields[1] -eq 'WIX_UPGRADE_DETECTED' }) 'Microsoft same-architecture upgrade'
+    $Other = Assert-OneRow @($Upgrades | Where-Object { $_.Fields[1] -eq 'OPPOSITE_ARCHITECTURE_INSTALLED' }) 'Microsoft cross-architecture guard'
+    if ($Own[0] -ine $Codes[$Architecture] -or $Other[0] -ine $Codes[$Opposite] -or
+        @($Upgrades | Where-Object { $_.Fields[0] -notin $Codes.Values }).Count -gt 0) {
+      throw 'Microsoft MSI must upgrade and guard the original Microsoft stable MSI families.'
+    }
+    $Conditions = @(Get-MsiRows $Database 'SELECT Condition FROM LaunchCondition' 1)
+    $null = Assert-OneRow @($Conditions | Where-Object { $_.Fields[0] -eq 'Installed OR NOT OPPOSITE_ARCHITECTURE_INSTALLED' }) 'Microsoft cross-architecture launch condition'
+    $Actions = @(Get-MsiRows $Database 'SELECT Action, Sequence FROM InstallExecuteSequence' 2)
+    $Remove = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'RemoveExistingProducts' }) 'Microsoft RemoveExistingProducts'
+    $Initialize = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'InstallInitialize' }) 'Microsoft InstallInitialize'
+    $Files = Assert-OneRow @($Actions | Where-Object { $_.Fields[0] -eq 'InstallFiles' }) 'Microsoft InstallFiles'
+    if ([int] $Remove[1] -le [int] $Initialize[1] -or [int] $Remove[1] -ge [int] $Files[1] -or
+        @($Actions | Where-Object { $_.Fields[0] -in 'EnablePSRemoting', 'InstallWindowsTerminalProfile' }).Count -gt 0) {
+      throw 'Microsoft upgrades must remove the old product transactionally without running Devolutions integration actions.'
+    }
+    Write-Host "Validated Microsoft $Architecture MSI layout, discovery, and upstream upgrade identity: $File"
+    return
   }
 
   $FileRows = @(Get-MsiRows $Database 'SELECT File, Component_, FileName FROM File' 3)

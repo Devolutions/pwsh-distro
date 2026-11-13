@@ -1,0 +1,366 @@
+name: Microsoft PowerShell MSI
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: Microsoft PowerShell 7.7 GA release tag (v7.7.Z)
+        required: true
+        default: v7.7.0
+        type: string
+      package_revision:
+        description: MSI packaging revision (0-99); increase when repackaging the same upstream release
+        required: true
+        default: "0"
+        type: string
+      github-env:
+        description: GitHub environment containing Devolutions code signing secrets
+        required: true
+        type: choice
+        options:
+          - publish-test
+          - publish-prod
+        default: publish-test
+      sign_msi:
+        description: Sign installers (disable only for unsigned validation runs)
+        required: true
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      upstream_tag:
+        required: true
+        type: string
+      package_version:
+        required: true
+        type: string
+      github-env:
+        required: true
+        type: string
+      sign_msi:
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      artifact_name:
+        description: Tested Microsoft-payload MSIs, checksums, and provenance
+        value: ${{ jobs.configure.outputs.artifact_name }}
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
+  PSIGN_TOOL_PACKAGE_VERSION: "0.8.4"
+  MICROSOFT_MSI_BASELINE_TAG: "v7.6.10"
+
+jobs:
+  configure:
+    name: Validate Microsoft release inputs
+    runs-on: windows-2025
+    outputs:
+      package_version: ${{ steps.version.outputs.package_version }}
+      upstream_version: ${{ steps.version.outputs.upstream_version }}
+      artifact_name: Microsoft.PowerShell-${{ steps.version.outputs.package_version }}-win-msi
+    steps:
+      - name: Validate version
+        id: version
+        shell: pwsh
+        env:
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+          PACKAGE_REVISION: ${{ inputs.package_revision }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($Env:PACKAGE_VERSION) {
+            if ($Env:PACKAGE_VERSION -cnotmatch '^7\.7\.(0|[1-9]\d*)\.(0|[1-9]\d?)$') {
+              throw 'The release package_version must be 7.7.Z.R with revision 0-99.'
+            }
+            $PackageVersion = [version] $Env:PACKAGE_VERSION
+            if ("v$($PackageVersion.ToString(3))" -cne $Env:UPSTREAM_TAG) {
+              throw 'The Microsoft upstream_tag must match the release package_version.'
+            }
+            $Env:PACKAGE_REVISION = [string] $PackageVersion.Revision
+          }
+          if ($Env:UPSTREAM_TAG -cnotmatch '^v7\.7\.(0|[1-9]\d*)$' -or
+              $Env:PACKAGE_REVISION -cnotmatch '^(0|[1-9]\d?)$') {
+            throw 'Specify a 7.7 GA upstream_tag (v7.7.Z) and a package_revision from 0 to 99.'
+          }
+          $Version = [version] $Env:UPSTREAM_TAG.Substring(1)
+          if ($Version.Build * 100 + [int] $Env:PACKAGE_REVISION -gt 65535) {
+            throw 'The requested version exceeds the MSI version range.'
+          }
+          "package_version=$($Version.ToString()).$Env:PACKAGE_REVISION" >> $Env:GITHUB_OUTPUT
+          "upstream_version=$($Version.ToString())" >> $Env:GITHUB_OUTPUT
+
+  build:
+    name: Repackage Microsoft ZIP [win-${{ matrix.arch }}]
+    needs: configure
+    runs-on: windows-2025
+    environment: ${{ inputs.github-env }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - name: Clone packaging project only
+        uses: actions/checkout@v7.0.0
+
+      - name: Setup .NET SDK for WiX
+        uses: actions/setup-dotnet@v5.3.0
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Download, verify, and package Microsoft Windows ZIP
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+          PACKAGE_VERSION: ${{ needs.configure.outputs.package_version }}
+          ARCHITECTURE: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Version = $Env:UPSTREAM_TAG.Substring(1)
+          $ArchiveName = "PowerShell-$Version-win-$Env:ARCHITECTURE.zip"
+          $ArchiveDirectory = Join-Path $PWD 'archives'
+          $PayloadDirectory = Join-Path $PWD 'payload'
+          $OutputDirectory = Join-Path $PWD 'output\msi'
+          New-Item -ItemType Directory -Path $ArchiveDirectory, $PayloadDirectory -Force | Out-Null
+
+          $ReleaseJson = & gh release view $Env:UPSTREAM_TAG --repo PowerShell/PowerShell --json tagName,isDraft,isPrerelease,url
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to resolve Microsoft release $Env:UPSTREAM_TAG."
+          }
+          $Release = $ReleaseJson | ConvertFrom-Json
+          if ($Release.tagName -cne $Env:UPSTREAM_TAG -or $Release.isDraft -or $Release.isPrerelease) {
+            throw 'Only published Microsoft PowerShell 7.7 GA releases are supported.'
+          }
+          & gh release download $Env:UPSTREAM_TAG --repo PowerShell/PowerShell --pattern $ArchiveName --pattern hashes.sha256 --dir $ArchiveDirectory
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to download $ArchiveName and hashes.sha256 from Microsoft."
+          }
+
+          $ArchivePath = Join-Path $ArchiveDirectory $ArchiveName
+          $HashPattern = '^(?<hash>[0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($ArchiveName) + '$'
+          $HashLines = @(Get-Content -LiteralPath (Join-Path $ArchiveDirectory 'hashes.sha256') |
+            Where-Object { $_ -match $HashPattern })
+          if ($HashLines.Count -ne 1) {
+            throw "Expected one SHA-256 entry for $ArchiveName in Microsoft's hashes.sha256."
+          }
+          $ExpectedHash = [regex]::Match($HashLines[0], $HashPattern).Groups['hash'].Value
+          $ActualHash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash
+          if ($ActualHash -ine $ExpectedHash) {
+            throw "Microsoft ZIP checksum mismatch: $ArchiveName."
+          }
+
+          Expand-Archive -LiteralPath $ArchivePath -DestinationPath $PayloadDirectory
+          foreach ($Name in 'pwsh.exe', 'pwsh.dll', 'System.Management.Automation.dll', 'pwrshplugin.dll') {
+            $Signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $PayloadDirectory $Name)
+            if ($Signature.Status -ne 'Valid' -or
+                $Signature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') {
+              throw "Expected a valid Microsoft Corporation signature on $Name; status: $($Signature.Status)."
+            }
+          }
+          $PayloadVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $PayloadDirectory 'pwsh.dll'))
+          if ("$($PayloadVersion.FileMajorPart).$($PayloadVersion.FileMinorPart).$($PayloadVersion.FileBuildPart)" -ne $Version) {
+            throw "Microsoft ZIP payload version does not match $Version."
+          }
+
+          & .\package\msi\New-PowerShellDistroMsi.ps1 -PayloadDirectory $PayloadDirectory `
+            -PackageVersion $Env:PACKAGE_VERSION -Architecture $Env:ARCHITECTURE -OutputDirectory $OutputDirectory `
+            -Distribution Microsoft
+          & .\package\msi\Test-PowerShellDistroMsiTables.ps1 `
+            -MsiPath (Join-Path $OutputDirectory "Microsoft.PowerShell-$Env:PACKAGE_VERSION-win-$Env:ARCHITECTURE.msi") `
+            -Architecture $Env:ARCHITECTURE -PackageVersion $Env:PACKAGE_VERSION -Distribution Microsoft
+
+          [ordered]@{
+            upstreamRepository = 'PowerShell/PowerShell'
+            upstreamTag = $Env:UPSTREAM_TAG
+            upstreamReleaseUrl = $Release.url
+            archive = $ArchiveName
+            archiveSha256 = $ActualHash.ToLowerInvariant()
+            packageVersion = $Env:PACKAGE_VERSION
+            architecture = $Env:ARCHITECTURE
+            installerSignedByDevolutions = [bool]::Parse('${{ inputs.sign_msi }}')
+          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $OutputDirectory 'source.json') -Encoding utf8NoBOM
+
+      - name: Install pinned psign tool
+        if: ${{ inputs.sign_msi }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ToolRoot = Join-Path $Env:RUNNER_TEMP 'psign-tool'
+          & dotnet tool install --tool-path $ToolRoot $Env:PSIGN_TOOL_PACKAGE_ID --version $Env:PSIGN_TOOL_PACKAGE_VERSION
+          if ($LASTEXITCODE -ne 0) {
+            throw "dotnet tool install failed for $Env:PSIGN_TOOL_PACKAGE_ID with exit code $LASTEXITCODE."
+          }
+          $ToolRoot >> $Env:GITHUB_PATH
+
+      - name: Sign MSI with Devolutions certificate and verify
+        if: ${{ inputs.sign_msi }}
+        shell: pwsh
+        env:
+          CODE_SIGNING_KEYVAULT_URL: ${{ secrets.CODE_SIGNING_KEYVAULT_URL }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          CODE_SIGNING_CLIENT_ID: ${{ secrets.CODE_SIGNING_CLIENT_ID }}
+          CODE_SIGNING_CLIENT_SECRET: ${{ secrets.CODE_SIGNING_CLIENT_SECRET }}
+          CODE_SIGNING_CERTIFICATE_NAME: ${{ secrets.CODE_SIGNING_CERTIFICATE_NAME }}
+          CODE_SIGNING_TIMESTAMP_SERVER: ${{ vars.CODE_SIGNING_TIMESTAMP_SERVER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($Name in @(
+            'CODE_SIGNING_KEYVAULT_URL', 'AZURE_TENANT_ID', 'CODE_SIGNING_CLIENT_ID',
+            'CODE_SIGNING_CLIENT_SECRET', 'CODE_SIGNING_CERTIFICATE_NAME', 'CODE_SIGNING_TIMESTAMP_SERVER'
+          )) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($Name))) {
+              throw "$Name is required to sign an MSI."
+            }
+          }
+          $MsiPackages = @(Get-ChildItem -LiteralPath .\output\msi -Filter '*.msi' -File)
+          if ($MsiPackages.Count -ne 1) {
+            throw "Expected one MSI to sign, found $($MsiPackages.Count)."
+          }
+          $SigningArgs = @(
+            '--mode', 'portable', 'sign',
+            '--azure-key-vault-url', $Env:CODE_SIGNING_KEYVAULT_URL,
+            '--azure-key-vault-certificate', $Env:CODE_SIGNING_CERTIFICATE_NAME,
+            '--azure-key-vault-client-id', $Env:CODE_SIGNING_CLIENT_ID,
+            '--azure-key-vault-client-secret', $Env:CODE_SIGNING_CLIENT_SECRET,
+            '--azure-key-vault-tenant-id', $Env:AZURE_TENANT_ID,
+            '--timestamp-url', $Env:CODE_SIGNING_TIMESTAMP_SERVER,
+            '--timestamp-digest', 'sha256',
+            '--digest', 'sha256',
+            '--exit-codes', 'azure'
+          )
+          & psign-tool @SigningArgs $MsiPackages[0].FullName
+          if ($LASTEXITCODE -ne 0) {
+            throw "psign-tool failed to sign the MSI with exit code $LASTEXITCODE."
+          }
+          & psign-tool portable verify-msi $MsiPackages[0].FullName
+          if ($LASTEXITCODE -ne 0) {
+            throw "psign-tool failed to verify the MSI with exit code $LASTEXITCODE."
+          }
+          $Signature = Get-AuthenticodeSignature -LiteralPath $MsiPackages[0].FullName
+          if ($Signature.Status -ne 'Valid' -or
+              $Signature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O="?Devolutions(?:\s|,|"|$)') {
+            throw "Expected a valid Devolutions MSI signature; status: $($Signature.Status)."
+          }
+
+      - name: Upload Microsoft-payload MSI and provenance
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: Microsoft.PowerShell-${{ needs.configure.outputs.package_version }}-win-${{ matrix.arch }}-msi
+          path: |
+            output/msi/*.msi
+            output/msi/source.json
+          if-no-files-found: error
+
+  test:
+    name: Test Microsoft MSI [win-${{ matrix.arch }}]
+    needs: [configure, build]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-2025
+          - arch: arm64
+            runner: windows-11-arm
+    steps:
+      - name: Clone project
+        uses: actions/checkout@v7.0.0
+
+      - name: Download Microsoft-payload MSIs
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: Microsoft.PowerShell-${{ needs.configure.outputs.package_version }}-win-*-msi
+          path: current-msis
+          merge-multiple: true
+
+      # Use Windows PowerShell, not the pwsh installation replaced by the MSI under test.
+      - name: Verify original Microsoft MSI and exercise install, upgrade, repair, and uninstall
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHITECTURE: ${{ matrix.arch }}
+          PACKAGE_VERSION: ${{ needs.configure.outputs.package_version }}
+          REQUIRE_SIGNATURE: ${{ inputs.sign_msi }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $BaselineVersion = $Env:MICROSOFT_MSI_BASELINE_TAG.Substring(1)
+          $Name = "PowerShell-$BaselineVersion-win-$Env:ARCHITECTURE.msi"
+          & gh release download $Env:MICROSOFT_MSI_BASELINE_TAG --repo PowerShell/PowerShell --pattern $Name --pattern hashes.sha256 --dir baseline
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Unable to download the original Microsoft MSI upgrade baseline.'
+          }
+          $PreviousMsi = Join-Path $PWD "baseline\$Name"
+          $Hash = (Get-FileHash -LiteralPath $PreviousMsi -Algorithm SHA256).Hash
+          $Pattern = '^(?<hash>[0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($Name) + '$'
+          $Lines = @(Get-Content -LiteralPath .\baseline\hashes.sha256 | Where-Object { $_ -match $Pattern })
+          if ($Lines.Count -ne 1 -or [regex]::Match($Lines[0], $Pattern).Groups['hash'].Value -ine $Hash) {
+            throw 'Original Microsoft MSI checksum mismatch.'
+          }
+          $Signature = Get-AuthenticodeSignature -LiteralPath $PreviousMsi
+          if ($Signature.Status -ne 'Valid' -or
+              $Signature.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') {
+            throw 'The upgrade baseline must be a valid Microsoft-signed MSI.'
+          }
+          $TestArguments = @{
+            MsiPath = Join-Path $PWD "current-msis\Microsoft.PowerShell-$Env:PACKAGE_VERSION-win-$Env:ARCHITECTURE.msi"
+            PreviousMsiPath = $PreviousMsi
+            Architecture = $Env:ARCHITECTURE
+            PackageVersion = $Env:PACKAGE_VERSION
+            RequireSignature = [bool]::Parse($Env:REQUIRE_SIGNATURE)
+          }
+          if ($Env:ARCHITECTURE -eq 'arm64') {
+            $TestArguments.OppositeMsiPath = Join-Path $PWD "current-msis\Microsoft.PowerShell-$Env:PACKAGE_VERSION-win-x64.msi"
+          }
+          & .\package\msi\Test-MicrosoftPowerShellMsiInstall.ps1 @TestArguments
+
+  prepare_artifacts:
+    name: Prepare tested Microsoft MSI release artifacts
+    needs: [configure, test]
+    runs-on: windows-2025
+    steps:
+      - name: Download tested MSIs
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: Microsoft.PowerShell-${{ needs.configure.outputs.package_version }}-win-*-msi
+          path: packaged-msis
+
+      - name: Name MSIs and record checksums and provenance
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ needs.configure.outputs.package_version }}
+          UPSTREAM_VERSION: ${{ needs.configure.outputs.upstream_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $OutputDirectory = Join-Path $PWD 'release-artifacts'
+          New-Item -ItemType Directory -Path $OutputDirectory | Out-Null
+          $Checksums = @()
+          $Sources = foreach ($Architecture in 'x64', 'arm64') {
+            $InputDirectory = Join-Path $PWD "packaged-msis\Microsoft.PowerShell-$Env:PACKAGE_VERSION-win-$Architecture-msi"
+            $InputMsi = Join-Path $InputDirectory "Microsoft.PowerShell-$Env:PACKAGE_VERSION-win-$Architecture.msi"
+            $Source = Get-Content -LiteralPath (Join-Path $InputDirectory 'source.json') -Raw | ConvertFrom-Json
+            if ($Source.upstreamTag -cne "v$Env:UPSTREAM_VERSION" -or
+                $Source.packageVersion -cne $Env:PACKAGE_VERSION -or $Source.architecture -cne $Architecture) {
+              throw "Unexpected provenance for the $Architecture MSI."
+            }
+            $AssetName = "Microsoft.PowerShell-$Env:PACKAGE_VERSION-win-$Architecture.msi"
+            $AssetPath = Join-Path $OutputDirectory $AssetName
+            Copy-Item -LiteralPath $InputMsi -Destination $AssetPath
+            $Hash = (Get-FileHash -LiteralPath $AssetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $Checksums += "$Hash  $AssetName"
+            $Source
+          }
+          $Checksums | Set-Content -LiteralPath (Join-Path $OutputDirectory 'hashes.sha256') -Encoding ascii
+          ConvertTo-Json -InputObject @($Sources) -Depth 5 |
+            Set-Content -LiteralPath (Join-Path $OutputDirectory "Microsoft.PowerShell-$Env:PACKAGE_VERSION-source.json") -Encoding utf8NoBOM
+
+      - name: Upload Microsoft-style MSI artifacts
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ${{ needs.configure.outputs.artifact_name }}
+          path: release-artifacts/*
+          if-no-files-found: error

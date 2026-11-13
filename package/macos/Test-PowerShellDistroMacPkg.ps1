@@ -125,7 +125,7 @@ $MinimumOSVersion = '12.0'
 $HostArchitecture = if ($Architecture -eq 'x64') { 'x86_64' } else { 'arm64' }
 $ExpectedCpuType = if ($Architecture -eq 'x64') { 'x86_64' } else { 'arm64' }
 
-Assert-True ((Split-Path -Leaf $Pkg) -eq "Devolutions-PowerShell-$PackageVersion-osx-$Architecture.pkg") "Unexpected pkg file name: $Pkg"
+Assert-True ((Split-Path -Leaf $Pkg) -eq "Devolutions.PowerShell-$PackageVersion-osx-$Architecture.pkg") "Unexpected pkg file name: $Pkg"
 
 $Work = Join-Path ([System.IO.Path]::GetTempPath()) "pwsh-distro-pkg-test-$([guid]::NewGuid().ToString('N'))"
 try {

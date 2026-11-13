@@ -86,8 +86,7 @@ jobs:
             $PackageVersion = $Env:PACKAGE_VERSION
           }
 
-          $PowerShellVersion = $PackageVersion -replace '\.\d+$', ''
-          $ArchiveName = "PowerShell-$PowerShellVersion-linux-$Env:ARCHITECTURE.tar.gz"
+          $ArchiveName = "PowerShell-$PackageVersion-linux-$Env:ARCHITECTURE.tar.gz"
           $ArchiveDirectory = Join-Path $PWD 'archives'
           $PayloadDirectory = Join-Path $PWD 'payload'
           New-Item -ItemType Directory -Path $ArchiveDirectory, $PayloadDirectory -Force | Out-Null
@@ -100,7 +99,7 @@ jobs:
               throw "Unable to download $ArchiveName from $Env:RELEASE_TAG."
             }
           } else {
-            $ArtifactName = "PowerShell-$PowerShellVersion-linux-$Env:ARCHITECTURE"
+            $ArtifactName = "PowerShell-$PackageVersion-linux-$Env:ARCHITECTURE"
             & gh run download $Env:CLI_RUN_ID --repo $Env:GITHUB_REPOSITORY --name $ArtifactName --dir $ArchiveDirectory
             if ($LASTEXITCODE -ne 0) {
               throw "Unable to download $ArchiveName from CLI run $Env:CLI_RUN_ID."
@@ -128,7 +127,7 @@ jobs:
       - name: Upload PowerShell Linux packages
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: Devolutions-PowerShell-${{ env.PACKAGE_VERSION }}-linux-${{ matrix.arch }}-packages
+          name: Devolutions.PowerShell-${{ env.PACKAGE_VERSION }}-linux-${{ matrix.arch }}-packages
           path: |
             output/linux/*.deb
             output/linux/*.rpm
@@ -160,7 +159,7 @@ jobs:
       - name: Download PowerShell Linux packages
         uses: actions/download-artifact@v8.0.1
         with:
-          pattern: Devolutions-PowerShell-*-linux-${{ matrix.arch }}-packages
+          pattern: Devolutions.PowerShell-*-linux-${{ matrix.arch }}-packages
           path: packages
           merge-multiple: true
 
@@ -223,7 +222,7 @@ jobs:
             exit 1
           fi
           powershell_version="${BASH_REMATCH[1]}"
-          archive="/work/archives/PowerShell-$powershell_version-linux-musl-$ARCHITECTURE.tar.gz"
+          archive="/work/archives/PowerShell-$PACKAGE_VERSION-linux-musl-$ARCHITECTURE.tar.gz"
           docker run --rm -v "$PWD:/work:ro" "alpine:$ALPINE_VERSION" \
             sh /work/package/linux/Test-PowerShellDistroAlpineArchive.sh \
             "$archive" "$powershell_version" "$ARCHITECTURE"

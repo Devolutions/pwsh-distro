@@ -150,13 +150,12 @@ if ($SignMsix) {
 }
 
 $MakeAppxPath = Find-WindowsSdkTool -ToolName 'makeappx.exe'
-$PowerShellVersion = $PackageVersion -replace '\.\d+$', ''
 $ResolvedOutputDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
 New-Item -ItemType Directory -Path $ResolvedOutputDirectory -Force | Out-Null
 
-$BundleFileName = "Devolutions-PowerShell-$PackageVersion-win.msixbundle"
+$BundleFileName = "Devolutions.PowerShell-$PackageVersion-win.msixbundle"
 $BundlePath = Join-Path $ResolvedOutputDirectory $BundleFileName
-$AppInstallerPath = Join-Path $ResolvedOutputDirectory 'Devolutions-PowerShell.appinstaller'
+$AppInstallerPath = Join-Path $ResolvedOutputDirectory 'Devolutions.PowerShell.appinstaller'
 foreach ($ExistingOutput in $BundlePath, $AppInstallerPath) {
   if (Test-Path -LiteralPath $ExistingOutput) {
     throw "MSIX output already exists: $ExistingOutput"
@@ -176,7 +175,7 @@ try {
   if ($HasArchiveDir) {
     $ArchiveRoot = (Resolve-Path -LiteralPath $ArchiveDirectory -ErrorAction Stop).Path
     foreach ($Architecture in 'x64', 'arm64') {
-      $ArchivePath = Join-Path $ArchiveRoot "PowerShell-$PowerShellVersion-windows-$Architecture.tar.gz"
+      $ArchivePath = Join-Path $ArchiveRoot "PowerShell-$PackageVersion-windows-$Architecture.tar.gz"
       if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
         throw "Release archive was not found: $ArchivePath"
       }
@@ -270,7 +269,7 @@ try {
       -AppInstallerPath $AppInstallerPath `
       -OutputDirectory $BundleInputDirectory
 
-    $InnerMsixPath = Join-Path $BundleInputDirectory "Devolutions-PowerShell-$PackageVersion-win-$Architecture.msix"
+    $InnerMsixPath = Join-Path $BundleInputDirectory "Devolutions.PowerShell-$PackageVersion-win-$Architecture.msix"
     if ($SignMsix) {
       & $PsignToolPath @SigningArgs $InnerMsixPath
       if ($LASTEXITCODE -ne 0) {

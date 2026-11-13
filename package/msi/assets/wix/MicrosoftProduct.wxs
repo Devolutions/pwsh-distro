@@ -1,0 +1,91 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <!-- Match Microsoft's stable MSI family so upgrades remove its prior product, not the Devolutions distribution. -->
+  <?if $(sys.BUILDARCH)=x64?>
+    <?define UpgradeCode="31ab5147-9a97-4452-8443-d9709f0516e1" ?>
+    <?define OppositeUpgradeCode="75c68ab2-09d8-46b8-b697-d829bdd4c94f" ?>
+  <?elseif $(sys.BUILDARCH)=arm64?>
+    <?define UpgradeCode="75c68ab2-09d8-46b8-b697-d829bdd4c94f" ?>
+    <?define OppositeUpgradeCode="31ab5147-9a97-4452-8443-d9709f0516e1" ?>
+  <?endif?>
+  <?define InstallerPropertiesKey="Software\Microsoft\PowerShellCore\InstallerProperties" ?>
+  <?define InstalledVersionKey="Software\Microsoft\PowerShellCore\InstalledVersions\$(var.UpgradeCode)" ?>
+  <Package Name="PowerShell $(var.SimpleProductVersion)-$(sys.BUILDARCH) (repackaged by Devolutions)"
+           Manufacturer="Devolutions" Language="1033" Version="$(var.ProductVersion)"
+           UpgradeCode="$(var.UpgradeCode)">
+    <SummaryInformation Description="Microsoft PowerShell binaries repackaged by Devolutions" />
+    <Icon Id="PowerShellIcon" SourceFile="assets\Powershell_black.ico" />
+    <Property Id="ARPPRODUCTICON" Value="PowerShellIcon" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/Devolutions/pwsh-distro" />
+    <MajorUpgrade Schedule="afterInstallInitialize" DowngradeErrorMessage="A newer version of PowerShell is already installed." />
+    <Upgrade Id="$(var.OppositeUpgradeCode)">
+      <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" OnlyDetect="yes"
+                      Property="OPPOSITE_ARCHITECTURE_INSTALLED" />
+    </Upgrade>
+    <Launch Condition="Installed OR NOT OPPOSITE_ARCHITECTURE_INSTALLED"
+            Message="Uninstall the other architecture of Microsoft PowerShell before installing this package." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="PREVIOUS_INSTALLFOLDER">
+      <RegistrySearch Id="PreviousMicrosoftInstallFolder" Root="HKLM"
+                      Key="$(var.InstallerPropertiesKey)" Name="InstallFolder" Type="raw" />
+    </Property>
+    <SetProperty Id="INSTALLFOLDER" After="AppSearch" Sequence="first"
+                 Value="[PREVIOUS_INSTALLFOLDER]" Condition="NOT INSTALLFOLDER AND PREVIOUS_INSTALLFOLDER" />
+    <Property Id="ADD_PATH" Secure="yes" />
+    <Property Id="PREVIOUS_ADD_PATH">
+      <RegistrySearch Id="PreviousMicrosoftAddToPath" Root="HKLM"
+                      Key="$(var.InstallerPropertiesKey)" Name="AddToPath" Type="raw" />
+    </Property>
+    <SetProperty Id="ADD_PATH" Action="RestoreAddPath" After="AppSearch" Sequence="first"
+                 Value="[PREVIOUS_ADD_PATH]" Condition="NOT ADD_PATH AND PREVIOUS_ADD_PATH" />
+    <SetProperty Id="ADD_PATH" Action="DefaultAddPath" After="RestoreAddPath" Sequence="first"
+                 Value="1" Condition="NOT ADD_PATH" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="PowerShell">
+        <Directory Id="VersionFolder" Name="$(var.SimpleProductVersion)">
+          <Component Id="MicrosoftInstalledVersion">
+            <RegistryKey Root="HKLM" Key="$(var.InstalledVersionKey)" ForceDeleteOnUninstall="yes">
+              <RegistryValue Name="SemanticVersion" Type="string" Value="$(var.ProductSemanticVersion)" KeyPath="yes" />
+              <RegistryValue Name="InstallLocation" Type="string" Value="[VersionFolder]" />
+              <RegistryValue Name="ProductCode" Type="string" Value="[ProductCode]" />
+            </RegistryKey>
+          </Component>
+          <Component Id="MicrosoftPath" Condition="ADD_PATH=1">
+            <Environment Id="MicrosoftPowerShellPath" Name="PATH" Value="[VersionFolder]"
+                         Action="set" Part="last" System="yes" Permanent="no" />
+            <RegistryValue Root="HKLM" Key="$(var.InstalledVersionKey)"
+                           Name="InstallDir" Type="string" Value="[VersionFolder]" KeyPath="yes" />
+          </Component>
+          <Component Id="MicrosoftInstallerProperties" Permanent="yes">
+            <RegistryValue Root="HKLM" Key="$(var.InstallerPropertiesKey)"
+                           Name="InstallFolder" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+            <RegistryValue Root="HKLM" Key="$(var.InstallerPropertiesKey)"
+                           Name="AddToPath" Type="string" Value="[ADD_PATH]" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="MicrosoftPowerShellPrograms" Name="PowerShell">
+        <Component Id="MicrosoftPowerShellShortcut">
+          <Shortcut Id="MicrosoftPowerShellShortcut" Name="PowerShell $(var.SimpleProductVersion) ($(sys.BUILDARCH))"
+                    Target="[VersionFolder]pwsh.exe" Arguments="-WorkingDirectory ~" />
+          <RemoveFolder Id="MicrosoftPowerShellPrograms" On="uninstall" />
+          <RegistryValue Root="HKCU" Key="Software\Devolutions\MicrosoftPowerShellInstaller\$(sys.BUILDARCH)"
+                         Name="Shortcut" Value="1" Type="integer" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="MicrosoftPowerShell" Title="PowerShell" Level="1">
+      <ComponentGroupRef Id="ApplicationFiles" />
+      <ComponentRef Id="MicrosoftInstalledVersion" />
+      <ComponentRef Id="MicrosoftPath" />
+      <ComponentRef Id="MicrosoftInstallerProperties" />
+      <ComponentRef Id="MicrosoftPowerShellShortcut" />
+    </Feature>
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.MicrosoftLicenseRtf)" />
+  </Package>
+</Wix>

@@ -35,7 +35,7 @@ $ResolvedBundlePath = (Resolve-Path -LiteralPath $BundlePath -ErrorAction Stop).
 $ResolvedAppInstallerPath = (Resolve-Path -LiteralPath $AppInstallerPath -ErrorAction Stop).Path
 
 if ([string]::IsNullOrWhiteSpace($PackageVersion)) {
-  if ([System.IO.Path]::GetFileName($ResolvedBundlePath) -notmatch '^Devolutions-PowerShell-(?<version>\d+\.\d+\.\d+\.\d+)-win\.msixbundle$') {
+  if ([System.IO.Path]::GetFileName($ResolvedBundlePath) -notmatch '^Devolutions\.PowerShell-(?<version>\d+\.\d+\.\d+\.\d+)-win\.msixbundle$') {
     throw "Unable to infer four-part package version from MSIX bundle name: $ResolvedBundlePath"
   }
   $PackageVersion = $Matches['version']
@@ -255,7 +255,7 @@ try {
         -OutputDirectory $FixtureDir
 
       # Sign inner MSIX packages and re-bundle + sign with signtool so Windows Deployment accepts the bundle offline.
-      $FixtureBundlePath = Join-Path $FixtureDir "Devolutions-PowerShell-$FixtureVersion-win.msixbundle"
+      $FixtureBundlePath = Join-Path $FixtureDir "Devolutions.PowerShell-$FixtureVersion-win.msixbundle"
       $RepackDir = Join-Path $FixtureDir 'repack'
       New-Item -ItemType Directory -Path $RepackDir -Force | Out-Null
       $Zip = [System.IO.Compression.ZipFile]::OpenRead($FixtureBundlePath)
@@ -283,7 +283,7 @@ try {
 
       $Fixtures[$FixtureVersion] = @{
         BundlePath = $FixtureBundlePath
-        FeedContent = [System.IO.File]::ReadAllText((Join-Path $FixtureDir 'Devolutions-PowerShell.appinstaller'), [System.Text.Encoding]::UTF8)
+        FeedContent = [System.IO.File]::ReadAllText((Join-Path $FixtureDir 'Devolutions.PowerShell.appinstaller'), [System.Text.Encoding]::UTF8)
       }
     }
 

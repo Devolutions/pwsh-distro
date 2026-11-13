@@ -507,7 +507,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $OutputPath = Join-Path $PWD "PowerShell-$Env:POWERSHELL_VERSION-${{matrix.os}}-${{matrix.arch}}"
+          $OutputPath = Join-Path $PWD "PowerShell-$Env:SDK_PACKAGE_VERSION-${{matrix.os}}-${{matrix.arch}}"
           $ArchivePath = "$OutputPath.tar.gz"
           $PackageScript = Join-Path (Join-Path $PWD 'eng') 'New-PowerShellDistroArchive.ps1'
           $PackageSource = $Env:SDK_PACKAGE_SOURCE
@@ -585,8 +585,8 @@ jobs:
       - name: Upload PowerShell package
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: PowerShell-${{ needs.preflight.outputs.powershell-version }}-${{matrix.os}}-${{matrix.arch}}
-          path: PowerShell-${{ needs.preflight.outputs.powershell-version }}-${{matrix.os}}-${{matrix.arch}}.tar.gz
+          name: PowerShell-${{ needs.preflight.outputs.sdk-package-version }}-${{matrix.os}}-${{matrix.arch}}
+          path: PowerShell-${{ needs.preflight.outputs.sdk-package-version }}-${{matrix.os}}-${{matrix.arch}}.tar.gz
           if-no-files-found: error
 
   test-alpine:
@@ -595,6 +595,7 @@ jobs:
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     env:
       POWERSHELL_VERSION: ${{ needs.preflight.outputs.powershell-version }}
+      SDK_PACKAGE_VERSION: ${{ needs.preflight.outputs.sdk-package-version }}
     strategy:
       fail-fast: false
       matrix:
@@ -607,7 +608,7 @@ jobs:
       - name: Download Alpine CLI archive
         uses: actions/download-artifact@v8.0.1
         with:
-          name: PowerShell-${{ needs.preflight.outputs.powershell-version }}-linux-musl-${{ matrix.arch }}
+          name: PowerShell-${{ needs.preflight.outputs.sdk-package-version }}-linux-musl-${{ matrix.arch }}
           path: archives
 
       - name: Run Alpine archive
@@ -615,5 +616,5 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/work:ro" "alpine:${{ matrix.alpine }}" \
             sh /work/package/linux/Test-PowerShellDistroAlpineArchive.sh \
-            "/work/archives/PowerShell-$POWERSHELL_VERSION-linux-musl-${{ matrix.arch }}.tar.gz" \
+            "/work/archives/PowerShell-$SDK_PACKAGE_VERSION-linux-musl-${{ matrix.arch }}.tar.gz" \
             "$POWERSHELL_VERSION" "${{ matrix.arch }}"

@@ -145,7 +145,7 @@ if ($MainBundle.GetAttribute('Name') -cne 'Devolutions.PowerShell') {
 }
 
 $FeedUri = [uri] $FeedRoot.GetAttribute('Uri')
-if ($FeedUri.Scheme -cne 'https' -or $FeedUri.AbsolutePath -notmatch '/releases/latest/download/Devolutions-PowerShell\.appinstaller$') {
+if ($FeedUri.Scheme -cne 'https' -or $FeedUri.AbsolutePath -notmatch '/releases/latest/download/Devolutions\.PowerShell\.appinstaller$') {
   throw "App Installer Uri must point to the stable latest-release feed URL, got '$($FeedRoot.GetAttribute('Uri'))'."
 }
 
