@@ -56,8 +56,9 @@ permissions:
   contents: read
 
 env:
-  PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
-  PSIGN_TOOL_PACKAGE_VERSION: "0.8.4"
+  PSIGN_SOURCE_REPOSITORY: "Devolutions/psign"
+  PSIGN_SOURCE_REF: "copilot/msix-bundle-signing-offsets"
+  PSIGN_RUST_TOOLCHAIN: "stable"
 
 jobs:
   build:
@@ -77,18 +78,13 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      - name: Install pinned psign tool
+      - name: Build psign tool from source
         if: ${{ inputs.sign_msix }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ToolRoot = Join-Path $Env:RUNNER_TEMP 'psign-tool'
-          New-Item -ItemType Directory -Path $ToolRoot -Force | Out-Null
-          & dotnet tool install --tool-path $ToolRoot $Env:PSIGN_TOOL_PACKAGE_ID --version $Env:PSIGN_TOOL_PACKAGE_VERSION
-          if ($LASTEXITCODE -ne 0) {
-            throw "dotnet tool install failed for $Env:PSIGN_TOOL_PACKAGE_ID with exit code $LASTEXITCODE"
-          }
-          $ToolRoot >> $Env:GITHUB_PATH
+        uses: ./.github/actions/build-psign
+        with:
+          repository: ${{ env.PSIGN_SOURCE_REPOSITORY }}
+          ref: ${{ env.PSIGN_SOURCE_REF }}
+          rust-toolchain: ${{ env.PSIGN_RUST_TOOLCHAIN }}
 
       - name: Test MSIX App Installer generation and bundle verification
         shell: pwsh

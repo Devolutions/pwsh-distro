@@ -438,7 +438,7 @@ Installer scripts under `package/` repackage unpacked CLI archives locally for t
 | Linux multi-pwsh launcher source | `0.14.2` / `77676d18baaf205ec36b1711d11bd386d4b15272`; Rust `1.90.0` |
 | Linux multi-pwsh bindings generator | PowerShell `7.4.0` |
 | Linux ARM64 PowerShell.Native source | `700.0.2` / `f24d5494b373de20ec3e3d2fdc7c3fc98af1f9f1` |
-| psign code signing tool | `Devolutions.Psign.Tool` / `0.8.4` |
+| psign code signing tool | Built from `Devolutions/psign` / `copilot/msix-bundle-signing-offsets` with Rust `stable` (temporary test branch) |
 | llvm-prebuilt | `v2026.1.1` |
 | clang+llvm | `22.1.4` |
 | VsDevShell | `latest from PSGallery` |
@@ -478,7 +478,9 @@ Manual inputs:
 
 The standalone CLI workflow also exposes `ready_to_run` (disabled by default because ReadyToRun rewrites managed PE files and invalidates existing Authenticode signatures) and `sdk_artifact_run_id` (to repackage a workflow-built `.nupkg` from a prior `powershell-sdk.yml` run). Standalone MSI, MSIX, macOS `.pkg`, and Linux workflows can similarly consume either a published `release_tag` or a `cli_run_id` plus `package_version`.
 
-Before validation and CLI packaging, the SDK workflow signs source-built assemblies in `ref/` and `runtimes/*/lib/`, apphost payloads in `tools/apphost/*` and `runtimes/*/native`, the Windows desktop payload, and built-in module manifests/format/script files under `contentFiles/any/any/runtimes/**/Modules/**` using `Devolutions.Psign.Tool` and Azure Key Vault (without adding a NuGet package signature). Non-dry-run releases require these environment secrets and variables:
+When signing is enabled, the SDK, release preparation, standalone MSI, and standalone MSIX workflows build the native `psign-tool` executable from the temporary `Devolutions/psign` `copilot/msix-bundle-signing-offsets` branch instead of installing its NuGet package. The shared `.github/actions/build-psign` action uses Rust `stable`, builds with `--locked --release` and the default signing features, logs the source commit, and adds the verified executable to `PATH`. This allows testing unpublished psign changes at the cost of longer signing jobs. The source repository, ref, and Rust toolchain are explicit in each workflow's `env` block.
+
+Before validation and CLI packaging, the SDK workflow signs source-built assemblies in `ref/` and `runtimes/*/lib/`, apphost payloads in `tools/apphost/*` and `runtimes/*/native`, the Windows desktop payload, and built-in module manifests/format/script files under `contentFiles/any/any/runtimes/**/Modules/**` using `psign-tool` and Azure Key Vault (without adding a NuGet package signature). Non-dry-run releases require these environment secrets and variables:
 
 | Name | Type / Scope | Purpose |
 | --- | --- | --- |

@@ -1,0 +1,65 @@
+name: Build psign from source
+description: Build the native psign-tool executable and add it to PATH.
+inputs:
+  repository:
+    description: GitHub repository containing psign
+    required: true
+  ref:
+    description: psign source branch, tag, or commit
+    required: true
+  rust-toolchain:
+    description: Rust toolchain used to build psign
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Checkout psign source
+      uses: actions/checkout@v7.0.0
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.ref }}
+        path: psign-src
+        persist-credentials: false
+
+    - name: Install Rust toolchain
+      shell: pwsh
+      env:
+        PSIGN_RUST_TOOLCHAIN: ${{ inputs.rust-toolchain }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        & rustup toolchain install $Env:PSIGN_RUST_TOOLCHAIN --profile minimal
+        if ($LASTEXITCODE -ne 0) {
+          throw "Installing Rust toolchain $Env:PSIGN_RUST_TOOLCHAIN failed with exit code $LASTEXITCODE."
+        }
+
+    - name: Build and verify psign tool
+      shell: pwsh
+      working-directory: ${{ github.workspace }}/psign-src
+      env:
+        PSIGN_RUST_TOOLCHAIN: ${{ inputs.rust-toolchain }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        $SourceCommit = & git rev-parse HEAD
+        if ($LASTEXITCODE -ne 0) {
+          throw "Unable to resolve the psign source commit."
+        }
+        Write-Host "Building psign from commit $SourceCommit."
+
+        if ($IsWindows) {
+          $Env:RUSTFLAGS = "$Env:RUSTFLAGS -C target-feature=+crt-static".Trim()
+        }
+        $TargetDirectory = Join-Path $Env:RUNNER_TEMP 'psign-target'
+        & cargo "+$Env:PSIGN_RUST_TOOLCHAIN" build --locked --release -p psign --bin psign-tool --target-dir $TargetDirectory
+        if ($LASTEXITCODE -ne 0) {
+          throw "Building psign-tool failed with exit code $LASTEXITCODE."
+        }
+
+        $ToolRoot = Join-Path $TargetDirectory 'release'
+        $ToolName = if ($IsWindows) { 'psign-tool.exe' } else { 'psign-tool' }
+        $ToolPath = Join-Path $ToolRoot $ToolName
+        & $ToolPath --version
+        if ($LASTEXITCODE -ne 0) {
+          throw "psign-tool --version failed with exit code $LASTEXITCODE."
+        }
+        $ToolRoot >> $Env:GITHUB_PATH

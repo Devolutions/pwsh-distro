@@ -136,8 +136,9 @@ env:
   MULTI_PWSH_APPHOST_PACKAGE_ID: "Devolutions.MultiPwsh.Cli"
   MULTI_PWSH_APPHOST_PACKAGE_VERSION: "0.14.2"
   MULTI_PWSH_APPHOST_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
-  PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
-  PSIGN_TOOL_PACKAGE_VERSION: "0.8.4"
+  PSIGN_SOURCE_REPOSITORY: "Devolutions/psign"
+  PSIGN_SOURCE_REF: "copilot/msix-bundle-signing-offsets"
+  PSIGN_RUST_TOOLCHAIN: "stable"
 jobs:
   preflight:
     name: Preflight
@@ -1265,36 +1266,13 @@ jobs:
           echo "::notice::SDKCodeSigningSignDryRun: $SignDryRun"
           echo "::notice::SDKPackageWillBeCodeSigned: $ShouldSign"
 
-      - name: Setup .NET SDK for psign tool
+      - name: Build psign tool from source
         if: steps.signing-mode.outputs.should_sign == 'true'
-        uses: actions/setup-dotnet@v5.3.0
+        uses: ./.github/actions/build-psign
         with:
-          dotnet-version: "10.0.x"
-
-      - name: Install pinned psign tool
-        if: steps.signing-mode.outputs.should_sign == 'true'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $ToolRoot = Join-Path $Env:RUNNER_TEMP "psign-tool"
-          Remove-Item -LiteralPath $ToolRoot -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path $ToolRoot | Out-Null
-
-          dotnet tool install --tool-path $ToolRoot $Env:PSIGN_TOOL_PACKAGE_ID --version $Env:PSIGN_TOOL_PACKAGE_VERSION
-          if ($LASTEXITCODE -ne 0) {
-            throw "dotnet tool install failed for $Env:PSIGN_TOOL_PACKAGE_ID with exit code $LASTEXITCODE"
-          }
-
-          $Env:PATH = "$ToolRoot$([System.IO.Path]::PathSeparator)$Env:PATH"
-          $ToolRoot >> $Env:GITHUB_PATH
-          $ToolCommand = Get-Command psign-tool -ErrorAction Stop
-          $ToolPath = $ToolCommand.Source
-          $VersionOutput = & $ToolPath --version 2>&1
-          if ($LASTEXITCODE -ne 0) {
-            throw "psign-tool --version failed with exit code $LASTEXITCODE"
-          }
-          Write-Host "Installed psign-tool version: $(($VersionOutput | Out-String).Trim())"
+          repository: ${{ env.PSIGN_SOURCE_REPOSITORY }}
+          ref: ${{ env.PSIGN_SOURCE_REF }}
+          rust-toolchain: ${{ env.PSIGN_RUST_TOOLCHAIN }}
 
       - name: Code sign PowerShell SDK package
         shell: pwsh

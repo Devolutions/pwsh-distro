@@ -60,8 +60,9 @@ permissions:
 env:
   SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
   SDK_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
-  PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
-  PSIGN_TOOL_PACKAGE_VERSION: "0.8.4"
+  PSIGN_SOURCE_REPOSITORY: "Devolutions/psign"
+  PSIGN_SOURCE_REF: "copilot/msix-bundle-signing-offsets"
+  PSIGN_RUST_TOOLCHAIN: "stable"
 
 jobs:
   sdk:
@@ -155,22 +156,13 @@ jobs:
         shell: pwsh
         run: ./eng/Test-SignPowerShellDistroArchive.ps1
 
-      - name: Install pinned psign tool
+      - name: Build psign tool from source
         if: ${{ fromJSON(needs.sdk.outputs.code-signed) }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $ToolRoot = Join-Path $Env:RUNNER_TEMP "psign-tool"
-          Remove-Item -LiteralPath $ToolRoot -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path $ToolRoot | Out-Null
-
-          dotnet tool install --tool-path $ToolRoot $Env:PSIGN_TOOL_PACKAGE_ID --version $Env:PSIGN_TOOL_PACKAGE_VERSION
-          if ($LASTEXITCODE -ne 0) {
-            throw "dotnet tool install failed for $Env:PSIGN_TOOL_PACKAGE_ID with exit code $LASTEXITCODE"
-          }
-
-          $ToolRoot >> $Env:GITHUB_PATH
+        uses: ./.github/actions/build-psign
+        with:
+          repository: ${{ env.PSIGN_SOURCE_REPOSITORY }}
+          ref: ${{ env.PSIGN_SOURCE_REF }}
+          rust-toolchain: ${{ env.PSIGN_RUST_TOOLCHAIN }}
 
       - name: Test MSIX App Installer generation and bundle verification
         shell: pwsh
