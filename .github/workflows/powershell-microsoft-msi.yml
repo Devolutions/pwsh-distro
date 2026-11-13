@@ -51,7 +51,7 @@ permissions:
 
 env:
   PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
-  PSIGN_TOOL_PACKAGE_VERSION: "0.8.4"
+  PSIGN_TOOL_PACKAGE_VERSION: "0.8.5"
   MICROSOFT_MSI_BASELINE_TAG: "v7.6.10"
 
 jobs:
