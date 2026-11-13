@@ -61,7 +61,7 @@ env:
   SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
   SDK_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
   PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
-  PSIGN_TOOL_PACKAGE_VERSION: "0.8.2"
+  PSIGN_TOOL_PACKAGE_VERSION: "0.8.4"
 
 jobs:
   sdk:
@@ -155,10 +155,6 @@ jobs:
         shell: pwsh
         run: ./eng/Test-SignPowerShellDistroArchive.ps1
 
-      - name: Test MSIX App Installer generation and bundle verification
-        shell: pwsh
-        run: ./package/msix/Test-PowerShellDistroAppInstaller.ps1
-
       - name: Install pinned psign tool
         if: ${{ fromJSON(needs.sdk.outputs.code-signed) }}
         shell: pwsh
@@ -175,6 +171,17 @@ jobs:
           }
 
           $ToolRoot >> $Env:GITHUB_PATH
+
+      - name: Test MSIX App Installer generation and bundle verification
+        shell: pwsh
+        env:
+          CODE_SIGNED: ${{ needs.sdk.outputs.code-signed }}
+        run: |
+          $TestArgs = @{}
+          if ([bool]::Parse($Env:CODE_SIGNED)) {
+            $TestArgs.PsignToolPath = 'psign-tool'
+          }
+          & ./package/msix/Test-PowerShellDistroAppInstaller.ps1 @TestArgs
 
       - name: Code sign ReadyToRun PowerShell CLI archives
         if: ${{ fromJSON(needs.sdk.outputs.code-signed) && inputs.ready_to_run }}

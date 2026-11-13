@@ -57,7 +57,7 @@ permissions:
 
 env:
   PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
-  PSIGN_TOOL_PACKAGE_VERSION: "0.8.2"
+  PSIGN_TOOL_PACKAGE_VERSION: "0.8.4"
 
 jobs:
   build:

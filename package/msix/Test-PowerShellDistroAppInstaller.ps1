@@ -286,6 +286,7 @@ try {
       foreach ($File in 'pwsh.dll', 'System.Management.Automation.dll', 'LICENSE.txt', 'ThirdPartyNotices.txt') {
         Copy-Item -LiteralPath (Join-Path $DummyFilesDir $File) -Destination (Join-Path $TargetDir $File) -Force
       }
+      Set-Content -LiteralPath (Join-Path $TargetDir 'payload.xml') -Value '<payload />' -Encoding utf8
     }
 
     # Build clean unsigned signable PE32+ executables for x64 (0x8664) and arm64 (0xAA64).
