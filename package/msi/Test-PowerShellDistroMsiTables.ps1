@@ -69,7 +69,7 @@ $Codes = @{
 if ($Distribution -eq 'Microsoft') {
   $Codes = @{
     x64 = '{31AB5147-9A97-4452-8443-D9709F0516E1}'
-    arm64 = '{75C68AB2-09D8-46B8-B697-D829BDD4C94F}'
+    arm64 = '{1D00683B-0F84-4DB8-A64F-2F98AD42FE06}'
   }
 }
 $Opposite = if ($Architecture -eq 'x64') { 'arm64' } else { 'x64' }
