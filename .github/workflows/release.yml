@@ -61,7 +61,7 @@ env:
   SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
   SDK_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
   PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
-  PSIGN_TOOL_PACKAGE_VERSION: "0.8.4"
+  PSIGN_TOOL_PACKAGE_VERSION: "0.8.5"
 
 jobs:
   sdk:
