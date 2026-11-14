@@ -439,9 +439,9 @@ Installer scripts under `package/` repackage unpacked CLI archives locally for t
 | Latest downstream release tag | `v7.7.0.0` (`7.7` STS / `Latest`), `v7.6.10.0` (`7.6` LTS) |
 | Latest PowerShell CLI release assets | `PowerShell-<X.Y.Z.R>-<os>-<arch>.tar.gz` for Windows, macOS, Linux, and Alpine Linux on x64 and arm64 |
 | PowerShell SDK package source | `https://api.nuget.org/v3/index.json` |
-| multi-pwsh apphost package | `Devolutions.MultiPwsh.Cli` / `0.14.2` |
+| multi-pwsh apphost package | `Devolutions.MultiPwsh.Cli` / `0.19.0` |
 | multi-pwsh apphost package source | `https://api.nuget.org/v3/index.json` |
-| Linux multi-pwsh launcher source | `0.14.2` / `77676d18baaf205ec36b1711d11bd386d4b15272`; Rust `1.90.0` |
+| Linux multi-pwsh launcher source | `0.19.0` / `e171d8c7608e3004dc922b543736050538525345`; Rust `1.90.0` |
 | Linux multi-pwsh bindings generator | PowerShell `7.4.0` |
 | Linux ARM64 PowerShell.Native source | `700.0.2` / `f24d5494b373de20ec3e3d2fdc7c3fc98af1f9f1` |
 | psign code signing tool | `Devolutions.Psign.Tool` / `0.8.5` |

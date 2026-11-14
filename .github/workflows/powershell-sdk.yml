@@ -134,7 +134,7 @@ env:
   SDK_VENDOR_NAME: "Devolutions"
   SDK_PACKAGE_ID: "Devolutions.PowerShell.SDK"
   MULTI_PWSH_APPHOST_PACKAGE_ID: "Devolutions.MultiPwsh.Cli"
-  MULTI_PWSH_APPHOST_PACKAGE_VERSION: "0.14.2"
+  MULTI_PWSH_APPHOST_PACKAGE_VERSION: "0.19.0"
   MULTI_PWSH_APPHOST_PACKAGE_SOURCE: "https://api.nuget.org/v3/index.json"
   PSIGN_TOOL_PACKAGE_ID: "Devolutions.Psign.Tool"
   PSIGN_TOOL_PACKAGE_VERSION: "0.8.5"

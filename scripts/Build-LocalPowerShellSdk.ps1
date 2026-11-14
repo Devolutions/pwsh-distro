@@ -16,7 +16,7 @@ param(
 
   [string] $MultiPwshPackageId = 'Devolutions.MultiPwsh.Cli',
 
-  [string] $MultiPwshPackageVersion = '0.14.2',
+  [string] $MultiPwshPackageVersion = '0.19.0',
 
   [string] $MultiPwshPackageSource = 'https://api.nuget.org/v3/index.json',
 
