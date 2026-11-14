@@ -30,7 +30,7 @@ $InstallRoot = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) "PowerSh
 $DevolutionsRoot = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) "Devolutions\PowerShell\$($Version.Major)"
 $Codes = @{
   x64 = '{31AB5147-9A97-4452-8443-D9709F0516E1}'
-  arm64 = '{75C68AB2-09D8-46B8-B697-D829BDD4C94F}'
+  arm64 = '{1D00683B-0F84-4DB8-A64F-2F98AD42FE06}'
 }
 $RegistryPath = "HKLM:\Software\Microsoft\PowerShellCore\InstalledVersions\$($Codes[$Architecture].Trim('{}'))"
 $TempRoot = if ($Env:RUNNER_TEMP) { $Env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
@@ -43,12 +43,38 @@ function Invoke-Msi {
 
   $Log = Join-Path $LogRoot "$([guid]::NewGuid().ToString('N')).log"
   $Process = Start-Process msiexec.exe -ArgumentList "$Action `"$Path`" /qn /norestart /l*v `"$Log`" $ExtraArguments" -Wait -PassThru
+  Write-Host "msiexec $Action $Path exited with $($Process.ExitCode). Log: $Log"
   if ($Process.ExitCode -notin @($ExpectedExitCode, $(if ($ExpectedExitCode -eq 0) { 3010 } else { $ExpectedExitCode }))) {
     Get-Content -LiteralPath $Log -Tail 60 | Write-Host
     throw "msiexec returned $($Process.ExitCode), expected $ExpectedExitCode. Log: $Log"
   }
   if ($ArchitectureBlock -and -not (Select-String -LiteralPath $Log -SimpleMatch 'Uninstall the other architecture of Microsoft PowerShell' -Quiet)) {
     throw "Expected the Microsoft cross-architecture guard in $Log."
+  }
+}
+
+function Get-MsiUpgradeCode {
+  param([string] $Path)
+
+  $Database = $null
+  $View = $null
+  $Record = $null
+  try {
+    $Database = $Installer.OpenDatabase($Path, 0)
+    $View = $Database.OpenView("SELECT Value FROM Property WHERE Property='UpgradeCode'")
+    $null = $View.Execute()
+    $Record = $View.Fetch()
+    if (-not $Record) {
+      throw "UpgradeCode not found in $Path."
+    }
+    return $Record.StringData(1)
+  } finally {
+    if ($null -ne $Record) { [void] [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Record) }
+    if ($null -ne $View) {
+      $null = $View.Close()
+      [void] [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($View)
+    }
+    if ($null -ne $Database) { [void] [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database) }
   }
 }
 
@@ -72,7 +98,15 @@ function Assert-Installed {
   }
 }
 
+$CleanupProducts = $false
 try {
+  $PreviousUpgradeCode = Get-MsiUpgradeCode $PreviousMsi
+  $CurrentUpgradeCode = Get-MsiUpgradeCode $Msi
+  if ($PreviousUpgradeCode -ine $Codes[$Architecture] -or $CurrentUpgradeCode -ine $PreviousUpgradeCode) {
+    throw "Microsoft MSI upgrade codes do not match for $Architecture (baseline: $PreviousUpgradeCode, repackaged: $CurrentUpgradeCode)."
+  }
+  Write-Host 'PASS MicrosoftMsiMatchesOriginalUpgradeCode'
+  $CleanupProducts = $true
   if (Test-Path -LiteralPath $DevolutionsRoot) {
     throw "Expected no source-built Devolutions installation on this clean runner: $DevolutionsRoot."
   }
@@ -82,10 +116,12 @@ try {
   # Remove only registered Microsoft stable products; fail rather than delete an unowned installation directory.
   foreach ($Code in $Codes.Values) {
     foreach ($Product in @($Installer.RelatedProducts($Code))) {
+      Write-Host "Removing installed PowerShell product $Product (upgrade code $Code)."
       Invoke-Msi '/x' $Product
     }
   }
   if (Test-Path -LiteralPath (Join-Path $InstallRoot 'pwsh.exe')) {
+    Get-Item -LiteralPath (Join-Path $InstallRoot 'pwsh.exe') | Format-List FullName, Length, VersionInfo | Out-String | Write-Host
     throw "An unmanaged PowerShell installation remains at $InstallRoot."
   }
   $SavedPropertiesPath = 'HKLM:\Software\Microsoft\PowerShellCore\InstallerProperties'
@@ -149,8 +185,10 @@ try {
   }
   Write-Host 'PASS MicrosoftMsiUpgradePreservesOriginalCustomRoot'
 } finally {
-  foreach ($Product in @($Installer.RelatedProducts($Codes[$Architecture]))) {
-    Invoke-Msi '/x' $Product
+  if ($CleanupProducts) {
+    foreach ($Product in @($Installer.RelatedProducts($Codes[$Architecture]))) {
+      Invoke-Msi '/x' $Product
+    }
   }
   [void] [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
 }
