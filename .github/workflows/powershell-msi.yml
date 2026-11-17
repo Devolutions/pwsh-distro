@@ -257,6 +257,11 @@ jobs:
       - name: Clone project
         uses: actions/checkout@v7.0.0
 
+      - name: Trust Devolutions Authenticode Test CA
+        if: ${{ inputs.sign_msi && inputs.github-env == 'publish-test' }}
+        run: Import-Certificate -FilePath eng/authenticode-test-ca.crt -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+        shell: pwsh
+
       - name: Download current MSI packages
         uses: actions/download-artifact@v8.0.1
         with:

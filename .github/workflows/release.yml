@@ -135,6 +135,11 @@ jobs:
       - name: Clone project
         uses: actions/checkout@v7.0.0
 
+      - name: Trust Devolutions Authenticode Test CA
+        if: ${{ fromJSON(needs.sdk.outputs.code-signed) && needs.sdk.outputs.package-env == 'publish-test' }}
+        run: Import-Certificate -FilePath eng/authenticode-test-ca.crt -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+        shell: pwsh
+
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5.3.0
         with:
@@ -348,7 +353,7 @@ jobs:
     with:
       package_version: ${{ needs.sdk.outputs.sdk-package-version }}
       cli_artifact_name: PowerShell-Release-CLI-${{ needs.sdk.outputs.sdk-package-version }}
-      sign_pkg: ${{ fromJSON(needs.sdk.outputs.code-signed) }}
+      sign_pkg: ${{ fromJSON(needs.sdk.outputs.code-signed) && needs.sdk.outputs.package-env == 'publish-prod' }}
       github-env: ${{ needs.sdk.outputs.package-env }}
     secrets: inherit
 
