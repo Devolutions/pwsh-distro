@@ -72,6 +72,11 @@ jobs:
       - name: Clone project
         uses: actions/checkout@v7.0.0
 
+      - name: Trust Devolutions Authenticode Test CA
+        if: ${{ inputs.sign_msix && inputs.github-env == 'publish-test' }}
+        run: Import-Certificate -FilePath eng/authenticode-test-ca.crt -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+        shell: powershell
+
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5.3.0
         with:
@@ -203,6 +208,11 @@ jobs:
 
       - name: Clone project
         uses: actions/checkout@v7.0.0
+
+      - name: Trust Devolutions Authenticode Test CA
+        if: ${{ inputs.sign_msix && inputs.github-env == 'publish-test' }}
+        run: Import-Certificate -FilePath eng/authenticode-test-ca.crt -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+        shell: powershell
 
       - name: Download PowerShell MSIX bundle and App Installer feed
         uses: actions/download-artifact@v8.0.1
