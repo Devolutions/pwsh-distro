@@ -87,7 +87,7 @@ msiexec.exe /i .\Devolutions-PowerShell-7.6.10.0-win-x64.msi /quiet /norestart A
 **MSI install details & coexistence:**
 
 - **Coexists with Microsoft PowerShell**: Installs to `C:\Program Files\Devolutions\PowerShell\7\pwsh.exe` with Devolutions-specific Start menu shortcuts, registry keys, and upgrade codes—leaving `C:\Program Files\PowerShell\7` untouched. Because `ADD_PATH` defaults to `0`, an existing `pwsh` on `PATH` is not replaced unless you opt in.
-- **Windows Terminal profile**: Automatically registers a machine-wide Windows Terminal profile fragment under `%ProgramData%\Microsoft\Windows Terminal\Fragments\Devolutions.PowerShell` without changing your default profile. Uninstalling removes the fragment.
+- **Windows Terminal profile**: Automatically registers a machine-wide PowerShell profile with a `#101D2F` background via a fragment under `%ProgramData%\Microsoft\Windows Terminal\Fragments\Devolutions.PowerShell`. It does not change your default profile, and uninstalling removes the fragment.
 - **Windows Desktop support**: Includes the Windows Desktop runtime payload so `WPF` and `WinForms` scripts work out of the box.
 - **Upgrades & architectures**: Installing a newer MSI of the same architecture upgrades in place and preserves saved installer options. `x64` and `arm64` MSIs share `C:\Program Files\Devolutions\PowerShell\7` and cannot be installed side by side; uninstall one architecture before installing the other.
 - **Uninstall**: Remove **Devolutions PowerShell 7-\<arch\>** from **Settings > Apps > Installed apps**, or run:

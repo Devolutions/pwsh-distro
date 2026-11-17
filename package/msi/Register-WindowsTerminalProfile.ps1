@@ -32,6 +32,7 @@ $Profile = [ordered]@{
       name = 'PowerShell'
       commandline = '"' + [System.IO.Path]::GetFullPath($ExecutablePath) + '"'
       icon = 'ms-appx:///ProfileIcons/pwsh.png'
+      background = '#101D2F'
       startingDirectory = '%USERPROFILE%'
     }
   )
