@@ -260,7 +260,7 @@ jobs:
       - name: Trust Devolutions Authenticode Test CA
         if: ${{ inputs.sign_msi && inputs.github-env == 'publish-test' }}
         run: Import-Certificate -FilePath eng/authenticode-test-ca.crt -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-        shell: powershell
+        shell: pwsh
 
       - name: Download current MSI packages
         uses: actions/download-artifact@v8.0.1

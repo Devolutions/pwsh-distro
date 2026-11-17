@@ -138,7 +138,7 @@ jobs:
       - name: Trust Devolutions Authenticode Test CA
         if: ${{ fromJSON(needs.sdk.outputs.code-signed) && needs.sdk.outputs.package-env == 'publish-test' }}
         run: Import-Certificate -FilePath eng/authenticode-test-ca.crt -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-        shell: powershell
+        shell: pwsh
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5.3.0
