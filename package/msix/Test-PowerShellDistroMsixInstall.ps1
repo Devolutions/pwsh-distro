@@ -105,13 +105,18 @@ function Assert-InstalledMsixPackage {
     [Parameter(Mandatory)] [string] $ExpectedPackageVersion,
     [Parameter(Mandatory)] [string] $ExpectedPowerShellVersion,
     [Parameter(Mandatory)] [string] $ExpectedAppInstallerContent,
+    [string] $Publisher,
     [switch] $CheckPayloadSignatures
   )
 
   $ExpectedAppxArch = if ($Architecture -eq 'arm64') { 'Arm64' } else { 'X64' }
-  $Packages = @(Get-AppxPackage -Name 'Devolutions.PowerShell')
+  $AllPackages = @(Get-AppxPackage -Name 'Devolutions.PowerShell')
+  $Packages = @($AllPackages | Where-Object { -not $Publisher -or $_.Publisher -eq $Publisher })
+  if ($Packages.Count -ne $AllPackages.Count) {
+    Write-Warning "Ignoring Devolutions.PowerShell packages from other publishers: $(($AllPackages | Where-Object { $_.Publisher -ne $Publisher } | ForEach-Object PackageFullName) -join ', ')"
+  }
   if ($Packages.Count -ne 1) {
-    throw "Expected one installed Devolutions.PowerShell MSIX package, found $($Packages.Count)."
+    throw "Expected one installed Devolutions.PowerShell MSIX package, found $($Packages.Count): $(($AllPackages | ForEach-Object PackageFullName) -join ', ')."
   }
 
   $Pkg = $Packages[0]
@@ -293,17 +298,19 @@ try {
     [void] (Assert-InstalledMsixPackage `
       -ExpectedPackageVersion $PriorVersion `
       -ExpectedPowerShellVersion $PowerShellVersion `
-      -ExpectedAppInstallerContent $Fixtures[$PriorVersion].FeedContent)
+      -ExpectedAppInstallerContent $Fixtures[$PriorVersion].FeedContent `
+      -Publisher $TestSubject)
 
     Write-Host "Upgrading MSIX bundle in place ($PriorVersion -> $PackageVersion) on $Architecture"
     Add-AppxPackage -Path $Fixtures[$PackageVersion].BundlePath
     $Upgraded = Assert-InstalledMsixPackage `
       -ExpectedPackageVersion $PackageVersion `
       -ExpectedPowerShellVersion $PowerShellVersion `
-      -ExpectedAppInstallerContent $Fixtures[$PackageVersion].FeedContent
+      -ExpectedAppInstallerContent $Fixtures[$PackageVersion].FeedContent `
+      -Publisher $TestSubject
 
     Remove-AppxPackage -Package $Upgraded.PackageFullName
-    if (@(Get-AppxPackage -Name 'Devolutions.PowerShell').Count -ne 0) {
+    if (@(Get-AppxPackage -Name 'Devolutions.PowerShell' | Where-Object { $_.PackageFamilyName -eq $Upgraded.PackageFamilyName }).Count -ne 0) {
       throw 'Uninstalling upgraded MSIX bundle left Devolutions.PowerShell installed.'
     }
   }
