@@ -251,6 +251,7 @@ try {
         -X64PayloadDirectory $ExtractedPayloads['x64'] `
         -Arm64PayloadDirectory $ExtractedPayloads['arm64'] `
         -PackageVersion $FixtureVersion `
+        -Repository 'Devolutions/pwsh-distro-msix-test' `
         -Publisher $TestSubject `
         -OutputDirectory $FixtureDir
 
