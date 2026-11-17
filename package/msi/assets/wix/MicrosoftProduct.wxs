@@ -17,7 +17,7 @@
     <Icon Id="PowerShellIcon" SourceFile="assets\Powershell_black.ico" />
     <Property Id="ARPPRODUCTICON" Value="PowerShellIcon" />
     <Property Id="ARPHELPLINK" Value="https://github.com/Devolutions/pwsh-distro" />
-    <MajorUpgrade Schedule="afterInstallInitialize" DowngradeErrorMessage="A newer version of PowerShell is already installed." />
+    <MajorUpgrade Schedule="afterInstallInitialize" AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of PowerShell is already installed." />
     <Upgrade Id="$(var.OppositeUpgradeCode)">
       <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" OnlyDetect="yes"
                       Property="OPPOSITE_ARCHITECTURE_INSTALLED" />

@@ -30,6 +30,9 @@ if ($Version.Revision -gt 0) {
 } else {
   throw "No prior MSI version can be generated for $PackageVersion."
 }
+if ($LegacyVersion -eq '7.7.0.1') {
+  $LegacyVersion = '7.7.0.0'
+}
 
 $Work = Join-Path ([System.IO.Path]::GetTempPath()) "pwsh-distro-legacy-msi-$([guid]::NewGuid().ToString('N'))"
 $LegacySource = Join-Path $Work 'msi'

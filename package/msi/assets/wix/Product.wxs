@@ -212,7 +212,7 @@
     <Launch Condition="Installed OR MsiNTProductType &lt;&gt; 1 OR VersionNT &gt;= 603" Message="Supported only on Windows 8.1 and above" />
     <Launch Condition="Installed OR MsiNTProductType = 1 OR VersionNT &gt;= 602" Message="Supported only on Windows Server 2012 and above" />
     <!-- Information About When Older Versions Are Trying To Be Installed-->
-    <MajorUpgrade DowngradeErrorMessage="A newer version of $(var.ProductName) is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of $(var.ProductName) is already installed." />
     <!-- Embed Cabinet Files in Product-->
     <MediaTemplate EmbedCab="yes" />
     <!-- In Your Wix Setup Project, Add A Reference To WixUIExtension.dll -->
