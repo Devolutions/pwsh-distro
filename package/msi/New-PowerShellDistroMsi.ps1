@@ -66,7 +66,7 @@ if ($Version.Revision -gt 99 -or $Version.Build -gt 655 -or
     ($Version.Build * 100 + $Version.Revision) -gt 65535) {
   throw "Package version '$PackageVersion' cannot be represented as an increasing MSI version."
 }
-$MsiVersion = "$($Version.Major).$($Version.Minor).$($Version.Build * 100 + $Version.Revision)"
+$MsiVersion = if ($Version -ge [version] '7.7.0.2') { $Version.ToString() } else { "$($Version.Major).$($Version.Minor).$($Version.Build * 100 + $Version.Revision)" }
 $SemanticVersion = "$($Version.Major).$($Version.Minor).$($Version.Build)"
 $Output = [System.IO.Path]::GetFullPath($OutputDirectory)
 if ($Output.StartsWith($Payload.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase) -or

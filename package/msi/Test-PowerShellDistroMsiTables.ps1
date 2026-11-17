@@ -74,7 +74,7 @@ if ($Distribution -eq 'Microsoft') {
 }
 $Opposite = if ($Architecture -eq 'x64') { 'arm64' } else { 'x64' }
 $Version = [version] $PackageVersion
-$MsiVersion = "$($Version.Major).$($Version.Minor).$($Version.Build * 100 + $Version.Revision)"
+$MsiVersion = if ($Version -ge [version] '7.7.0.2') { $Version.ToString() } else { "$($Version.Major).$($Version.Minor).$($Version.Build * 100 + $Version.Revision)" }
 $File = (Resolve-Path -LiteralPath $MsiPath -ErrorAction Stop).Path
 if ([System.IO.Path]::GetFileName($File) -cne "$Distribution.PowerShell-$PackageVersion-win-$Architecture.msi") {
   throw "MSI filename must include the full downstream package version $PackageVersion."
@@ -128,10 +128,10 @@ try {
     if (@($Registry | Where-Object { $_.Fields[1] -like 'Software\Devolutions\PowerShell\*' }).Count -gt 0) {
       throw 'Microsoft MSI must not own Devolutions distribution registry entries.'
     }
-    $Upgrades = @(Get-MsiRows $Database 'SELECT UpgradeCode, ActionProperty FROM Upgrade' 2)
+    $Upgrades = @(Get-MsiRows $Database 'SELECT UpgradeCode, ActionProperty, Attributes FROM Upgrade' 3)
     $Own = Assert-OneRow @($Upgrades | Where-Object { $_.Fields[1] -eq 'WIX_UPGRADE_DETECTED' }) 'Microsoft same-architecture upgrade'
     $Other = Assert-OneRow @($Upgrades | Where-Object { $_.Fields[1] -eq 'OPPOSITE_ARCHITECTURE_INSTALLED' }) 'Microsoft cross-architecture guard'
-    if ($Own[0] -ine $Codes[$Architecture] -or $Other[0] -ine $Codes[$Opposite] -or
+    if ($Own[0] -ine $Codes[$Architecture] -or -not ([int] $Own[2] -band 512) -or $Other[0] -ine $Codes[$Opposite] -or
         @($Upgrades | Where-Object { $_.Fields[0] -notin $Codes.Values }).Count -gt 0) {
       throw 'Microsoft MSI must upgrade and guard the original Microsoft stable MSI families.'
     }
@@ -175,8 +175,9 @@ try {
     throw "Opposite-architecture detection must cover all versions without removing the product: $File."
   }
   $SameArchitecture = Assert-OneRow @($Upgrades | Where-Object { $_.Fields[5] -eq 'WIX_UPGRADE_DETECTED' }) 'same-architecture upgrade'
-  if ($SameArchitecture[0] -ine $Codes[$Architecture] -or $SameArchitecture[2] -ne $MsiVersion) {
-    throw "Same-architecture major upgrades are not enabled in $File."
+  if ($SameArchitecture[0] -ine $Codes[$Architecture] -or $SameArchitecture[2] -ne $MsiVersion -or
+      -not ([int] $SameArchitecture[3] -band 512)) {
+    throw "Same-architecture major upgrades, including same-version upgrades, are not enabled in $File."
   }
 
   $Conditions = @(Get-MsiRows $Database 'SELECT Condition, Description FROM LaunchCondition' 2)
