@@ -156,7 +156,8 @@ function Assert-PowerShell {
 function Assert-WindowsTerminalProfile {
   param(
     [Parameter(Mandatory)] [string] $Directory,
-    [Parameter(Mandatory)] [bool] $ExpectedPresent
+    [Parameter(Mandatory)] [bool] $ExpectedPresent,
+    [switch] $ExpectBackground
   )
 
   if (-not $ExpectedPresent) {
@@ -179,6 +180,10 @@ function Assert-WindowsTerminalProfile {
       $Profiles[0].icon -ne 'ms-appx:///ProfileIcons/pwsh.png' -or
       $Profiles[0].startingDirectory -ne '%USERPROFILE%') {
     throw "Windows Terminal profile fragment does not target the installed PowerShell at $Directory."
+  }
+  $Background = $Profiles[0].PSObject.Properties['background']
+  if ($ExpectBackground -and ($null -eq $Background -or $Background.Value -ne '#101D2F')) {
+    throw "Windows Terminal profile fragment does not use the expected background at $TerminalFragmentPath."
   }
 }
 
@@ -204,7 +209,7 @@ try {
 
   Invoke-Msi '/i' $CurrentMsi
   Assert-PowerShell $SharedPath
-  Assert-WindowsTerminalProfile $SharedPath $true
+  Assert-WindowsTerminalProfile $SharedPath $true -ExpectBackground
   Invoke-Msi '/x' $CurrentMsi
   Assert-WindowsTerminalProfile $SharedPath $false
   if (Test-Path -LiteralPath (Join-Path $SharedPath 'pwsh.exe')) {
@@ -214,9 +219,17 @@ try {
   Invoke-Msi '/i' $LegacyMsi
   Assert-PowerShell $LegacyPath
   Assert-WindowsTerminalProfile $LegacyPath $true
+  # The legacy fixture uses current sources; simulate a profile from before the color change.
+  $LegacyProfile = Get-Content -LiteralPath $TerminalFragmentPath -Raw | ConvertFrom-Json
+  $LegacyProfile.profiles[0].PSObject.Properties.Remove('background')
+  [System.IO.File]::WriteAllText(
+    $TerminalFragmentPath,
+    (ConvertTo-Json -InputObject $LegacyProfile -Depth 4),
+    [System.Text.UTF8Encoding]::new($false)
+  )
   Invoke-Msi '/i' $CurrentMsi
   Assert-PowerShell $SharedPath
-  Assert-WindowsTerminalProfile $SharedPath $true
+  Assert-WindowsTerminalProfile $SharedPath $true -ExpectBackground
   if (Test-Path -LiteralPath (Join-Path $LegacyPath 'pwsh.exe')) {
     throw "The prior MSI's $LegacyPath installation was not removed on upgrade."
   }
@@ -224,11 +237,11 @@ try {
   Remove-Item -LiteralPath $TerminalFragmentPath
   Invoke-Msi '/fa' $CurrentProductCode
   Assert-PowerShell $SharedPath
-  Assert-WindowsTerminalProfile $SharedPath $true
+  Assert-WindowsTerminalProfile $SharedPath $true -ExpectBackground
 
   if ($OppositeMsi) {
     Assert-BlockedInstallation $OppositeMsi
-    Assert-WindowsTerminalProfile $SharedPath $true
+    Assert-WindowsTerminalProfile $SharedPath $true -ExpectBackground
     Invoke-Msi '/i' $LegacyOppositeMsi
     Assert-PowerShell $LegacyOppositePath
     Assert-WindowsTerminalProfile $LegacyOppositePath $true
